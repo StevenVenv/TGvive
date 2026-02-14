@@ -3,6 +3,7 @@ package v1
 import (
 	"strconv"
 
+	"my-go-server/internal/engine"
 	"my-go-server/internal/model"
 	"my-go-server/internal/service"
 	"my-go-server/pkg/app"
@@ -12,6 +13,12 @@ import (
 )
 
 type TaskApi struct{}
+
+// TaskActionReq 任务操作请求
+type TaskActionReq struct {
+	ID     uint   `json:"id" binding:"required"`
+	Action string `json:"action" binding:"required,oneof=start stop pause"`
+}
 
 // CreateTask 创建搬运任务
 func (a *TaskApi) CreateTask(c *gin.Context) {
@@ -52,6 +59,54 @@ func (a *TaskApi) GetTaskList(c *gin.Context) {
 	app.OkWithData(list, c)
 }
 
+// UpdateTaskStatus 改变任务运行状态
+func (a *TaskApi) UpdateTaskStatus(c *gin.Context) {
+	var req TaskActionReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		app.FailWithMsg("操作指令无效: "+err.Error(), c)
+		return
+	}
+
+	userID := getCurrentUserID(c)
+	if userID == 0 {
+		app.FailWithMsg("未获取到用户信息", c)
+		return
+	}
+
+	task, err := service.ApplyTaskAction(userID, req.ID, req.Action)
+	if err != nil {
+		app.FailWithMsg("状态更新失败: "+err.Error(), c)
+		return
+	}
+
+	app.OkWithData(gin.H{"status": task.Status, "msg": "指令已发送"}, c)
+}
+
+// GetTaskProgress 获取任务实时进度（模拟）
+func (a *TaskApi) GetTaskProgress(c *gin.Context) {
+	userID := getCurrentUserID(c)
+	if userID == 0 {
+		app.FailWithMsg("未获取到用户信息", c)
+		return
+	}
+
+	idStr := c.Param("id")
+	idU64, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || idU64 == 0 {
+		app.FailWithMsg("任务ID不合法", c)
+		return
+	}
+
+	task, err := service.GetTaskByID(userID, uint(idU64))
+	if err != nil {
+		app.FailWithMsg("任务不存在或无权操作: "+err.Error(), c)
+		return
+	}
+
+	progress := engine.Manager.GetTaskProgress(task)
+	app.OkWithData(progress, c)
+}
+
 func getCurrentUserID(c *gin.Context) uint {
 	if v, ok := c.Get("user_id"); ok {
 		switch vv := v.(type) {
@@ -77,6 +132,5 @@ func getCurrentUserID(c *gin.Context) uint {
 		}
 	}
 
-	// 开发期兜底：没有 JWT 的情况下默认为 1
-	return 1
+	return 0
 }

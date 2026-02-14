@@ -2,6 +2,13 @@ package model
 
 import "gorm.io/gorm"
 
+const (
+	TaskStatusStopped = 0
+	TaskStatusRunning = 1
+	TaskStatusPaused  = 2
+	TaskStatusError   = 3
+)
+
 type Task struct {
 	gorm.Model
 	UserID    uint   `gorm:"index;not null" json:"user_id"`                // 归属用户
@@ -24,6 +31,6 @@ type Task struct {
 	CloneComment bool `gorm:"default:false" json:"clone_comment"` // 克隆评论
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`     // GPU 加速
 
-	// 运行状态: 0-停止, 1-运行中, 2-异常
+	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`
 }

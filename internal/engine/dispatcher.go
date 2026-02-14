@@ -1,0 +1,378 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"my-go-server/internal/global"
+	"my-go-server/internal/model"
+
+	"go.uber.org/zap"
+)
+
+// TaskProgress matches the polling response expected by UI.
+type TaskProgress struct {
+	TaskID      uint     `json:"task_id"`
+	Status      string   `json:"status"`
+	Speed       string   `json:"speed"`
+	ProgressPct int      `json:"progress_pct"`
+	SuccessCnt  int      `json:"success_cnt"`
+	FailCnt     int      `json:"fail_cnt"`
+	TotalMsg    int      `json:"total_msg"`
+	Logs        []string `json:"logs"`
+}
+
+// TaskManager manages concurrent running tasks.
+type TaskManager struct {
+	mu        sync.RWMutex
+	cancelers map[uint]context.CancelFunc
+	states    map[uint]*taskState
+}
+
+var Manager = &TaskManager{
+	cancelers: make(map[uint]context.CancelFunc),
+	states:    make(map[uint]*taskState),
+}
+
+type taskState struct {
+	TaskID uint
+
+	RunID  uint64
+	Status int
+
+	Realtime  bool
+	Completed bool
+
+	Total     int
+	Processed int
+	Success   int
+	Fail      int
+
+	SpeedBaseTime      time.Time
+	SpeedBaseProcessed int
+
+	Logs []string
+}
+
+const (
+	defaultTotalMsg = 2798
+	maxLogs         = 50
+	maxRespLogs     = 20
+)
+
+func (m *TaskManager) StartTask(t model.Task) {
+	if t.ID == 0 {
+		return
+	}
+
+	m.mu.Lock()
+
+	if cancel, ok := m.cancelers[t.ID]; ok {
+		cancel()
+		delete(m.cancelers, t.ID)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelers[t.ID] = cancel
+
+	st := m.ensureStateLocked(t)
+	st.RunID++
+	runID := st.RunID
+
+	// Restart from scratch if it has been completed before.
+	if st.Completed && st.Status == model.TaskStatusStopped {
+		st.Processed = 0
+		st.Success = 0
+		st.Fail = 0
+		st.Completed = false
+		st.Logs = nil
+	}
+
+	st.Status = model.TaskStatusRunning
+	st.Realtime = t.Realtime
+	if st.Total <= 0 {
+		st.Total = inferTotal(t)
+	}
+	st.SpeedBaseTime = time.Now()
+	st.SpeedBaseProcessed = st.Processed
+	st.appendLogLocked(fmt.Sprintf("开始搬运任务 [%d]: %s -> %s", t.ID, t.SourceURL, t.TargetURL))
+
+	m.mu.Unlock()
+
+	if global.Logger != nil {
+		global.Logger.Info("task started", zap.Uint("task_id", t.ID))
+	}
+
+	go m.runTransferLoop(ctx, t, runID)
+}
+
+func (m *TaskManager) PauseTask(taskID uint) {
+	if taskID == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if cancel, ok := m.cancelers[taskID]; ok {
+		cancel()
+		delete(m.cancelers, taskID)
+	}
+
+	st := m.states[taskID]
+	if st == nil {
+		st = &taskState{TaskID: taskID}
+		m.states[taskID] = st
+	}
+
+	st.RunID++
+	st.Status = model.TaskStatusPaused
+	st.SpeedBaseTime = time.Time{}
+	st.SpeedBaseProcessed = st.Processed
+	st.appendLogLocked("任务已暂停")
+}
+
+func (m *TaskManager) StopTask(taskID uint) {
+	if taskID == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if cancel, ok := m.cancelers[taskID]; ok {
+		cancel()
+		delete(m.cancelers, taskID)
+	}
+
+	st := m.states[taskID]
+	if st == nil {
+		st = &taskState{TaskID: taskID}
+		m.states[taskID] = st
+	}
+
+	st.RunID++
+	st.Status = model.TaskStatusStopped
+	st.Realtime = false
+	st.Completed = false
+	st.Processed = 0
+	st.Success = 0
+	st.Fail = 0
+	st.SpeedBaseTime = time.Time{}
+	st.SpeedBaseProcessed = 0
+	st.Logs = nil
+	st.appendLogLocked("任务已停止")
+}
+
+func (m *TaskManager) GetTaskProgress(t model.Task) TaskProgress {
+	if t.ID == 0 {
+		return TaskProgress{}
+	}
+
+	m.getOrCreateState(t)
+
+	m.mu.RLock()
+	st := m.states[t.ID]
+	if st == nil {
+		m.mu.RUnlock()
+		return TaskProgress{TaskID: t.ID}
+	}
+	progress := snapshotLocked(time.Now(), st)
+	m.mu.RUnlock()
+	return progress
+}
+
+func (m *TaskManager) getOrCreateState(t model.Task) *taskState {
+	m.mu.RLock()
+	st := m.states[t.ID]
+	m.mu.RUnlock()
+
+	if st != nil {
+		m.syncFromDB(t, st)
+		return st
+	}
+
+	m.mu.Lock()
+	st = m.ensureStateLocked(t)
+	m.mu.Unlock()
+	return st
+}
+
+func (m *TaskManager) ensureStateLocked(t model.Task) *taskState {
+	st := m.states[t.ID]
+	if st == nil {
+		st = &taskState{TaskID: t.ID}
+		m.states[t.ID] = st
+	}
+
+	if st.Total <= 0 {
+		st.Total = inferTotal(t)
+	}
+	if st.Status == 0 && t.Status != 0 {
+		st.Status = t.Status
+	} else if st.Status == 0 && t.Status == 0 {
+		st.Status = model.TaskStatusStopped
+	}
+	st.Realtime = t.Realtime
+
+	return st
+}
+
+func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cur := m.states[t.ID]
+	if cur == nil {
+		return
+	}
+
+	if cur.Total <= 0 {
+		cur.Total = inferTotal(t)
+	}
+	cur.Realtime = t.Realtime
+
+	if cur.Status != t.Status {
+		cur.Status = t.Status
+		if cur.Status != model.TaskStatusRunning {
+			cur.SpeedBaseTime = time.Time{}
+			cur.SpeedBaseProcessed = cur.Processed
+		}
+	}
+}
+
+func snapshotLocked(now time.Time, st *taskState) TaskProgress {
+	processed := st.Processed
+	total := st.Total
+	if total > 0 && processed > total {
+		processed = total
+	}
+	if processed < 0 {
+		processed = 0
+	}
+
+	progressPct := 0
+	if total > 0 {
+		progressPct = int(float64(processed) / float64(total) * 100)
+		if progressPct > 100 {
+			progressPct = 100
+		}
+	}
+
+	statusText := statusTextByCode(st.Status)
+	if st.Completed && !st.Realtime {
+		statusText = "已完成"
+	}
+
+	speedText := "0 消息/秒"
+	if st.Status == model.TaskStatusRunning && !st.SpeedBaseTime.IsZero() {
+		elapsed := now.Sub(st.SpeedBaseTime).Seconds()
+		if elapsed > 0 {
+			speed := float64(st.Processed-st.SpeedBaseProcessed) / elapsed
+			if speed < 0 {
+				speed = 0
+			}
+			speedText = fmt.Sprintf("%.1f 消息/秒", speed)
+		}
+	}
+
+	return TaskProgress{
+		TaskID:      st.TaskID,
+		Status:      statusText,
+		Speed:       speedText,
+		ProgressPct: progressPct,
+		SuccessCnt:  st.Success,
+		FailCnt:     st.Fail,
+		TotalMsg:    total,
+		Logs:        tail(st.Logs, maxRespLogs),
+	}
+}
+
+func (st *taskState) appendLogLocked(msg string) {
+	ts := time.Now().Format("15:04:05")
+	st.Logs = append(st.Logs, fmt.Sprintf("[%s] %s", ts, msg))
+	if len(st.Logs) > maxLogs {
+		st.Logs = st.Logs[len(st.Logs)-maxLogs:]
+	}
+}
+
+func statusTextByCode(code int) string {
+	switch code {
+	case model.TaskStatusStopped:
+		return "已停止"
+	case model.TaskStatusRunning:
+		return "进行中"
+	case model.TaskStatusPaused:
+		return "已暂停"
+	case model.TaskStatusError:
+		return "异常"
+	default:
+		return "未知"
+	}
+}
+
+func tail[T any](in []T, n int) []T {
+	if n <= 0 || len(in) == 0 {
+		return nil
+	}
+	if len(in) <= n {
+		out := make([]T, len(in))
+		copy(out, in)
+		return out
+	}
+	out := make([]T, n)
+	copy(out, in[len(in)-n:])
+	return out
+}
+
+func inferTotal(t model.Task) int {
+	switch t.ScopeType {
+	case 2: // 最近 N 条
+		ints := extractInts(t.ScopeValue, 1)
+		if len(ints) == 1 && ints[0] > 0 {
+			return ints[0]
+		}
+	case 4: // ID 范围
+		ints := extractInts(t.ScopeValue, 2)
+		if len(ints) >= 2 && ints[0] > 0 && ints[1] > 0 {
+			start, end := ints[0], ints[1]
+			if end < start {
+				start, end = end, start
+			}
+			if end-start+1 > 0 {
+				return end - start + 1
+			}
+		}
+	}
+
+	return defaultTotalMsg
+}
+
+func extractInts(s string, max int) []int {
+	out := make([]int, 0, 2)
+	n := 0
+	inNumber := false
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch >= '0' && ch <= '9' {
+			n = n*10 + int(ch-'0')
+			inNumber = true
+			continue
+		}
+		if inNumber {
+			out = append(out, n)
+			if max > 0 && len(out) >= max {
+				return out
+			}
+			n = 0
+			inNumber = false
+		}
+	}
+	if inNumber {
+		out = append(out, n)
+	}
+	return out
+}

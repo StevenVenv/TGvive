@@ -27,6 +27,8 @@ func SetupRouter() *gin.Engine {
 		{
 			taskV1.POST("", taskApi.CreateTask)
 			taskV1.GET("", taskApi.GetTaskList)
+			taskV1.POST("/action", taskApi.UpdateTaskStatus)
+			taskV1.GET("/:id/progress", taskApi.GetTaskProgress)
 		}
 	}
 
