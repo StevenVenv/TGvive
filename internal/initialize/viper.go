@@ -25,6 +25,9 @@ func InitConfig() {
 	v.SetDefault("mysql.dbname", "")
 	v.SetDefault("mysql.config", "charset=utf8mb4&parseTime=True&loc=Local")
 	v.SetDefault("jwt.secret", "change_me")
+	v.SetDefault("telegram.api_id", 0)
+	v.SetDefault("telegram.api_hash", "")
+	v.SetDefault("telegram.session_path", "./sessions/")
 
 	if err := v.ReadInConfig(); err != nil {
 		panic(fmt.Errorf("read config failed: %w", err))

@@ -1,9 +1,10 @@
 package global
 
 type AppConfig struct {
-	Server ServerConfig `mapstructure:"server"`
-	MySQL  MySQLConfig  `mapstructure:"mysql"`
-	JWT    JWTConfig    `mapstructure:"jwt"`
+	Server   ServerConfig   `mapstructure:"server"`
+	MySQL    MySQLConfig    `mapstructure:"mysql"`
+	JWT      JWTConfig      `mapstructure:"jwt"`
+	Telegram TelegramConfig `mapstructure:"telegram"`
 }
 
 type ServerConfig struct {
@@ -22,4 +23,10 @@ type MySQLConfig struct {
 
 type JWTConfig struct {
 	Secret string `mapstructure:"secret"`
+}
+
+type TelegramConfig struct {
+	APIID       int    `mapstructure:"api_id"`
+	APIHash     string `mapstructure:"api_hash"`
+	SessionPath string `mapstructure:"session_path"`
 }
