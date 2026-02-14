@@ -1,0 +1,12 @@
+server:
+  port: 8080
+  mode: debug # debug, release, test
+
+mysql:
+  host: "127.0.0.1"
+  port: 3306
+  user: "root"
+  password: "your_password"
+  dbname: "my_db"
+  config: "charset=utf8mb4&parseTime=True&loc=Local"
+
