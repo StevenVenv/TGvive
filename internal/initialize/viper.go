@@ -24,6 +24,7 @@ func InitConfig() {
 	v.SetDefault("mysql.password", "")
 	v.SetDefault("mysql.dbname", "")
 	v.SetDefault("mysql.config", "charset=utf8mb4&parseTime=True&loc=Local")
+	v.SetDefault("jwt.secret", "change_me")
 
 	if err := v.ReadInConfig(); err != nil {
 		panic(fmt.Errorf("read config failed: %w", err))

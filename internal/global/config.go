@@ -3,6 +3,7 @@ package global
 type AppConfig struct {
 	Server ServerConfig `mapstructure:"server"`
 	MySQL  MySQLConfig  `mapstructure:"mysql"`
+	JWT    JWTConfig    `mapstructure:"jwt"`
 }
 
 type ServerConfig struct {
@@ -17,4 +18,8 @@ type MySQLConfig struct {
 	Password string `mapstructure:"password"`
 	DBName   string `mapstructure:"dbname"`
 	Config   string `mapstructure:"config"`
+}
+
+type JWTConfig struct {
+	Secret string `mapstructure:"secret"`
 }

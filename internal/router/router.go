@@ -17,5 +17,18 @@ func SetupRouter() *gin.Engine {
 
 	r.GET("/ping", v1.Ping)
 
+	taskApi := v1.TaskApi{}
+	apiV1 := r.Group("/api/v1")
+	{
+		apiV1.GET("/ping", v1.Ping)
+
+		taskV1 := apiV1.Group("/tasks")
+		taskV1.Use(middleware.JWTAuth())
+		{
+			taskV1.POST("", taskApi.CreateTask)
+			taskV1.GET("", taskApi.GetTaskList)
+		}
+	}
+
 	return r
 }

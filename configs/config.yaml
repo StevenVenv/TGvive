@@ -3,10 +3,12 @@ server:
   mode: debug # debug, release, test
 
 mysql:
-  host: "127.0.0.1"
+  host: "103.96.75.74"
   port: 3306
-  user: "root"
-  password: "your_password"
-  dbname: "my_db"
+  user: "tttest"
+  password: "JaS8ncPLsMjNK66D"
+  dbname: "tttest"
   config: "charset=utf8mb4&parseTime=True&loc=Local"
 
+jwt:
+  secret: "change_me"

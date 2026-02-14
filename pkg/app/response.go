@@ -29,3 +29,11 @@ func OK(c *gin.Context, data any) {
 func Fail(c *gin.Context, code int, msg string) {
 	JSON(c, code, msg, nil)
 }
+
+func OkWithData(data any, c *gin.Context) {
+	OK(c, data)
+}
+
+func FailWithMsg(msg string, c *gin.Context) {
+	Fail(c, e.CodeError, msg)
+}
