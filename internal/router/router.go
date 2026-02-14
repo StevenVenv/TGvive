@@ -18,9 +18,14 @@ func SetupRouter() *gin.Engine {
 	r.GET("/ping", v1.Ping)
 
 	taskApi := v1.TaskApi{}
+	tgAuthApi := v1.TGAuthApi{}
 	apiV1 := r.Group("/api/v1")
 	{
 		apiV1.GET("/ping", v1.Ping)
+
+		apiV1.GET("/tg/qr", tgAuthApi.GetQRCode)
+		apiV1.GET("/tg/qr/status", tgAuthApi.CheckQRStatus)
+		apiV1.GET("/tg/qr/ws", tgAuthApi.QRWebSocket)
 
 		taskV1 := apiV1.Group("/tasks")
 		taskV1.Use(middleware.JWTAuth())

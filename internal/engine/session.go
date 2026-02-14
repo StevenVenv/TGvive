@@ -62,6 +62,20 @@ func GetSessionPath(phone string) string {
 	return filepath.Join(basePath, fmt.Sprintf("session_%s.json", safe))
 }
 
+func GetSessionPathForKey(key string) string {
+	basePath := strings.TrimSpace(global.Config.Telegram.SessionPath)
+	if basePath == "" {
+		basePath = "./sessions/"
+	}
+
+	safe := sanitizeSessionKey(key)
+	if safe == "" {
+		safe = "unknown"
+	}
+
+	return filepath.Join(basePath, fmt.Sprintf("session_%s.json", safe))
+}
+
 func sanitizePhone(phone string) string {
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
@@ -73,6 +87,31 @@ func sanitizePhone(phone string) string {
 	for _, r := range phone {
 		if r >= '0' && r <= '9' {
 			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func sanitizeSessionKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(key))
+	for _, r := range key {
+		switch {
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
 		}
 	}
 	return b.String()
