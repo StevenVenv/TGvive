@@ -224,21 +224,28 @@ func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if st == nil {
+		return
+	}
+
 	cur := m.states[t.ID]
 	if cur == nil {
 		return
 	}
-
-	if cur.Total <= 0 {
-		cur.Total = inferTotal(t)
+	if cur != st {
+		st = cur
 	}
-	cur.Realtime = t.Realtime
 
-	if cur.Status != t.Status {
-		cur.Status = t.Status
-		if cur.Status != model.TaskStatusRunning {
-			cur.SpeedBaseTime = time.Time{}
-			cur.SpeedBaseProcessed = cur.Processed
+	if st.Total <= 0 {
+		st.Total = inferTotal(t)
+	}
+	st.Realtime = t.Realtime
+
+	if st.Status != t.Status {
+		st.Status = t.Status
+		if st.Status != model.TaskStatusRunning {
+			st.SpeedBaseTime = time.Time{}
+			st.SpeedBaseProcessed = st.Processed
 		}
 	}
 }
