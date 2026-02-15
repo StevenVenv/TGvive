@@ -38,9 +38,7 @@ func sessionMetaPathForKey(key string) string {
 	sessionPath := GetSessionPathForKey(key)
 	dir := filepath.Dir(sessionPath)
 	base := filepath.Base(sessionPath)
-	if strings.HasSuffix(base, ".json") {
-		base = strings.TrimSuffix(base, ".json")
-	}
+	base = strings.TrimSuffix(base, ".json")
 	return filepath.Join(dir, base+".meta.json")
 }
 

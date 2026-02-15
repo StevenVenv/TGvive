@@ -74,14 +74,14 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			}
 		}
 
-		m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
-		m.markCompleted(taskID, runID, false)
-		_ = m.registerRealtimeTask(tgRT, runtimeTask{
-			Task:       task,
-			RunID:      runID,
-			Ctx:        ctx,
-			TargetPeer: targetPeer,
-		}, sourceChannelID)
+			m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
+			m.markCompleted(taskID, runID, false)
+			_ = m.registerRealtimeTask(tgRT, runtimeTaskConfig{
+				Task:       task,
+				RunID:      runID,
+				Ctx:        ctx,
+				TargetPeer: targetPeer,
+			}, sourceChannelID)
 		<-ctx.Done()
 		m.unregisterTask(taskID, sourceChannelID)
 		return

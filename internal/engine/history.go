@@ -294,7 +294,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						return err
 					}
 					if need > 0 {
-						if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+						if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
 							return err
 						}
 					}
@@ -337,7 +337,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				return err
 			}
 			if need > 0 {
-				if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
 					return err
 				}
 			}
@@ -504,7 +504,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						return err
 					}
 					if need > 0 {
-						if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+						if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
 							return err
 						}
 					}
@@ -546,7 +546,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				return err
 			}
 			if need > 0 {
-				if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
 					return err
 				}
 			}

@@ -75,6 +75,13 @@ type realtimeJob struct {
 	albumCh   <-chan []*tg.Message
 }
 
+type runtimeTaskConfig struct {
+	Task       model.Task
+	RunID      uint64
+	Ctx        context.Context
+	TargetPeer tg.InputPeerClass
+}
+
 type runtimeTask struct {
 	Task       model.Task
 	RunID      uint64
@@ -93,23 +100,23 @@ type runtimeTask struct {
 	albumWait map[int64]chan []*tg.Message
 }
 
-func newRuntimeTask(rt runtimeTask) *runtimeTask {
+func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 	t := &runtimeTask{
-		Task:       rt.Task,
-		RunID:      rt.RunID,
-		Ctx:        rt.Ctx,
-		TargetPeer: rt.TargetPeer,
+		Task:       cfg.Task,
+		RunID:      cfg.RunID,
+		Ctx:        cfg.Ctx,
+		TargetPeer: cfg.TargetPeer,
 
-		allowedTypes: normalizeTypeSet(rt.Task.ContentTypes.Strings()),
+		allowedTypes: normalizeTypeSet(cfg.Task.ContentTypes.Strings()),
 		delayMin:     defaultMsgDelayMin,
 		delayMax:     defaultMsgDelayMax,
-		quota:        newTaskQuota(rt.Task),
+		quota:        newTaskQuota(cfg.Task),
 
 		queue:     make(chan realtimeJob, 512),
 		albumWait: make(map[int64]chan []*tg.Message),
 	}
 
-	t.delayMin, t.delayMax = normalizeDelayRange(rt.Task.DelayMinMs, rt.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	t.delayMin, t.delayMax = normalizeDelayRange(cfg.Task.DelayMinMs, cfg.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 	return t
 }
 
@@ -267,7 +274,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					}
 				}
 				if err == nil && need > 0 {
-					if err := m.quotaAdd(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
+					if err := m.quotaAdd(t.Ctx, t.Task.ID, t.quota, need); err != nil {
 						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 							return
 						}
@@ -324,7 +331,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				if err == nil && need > 0 {
-					if err := m.quotaAdd(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
+					if err := m.quotaAdd(t.Ctx, t.Task.ID, t.quota, need); err != nil {
 						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 							return
 						}
@@ -564,35 +571,36 @@ func peerToChannelID(peer tg.PeerClass) (int64, bool) {
 	}
 }
 
-func (m *TaskManager) registerRealtimeTask(tgRT *telegramRuntime, rt runtimeTask, sourceChannelID int64) error {
+func (m *TaskManager) registerRealtimeTask(tgRT *telegramRuntime, cfg runtimeTaskConfig, sourceChannelID int64) error {
 	if m == nil || tgRT == nil {
 		return errors.New("telegram runtime not initialized")
 	}
-	if rt.Task.ID == 0 {
+	if cfg.Task.ID == 0 {
 		return errors.New("task id is required")
 	}
 	if sourceChannelID == 0 {
 		return errors.New("source_channel_id is required")
 	}
-	if rt.TargetPeer == nil {
+	if cfg.TargetPeer == nil {
 		return errors.New("target peer is nil")
 	}
-	if rt.Ctx == nil {
+	if cfg.Ctx == nil {
 		return errors.New("task context is nil")
 	}
+	taskID := cfg.Task.ID
 
 	tgRT.tasksMu.Lock()
-	if prev := tgRT.tasksByID[rt.Task.ID]; prev != nil {
+	if prev := tgRT.tasksByID[taskID]; prev != nil {
 		prev.stop()
 	}
-	taskPtr := newRuntimeTask(rt)
-	tgRT.tasksByID[rt.Task.ID] = taskPtr
+	taskPtr := newRuntimeTask(cfg)
+	tgRT.tasksByID[taskID] = taskPtr
 	mm := tgRT.bySource[sourceChannelID]
 	if mm == nil {
 		mm = make(map[uint]*runtimeTask)
 		tgRT.bySource[sourceChannelID] = mm
 	}
-	mm[rt.Task.ID] = taskPtr
+	mm[taskID] = taskPtr
 	api := tgRT.api
 	tgRT.tasksMu.Unlock()
 

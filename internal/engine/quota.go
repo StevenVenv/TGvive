@@ -239,7 +239,7 @@ func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint6
 	}
 }
 
-func (m *TaskManager) quotaAdd(ctx context.Context, taskID uint, runID uint64, q *taskQuota, delta int) error {
+func (m *TaskManager) quotaAdd(ctx context.Context, taskID uint, q *taskQuota, delta int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
