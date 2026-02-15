@@ -73,7 +73,36 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 	case 2:
 		return m.SendMedia(ctx, api, msg, task, peer)
 	case 3:
-		return m.SendUploadedMedia(ctx, api, msg, task, peer)
+		if m == nil || m.tg == nil || m.tg.client == nil {
+			return errors.New("telegram client is nil")
+		}
+
+		inputFile, err := m.TransferMedia(ctx, m.tg.client, msg)
+		if err != nil {
+			return err
+		}
+		inputMedia := m.WrapUploadedMedia(inputFile, msg)
+		if inputMedia == nil {
+			return ErrUnsupportedMedia
+		}
+
+		rid, err := randomID()
+		if err != nil {
+			return err
+		}
+
+		req := &tg.MessagesSendMediaRequest{
+			Peer:     peer,
+			Media:    inputMedia,
+			Message:  msg.Message,
+			RandomID: rid,
+		}
+		if len(msg.Entities) > 0 {
+			req.Entities = msg.Entities
+		}
+
+		_, err = api.MessagesSendMedia(ctx, req)
+		return err
 	default:
 		return ErrUnsupportedCloneMode
 	}
