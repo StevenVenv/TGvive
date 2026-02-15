@@ -9,6 +9,13 @@ const (
 	TaskStatusError   = 3
 )
 
+const (
+	// HistoryOrderOldToNew clones messages in ascending ID order.
+	HistoryOrderOldToNew = 1
+	// HistoryOrderNewToOld clones messages in descending ID order.
+	HistoryOrderNewToOld = 2
+)
+
 type Task struct {
 	gorm.Model
 	UserID    uint   `gorm:"index;not null" json:"user_id"`                // 归属用户
@@ -33,4 +40,9 @@ type Task struct {
 
 	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`
+
+	// 历史克隆进度（断点续传）
+	HistoryCursor int `gorm:"type:int;default:0" json:"history_cursor"` // 最近一次成功搬运的消息 ID
+	// 历史克隆方向：1-从旧到新，2-从新到旧
+	HistoryOrder int `gorm:"type:tinyint;default:1" json:"history_order"`
 }
