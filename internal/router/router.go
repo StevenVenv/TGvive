@@ -27,6 +27,18 @@ func SetupRouter() *gin.Engine {
 		apiV1.GET("/tg/qr/status", tgAuthApi.CheckQRStatus)
 		apiV1.GET("/tg/qr/ws", tgAuthApi.QRWebSocket)
 
+		tgV1 := apiV1.Group("/tg")
+		tgV1.Use(middleware.JWTAuth())
+		{
+			tgV1.GET("/accounts", tgAuthApi.ListAccounts)
+			tgV1.POST("/accounts/qr", tgAuthApi.StartAccountQR)
+			tgV1.GET("/accounts/qr/status", tgAuthApi.CheckQRStatus)
+			tgV1.POST("/accounts/code", tgAuthApi.StartCodeLogin)
+			tgV1.GET("/accounts/code/status", tgAuthApi.CheckCodeStatus)
+			tgV1.POST("/accounts/code/submit", tgAuthApi.SubmitCode)
+			tgV1.POST("/accounts/code/password", tgAuthApi.SubmitPassword)
+		}
+
 		taskV1 := apiV1.Group("/tasks")
 		taskV1.Use(middleware.JWTAuth())
 		{

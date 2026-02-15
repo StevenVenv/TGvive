@@ -14,7 +14,7 @@ jwt:
   secret: "change_me"
 
 telegram:
-  api_id: 1234567
-  api_hash: "abcdefg123456"
+  api_id: 15055931
+  api_hash: "021d433426cbb920eeb95164498fe3d3"
   session_path: "./sessions/"
   session_key: "" # 可选：指定使用哪个 session（对应 sessions/session_<key>.json）

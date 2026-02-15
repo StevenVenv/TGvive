@@ -50,6 +50,32 @@ export type TaskProgress = {
   logs: string[]
 }
 
+export type TGAccount = {
+  key: string
+  updated_at: number
+  size: number
+}
+
+export type QRState = {
+  session_id: string
+  key?: string
+  url?: string
+  image?: string
+  status: string
+  error?: string
+  expires_at?: number
+  updated_at?: number
+}
+
+export type CodeAuthState = {
+  session_id: string
+  key?: string
+  phone?: string
+  status: string
+  error?: string
+  updated_at?: number
+}
+
 async function apiFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -95,3 +121,44 @@ export function getTaskProgress(token: string, id: number): Promise<TaskProgress
   return apiFetch<TaskProgress>(`/api/v1/tasks/${id}/progress`, token, { method: 'GET' })
 }
 
+export function listTGAccounts(token: string): Promise<TGAccount[]> {
+  return apiFetch<TGAccount[]>('/api/v1/tg/accounts', token, { method: 'GET' })
+}
+
+export function startAccountQR(token: string, key: string): Promise<{ session_id: string }> {
+  return apiFetch<{ session_id: string }>('/api/v1/tg/accounts/qr', token, {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  })
+}
+
+export function getAccountQRStatus(token: string, sessionId: string): Promise<QRState> {
+  const q = new URLSearchParams({ session_id: sessionId })
+  return apiFetch<QRState>(`/api/v1/tg/accounts/qr/status?${q.toString()}`, token, { method: 'GET' })
+}
+
+export function startCodeLogin(token: string, key: string, phone: string): Promise<{ session_id: string }> {
+  return apiFetch<{ session_id: string }>('/api/v1/tg/accounts/code', token, {
+    method: 'POST',
+    body: JSON.stringify({ key, phone }),
+  })
+}
+
+export function getCodeLoginStatus(token: string, sessionId: string): Promise<CodeAuthState> {
+  const q = new URLSearchParams({ session_id: sessionId })
+  return apiFetch<CodeAuthState>(`/api/v1/tg/accounts/code/status?${q.toString()}`, token, { method: 'GET' })
+}
+
+export function submitCode(token: string, sessionId: string, code: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/api/v1/tg/accounts/code/submit', token, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, code }),
+  })
+}
+
+export function submitPassword(token: string, sessionId: string, password: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/api/v1/tg/accounts/code/password', token, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, password }),
+  })
+}

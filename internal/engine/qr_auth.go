@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,10 +12,12 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/tg"
+	qrcode "rsc.io/qr"
 )
 
 type QRState struct {
 	SessionID string `json:"session_id"`
+	Key       string `json:"key,omitempty"`
 	URL       string `json:"url,omitempty"`
 	Image     string `json:"image,omitempty"`
 	Status    string `json:"status"`
@@ -71,6 +74,9 @@ func (h *qrHub) publish(sessionID string, st QRState) {
 
 	h.mu.Lock()
 	if prev, ok := h.states[sessionID]; ok {
+		if st.Key == "" {
+			st.Key = prev.Key
+		}
 		if st.URL == "" {
 			st.URL = prev.URL
 		}
@@ -140,9 +146,17 @@ func (h *qrHub) subscribe(sessionID string) (<-chan QRState, func()) {
 }
 
 func (m *TaskManager) StartQRAuth(ctx context.Context, sessionID string) error {
+	return m.StartQRAuthForKey(ctx, sessionID, "qr_"+sessionID)
+}
+
+func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return errors.New("session_id is required")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("session key is required")
 	}
 
 	app, ok := Apps["desktop"]
@@ -150,8 +164,9 @@ func (m *TaskManager) StartQRAuth(ctx context.Context, sessionID string) error {
 		return errors.New("builtin app config missing")
 	}
 
-	sessionPath := GetSessionPathForKey("qr_" + sessionID)
+	sessionPath := GetSessionPathForKey(key)
 	qr.publish(sessionID, QRState{
+		Key:    key,
 		Status: QRStatusPending,
 	})
 
@@ -159,6 +174,7 @@ func (m *TaskManager) StartQRAuth(ctx context.Context, sessionID string) error {
 	loggedIn := make(chan struct{}, 1)
 	d.OnLoginToken(func(ctx context.Context, e tg.Entities, update *tg.UpdateLoginToken) error {
 		qr.publish(sessionID, QRState{
+			Key:    key,
 			Status: QRStatusScanned,
 		})
 		select {
@@ -176,14 +192,21 @@ func (m *TaskManager) StartQRAuth(ctx context.Context, sessionID string) error {
 	err := client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
 			qr.publish(sessionID, QRState{
+				Key:    key,
 				Status: QRStatusAuthorized,
 			})
 			return nil
 		}
 
 		_, err := client.QR().Auth(ctx, loggedIn, func(ctx context.Context, token qrlogin.Token) error {
+			img := ""
+			if code, err := qrcode.Encode(token.URL(), qrcode.M); err == nil {
+				img = "data:image/png;base64," + base64.StdEncoding.EncodeToString(code.PNG())
+			}
 			qr.publish(sessionID, QRState{
+				Key:       key,
 				URL:       token.URL(),
+				Image:     img,
 				Status:    QRStatusPending,
 				ExpiresAt: token.Expires().Unix(),
 			})
@@ -194,6 +217,7 @@ func (m *TaskManager) StartQRAuth(ctx context.Context, sessionID string) error {
 		}
 
 		qr.publish(sessionID, QRState{
+			Key:    key,
 			Status: QRStatusAuthorized,
 		})
 		return nil
@@ -202,12 +226,14 @@ func (m *TaskManager) StartQRAuth(ctx context.Context, sessionID string) error {
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			qr.publish(sessionID, QRState{
+				Key:    key,
 				Status: QRStatusExpired,
 				Error:  fmt.Sprintf("context canceled: %v", err),
 			})
 			return err
 		}
 		qr.publish(sessionID, QRState{
+			Key:    key,
 			Status: QRStatusError,
 			Error:  err.Error(),
 		})

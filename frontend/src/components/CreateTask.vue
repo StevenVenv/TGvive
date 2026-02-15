@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 
-import { createTask, type Task } from '../api'
+import { createTask, listTGAccounts, type TGAccount, type Task } from '../api'
 
 const props = defineProps<{
   token: string
@@ -16,6 +16,23 @@ const emit = defineEmits<{
 const open = ref(false)
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
+const accounts = ref<TGAccount[]>([])
+const accountsLoading = ref(false)
+
+async function reloadAccounts() {
+  if (!props.token.trim()) {
+    accounts.value = []
+    return
+  }
+  accountsLoading.value = true
+  try {
+    accounts.value = await listTGAccounts(props.token)
+  } catch {
+    // best-effort
+  } finally {
+    accountsLoading.value = false
+  }
+}
 
 const form = reactive({
   source_url: '',
@@ -139,10 +156,13 @@ async function submit() {
 }
 
 watch(open, (v) => {
-  if (!v) {
-    formRef.value?.clearValidate()
-    resetForm()
+  if (v) {
+    void reloadAccounts()
+    return
   }
+
+  formRef.value?.clearValidate()
+  resetForm()
 })
 </script>
 
@@ -160,7 +180,20 @@ watch(open, (v) => {
       </el-form-item>
 
       <el-form-item label="绑定账号" prop="session_key">
-        <el-input v-model="form.session_key" placeholder="可选：sessions/session_<key>.json 的 key" />
+        <el-space>
+          <el-select
+            v-model="form.session_key"
+            filterable
+            allow-create
+            clearable
+            default-first-option
+            placeholder="可选：选择已登录账号（或手动输入）"
+            style="width: 360px"
+          >
+            <el-option v-for="a in accounts" :key="a.key" :label="a.key" :value="a.key" />
+          </el-select>
+          <el-button size="small" @click="reloadAccounts" :loading="accountsLoading">刷新</el-button>
+        </el-space>
       </el-form-item>
 
       <el-divider />
