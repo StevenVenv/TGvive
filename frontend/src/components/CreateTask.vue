@@ -34,6 +34,14 @@ async function reloadAccounts() {
   }
 }
 
+function accountLabel(a: TGAccount): string {
+  const name = (a.name || (a.username ? `@${a.username}` : '')).trim()
+  const id = a.user_id ? `ID:${a.user_id}` : ''
+  const head = [name, id].filter(Boolean).join(' ')
+  if (head) return `${head} (${a.key})`
+  return a.key
+}
+
 const form = reactive({
   source_url: '',
   target_url: '',
@@ -190,7 +198,7 @@ watch(open, (v) => {
             placeholder="可选：选择已登录账号（或手动输入）"
             style="width: 360px"
           >
-            <el-option v-for="a in accounts" :key="a.key" :label="a.key" :value="a.key" />
+            <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key" />
           </el-select>
           <el-button size="small" @click="reloadAccounts" :loading="accountsLoading">刷新</el-button>
         </el-space>

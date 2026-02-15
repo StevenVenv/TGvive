@@ -191,6 +191,7 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 
 	err = client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
+			_ = updateAccountMetaFromAPI(ctx, key, client.API())
 			qr.publish(sessionID, QRState{
 				Key:    key,
 				Status: QRStatusAuthorized,
@@ -216,6 +217,7 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 			return err
 		}
 
+		_ = updateAccountMetaFromAPI(ctx, key, client.API())
 		qr.publish(sessionID, QRState{
 			Key:    key,
 			Status: QRStatusAuthorized,

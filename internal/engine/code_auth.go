@@ -266,6 +266,7 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone s
 
 	err = client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
+			_ = updateAccountMetaFromAPI(ctx, key, client.API())
 			publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusAuthorized})
 			return nil
 		}
@@ -275,6 +276,7 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone s
 			return err
 		}
 
+		_ = updateAccountMetaFromAPI(ctx, key, client.API())
 		publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusAuthorized})
 		return nil
 	})

@@ -310,6 +310,16 @@ onBeforeUnmount(() => {
     </div>
 
     <el-table :data="accounts" v-loading="loadingAccounts" stripe style="width: 100%">
+      <el-table-column label="账号" min-width="260">
+        <template #default="{ row }">
+          <div class="acct">
+            <el-text>{{ row.name || (row.username ? `@${row.username}` : '-') }}</el-text>
+            <el-text type="info">
+              ID: {{ row.user_id ?? '-' }}<span v-if="row.phone"> · {{ row.phone }}</span>
+            </el-text>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="key" label="SessionKey" min-width="220" />
       <el-table-column label="更新时间" width="200">
         <template #default="{ row }">
@@ -438,6 +448,12 @@ onBeforeUnmount(() => {
 
 .form {
   max-width: 720px;
+}
+
+.acct {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .qr-dialog {

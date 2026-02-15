@@ -13,6 +13,14 @@ type TGAccount struct {
 	Key       string `json:"key"`
 	UpdatedAt int64  `json:"updated_at"`
 	Size      int64  `json:"size"`
+
+	// Best-effort metadata (filled after login).
+	UserID   int64  `json:"user_id,omitempty"`
+	Username string `json:"username,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Phone    string `json:"phone,omitempty"`
+
+	MetaUpdatedAt int64 `json:"meta_updated_at,omitempty"`
 }
 
 func ListTGAccounts() ([]TGAccount, error) {
@@ -35,6 +43,9 @@ func ListTGAccounts() ([]TGAccount, error) {
 		}
 
 		name := filepath.Base(p)
+		if strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
 		name = strings.TrimSuffix(name, ".json")
 		name = strings.TrimPrefix(name, "session_")
 		name = strings.TrimSpace(name)
@@ -47,6 +58,16 @@ func ListTGAccounts() ([]TGAccount, error) {
 			UpdatedAt: info.ModTime().Unix(),
 			Size:      info.Size(),
 		})
+	}
+
+	for i := range out {
+		if meta, ok := loadAccountMeta(out[i].Key); ok {
+			out[i].UserID = meta.UserID
+			out[i].Username = meta.Username
+			out[i].Name = meta.displayName()
+			out[i].Phone = meta.Phone
+			out[i].MetaUpdatedAt = meta.UpdatedAt
+		}
 	}
 
 	sort.Slice(out, func(i, j int) bool {

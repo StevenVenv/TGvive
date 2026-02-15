@@ -54,6 +54,12 @@ export type TGAccount = {
   key: string
   updated_at: number
   size: number
+
+  user_id?: number
+  username?: string
+  name?: string
+  phone?: string
+  meta_updated_at?: number
 }
 
 export type QRState = {
