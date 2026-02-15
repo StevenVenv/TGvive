@@ -8,14 +8,14 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--el-bg-color-page);
+  background: var(--el-bg-color-page, #f5f7fa);
   color: var(--el-text-color-primary);
 }
 

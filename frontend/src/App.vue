@@ -42,7 +42,9 @@ const theme = ref<UITheme>(getInitialTheme())
 
 function applyTheme(v: UITheme) {
   try {
-    document.documentElement.classList.toggle('dark', v === 'dark')
+    const root = document.documentElement
+    root.classList.toggle('dark', v === 'dark')
+    root.style.backgroundColor = v === 'dark' ? '#0b1020' : '#f5f7fa'
   } catch {
     // ignore
   }

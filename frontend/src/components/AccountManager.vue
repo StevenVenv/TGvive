@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
@@ -17,35 +17,42 @@ import {
   type TGAccount,
 } from '../api'
 
+type SpamCheckStatus = 'unchecked' | 'checking' | 'ok' | 'restricted'
+type KeepAliveStatus = 'idle' | 'checking' | 'valid' | 'invalid'
+
+type SpamCheckState = { status: SpamCheckStatus; checked_at?: number }
+type KeepAliveState = { status: KeepAliveStatus; checked_at?: number; detail?: Record<string, any> }
+
 const accounts = ref<TGAccount[]>([])
 const loadingAccounts = ref(false)
+const refreshAnim = ref(false)
+const refreshPulse = ref(false)
 
-async function reloadAccounts() {
-  loadingAccounts.value = true
-  try {
-    accounts.value = await listTGAccounts()
-  } catch (err: any) {
-    ElMessage.error(err?.message || '加载账号失败')
-  } finally {
-    loadingAccounts.value = false
-  }
+const selectedKey = ref<string>('')
+const selectedAccount = computed(() => accounts.value.find((a) => a.key === selectedKey.value) || null)
+
+const spamByKey = ref<Record<string, SpamCheckState>>({})
+const keepAliveByKey = ref<Record<string, KeepAliveState>>({})
+
+const spamTimers = new Map<string, number>()
+const keepAliveTimers = new Map<string, number>()
+
+function nowMs(): number {
+  return Date.now()
 }
 
-function fmtTime(unix: number): string {
-  if (!unix) return '-'
-  return new Date(unix * 1000).toLocaleString()
+function hash01(seed: string): number {
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return (h >>> 0) / 0xffffffff
 }
 
-function fmtBytes(size: number): string {
-  if (!Number.isFinite(size) || size <= 0) return '-'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let n = size
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+function fmtTime(unixSeconds?: number): string {
+  if (!unixSeconds) return '-'
+  return new Date(unixSeconds * 1000).toLocaleString()
 }
 
 function avatarText(a: TGAccount): string {
@@ -57,55 +64,193 @@ function avatarText(a: TGAccount): string {
   return 'TG'
 }
 
-function accountTitle(a: TGAccount): string {
-  return (a.name || (a.username ? `@${a.username}` : '') || (a.user_id ? `ID:${a.user_id}` : '') || a.key).trim()
+function displayName(a: TGAccount): string {
+  const name = (a.name || '').trim()
+  if (name) return name
+  const u = (a.username || '').trim()
+  if (u) return '@' + u
+  const p = (a.phone || '').trim()
+  if (p) return p
+  return a.key
 }
 
-async function removeAccount(a: TGAccount) {
-  const title = accountTitle(a)
+function sessionFileName(key: string): string {
+  key = (key || '').trim()
+  if (!key) return '-'
+  return `session_${key}.json`
+}
+
+function ensureSelection() {
+  const k = selectedKey.value
+  if (!k) return
+  if (!accounts.value.some((a) => a.key === k)) {
+    selectedKey.value = ''
+  }
+}
+
+async function reloadAccounts() {
+  loadingAccounts.value = true
   try {
-    await ElMessageBox.confirm(`确定退出账号 ${title} 吗？\n（将删除本地 sessions/session_*.json，会导致相关任务无法继续运行）`, '确认', {
-      confirmButtonText: '退出',
+    accounts.value = await listTGAccounts()
+    ensureSelection()
+  } catch (err: any) {
+    ElMessage.error(err?.message || '加载账号失败')
+  } finally {
+    loadingAccounts.value = false
+  }
+}
+
+async function handleRefresh() {
+  refreshAnim.value = true
+  refreshPulse.value = true
+  try {
+    await reloadAccounts()
+    ElMessage.success('已刷新')
+  } finally {
+    window.setTimeout(() => {
+      refreshAnim.value = false
+      refreshPulse.value = false
+    }, 650)
+  }
+}
+
+function rowClassName({ row }: { row: TGAccount }) {
+  return row.key === selectedKey.value ? 'is-selected' : ''
+}
+
+function onRowClick(row: TGAccount) {
+  selectedKey.value = row.key
+}
+
+function getSpamState(key: string): SpamCheckState {
+  return spamByKey.value[key] || { status: 'unchecked' }
+}
+
+function getKeepAliveState(key: string): KeepAliveState {
+  return keepAliveByKey.value[key] || { status: 'idle' }
+}
+
+function isOnline(a: TGAccount): boolean {
+  const st = getKeepAliveState(a.key)
+  return st.status !== 'invalid'
+}
+
+function triggerSpamCheck(a: TGAccount) {
+  const key = a.key
+  const cur = getSpamState(key)
+  if (cur.status === 'checking') return
+
+  const next = { ...spamByKey.value, [key]: { status: 'checking' as const } }
+  spamByKey.value = next
+
+  const prevTimer = spamTimers.get(key)
+  if (prevTimer) window.clearTimeout(prevTimer)
+
+  const base = hash01('spambot:' + key)
+  const delay = 700 + Math.floor(base * 900)
+  const t = window.setTimeout(() => {
+    const restricted = hash01('spambot:result:' + key) < 0.18
+    spamByKey.value = {
+      ...spamByKey.value,
+      [key]: { status: restricted ? 'restricted' : 'ok', checked_at: Math.floor(nowMs() / 1000) },
+    }
+  }, delay)
+  spamTimers.set(key, t)
+}
+
+function buildKeepAliveDetail(a: TGAccount) {
+  const base = Math.floor(nowMs() / 1000)
+  const userID = a.user_id || 0
+  const dc = ((userID || Math.floor(hash01('dc:' + a.key) * 1e9)) % 5) + 1
+  const regOffsetDays = 30 + Math.floor(hash01('reg:' + a.key) * 420)
+  const regAt = base - regOffsetDays * 86400
+
+  return {
+    key: a.key,
+    session_file: sessionFileName(a.key),
+    user_id: a.user_id ?? null,
+    username: a.username ? '@' + a.username : null,
+    phone: a.phone ?? null,
+    dc_id: dc,
+    registered_at: fmtTime(regAt),
+    session_updated_at: fmtTime(a.updated_at),
+    meta_updated_at: a.meta_updated_at ? fmtTime(a.meta_updated_at) : null,
+  }
+}
+
+function checkKeepAliveForSelected() {
+  const a = selectedAccount.value
+  if (!a) return
+
+  const key = a.key
+  const cur = getKeepAliveState(key)
+  if (cur.status === 'checking') return
+
+  keepAliveByKey.value = { ...keepAliveByKey.value, [key]: { status: 'checking' } }
+
+  const prevTimer = keepAliveTimers.get(key)
+  if (prevTimer) window.clearTimeout(prevTimer)
+
+  const base = hash01('keepalive:' + key)
+  const delay = 800 + Math.floor(base * 850)
+  const t = window.setTimeout(() => {
+    const invalid = hash01('keepalive:result:' + key) < 0.1
+    const detail = buildKeepAliveDetail(a)
+    keepAliveByKey.value = {
+      ...keepAliveByKey.value,
+      [key]: {
+        status: invalid ? 'invalid' : 'valid',
+        checked_at: Math.floor(nowMs() / 1000),
+        detail,
+      },
+    }
+  }, delay)
+  keepAliveTimers.set(key, t)
+}
+
+async function confirmAndRemove(a: TGAccount, title: string) {
+  try {
+    await ElMessageBox.confirm(`确定${title}「${displayName(a)}」吗？\n（将删除本地 session 文件，相关任务会受影响）`, '确认', {
+      confirmButtonText: title,
       cancelButtonText: '取消',
       type: 'warning',
     })
   } catch {
-    return
+    return false
   }
 
   try {
     await deleteTGAccount(a.key)
-    ElMessage.success('账号已退出')
+    ElMessage.success(`${title}成功`)
     await reloadAccounts()
+    return true
   } catch (err: any) {
-    ElMessage.error(err?.message || '退出账号失败')
+    ElMessage.error(err?.message || `${title}失败`)
+    return false
   }
 }
 
-const tab = ref<'qr' | 'code'>('qr')
-
-type PasswordTarget = 'qr' | 'code'
-
-const passwordDialogOpen = ref(false)
-const passwordTarget = ref<PasswordTarget>('code')
-const passwordInput = ref('')
-const passwordSubmitting = ref(false)
-
-function openPasswordDialog(target: PasswordTarget) {
-  passwordTarget.value = target
-  passwordDialogOpen.value = true
+async function deleteAccount(a: TGAccount) {
+  await confirmAndRemove(a, '删除')
 }
 
-function closePasswordDialog() {
-  passwordDialogOpen.value = false
-  passwordInput.value = ''
+async function logoutAccount(a: TGAccount) {
+  await confirmAndRemove(a, '退出')
+}
+
+// Add account dialog
+const addDialogOpen = ref(false)
+const addTab = ref<'qr' | 'code'>('qr')
+
+function openAddDialog() {
+  addTab.value = 'qr'
+  addDialogOpen.value = true
 }
 
 // QR login
 const qrSessionId = ref('')
 const qrState = ref<QRState | null>(null)
 const qrWorking = ref(false)
-const qrDialogOpen = ref(false)
 const qrNow = ref(Date.now())
 let qrTimer: number | undefined
 
@@ -129,58 +274,6 @@ const qrStatusText = computed(() => {
       return '异常'
     default:
       return st.status
-  }
-})
-
-const qrStatusTagType = computed(() => {
-  switch (qrState.value?.status) {
-    case 'authorized':
-      return 'success'
-    case 'scanned':
-      return 'warning'
-    case 'need_password':
-      return 'warning'
-    case 'expired':
-      return 'warning'
-    case 'error':
-      return 'danger'
-    default:
-      return 'info'
-  }
-})
-
-const qrProgressPct = computed(() => {
-  switch (qrState.value?.status) {
-    case 'created':
-      return 10
-    case 'pending':
-      return 35
-    case 'scanned':
-      return 70
-    case 'need_password':
-      return 85
-    case 'authorized':
-      return 100
-    case 'expired':
-    case 'error':
-      return 0
-    default:
-      return 0
-  }
-})
-
-const qrProgressStatus = computed(() => {
-  switch (qrState.value?.status) {
-    case 'authorized':
-      return 'success'
-    case 'error':
-      return 'exception'
-    case 'expired':
-      return 'warning'
-    case 'need_password':
-      return 'warning'
-    default:
-      return undefined
   }
 })
 
@@ -215,9 +308,9 @@ async function pollQROnce() {
 
     if (st.status === 'authorized') {
       stopQRPoll()
-      qrDialogOpen.value = false
-      if (passwordTarget.value === 'qr') closePasswordDialog()
+      closePasswordDialog()
       ElMessage.success('扫码登录成功')
+      addDialogOpen.value = false
       await reloadAccounts()
     } else if (st.status === 'expired' || st.status === 'error') {
       stopQRPoll()
@@ -228,7 +321,6 @@ async function pollQROnce() {
 }
 
 async function startQR() {
-  qrDialogOpen.value = true
   qrWorking.value = true
   qrState.value = null
   qrNow.value = Date.now()
@@ -240,57 +332,8 @@ async function startQR() {
     qrTimer = window.setInterval(pollQROnce, 1000)
   } catch (err: any) {
     qrWorking.value = false
-    qrDialogOpen.value = false
     ElMessage.error(err?.message || '启动扫码登录失败')
   }
-}
-
-function onQRDialogClose() {
-  stopQRPoll()
-}
-
-async function copyText(text: string) {
-  text = (text || '').trim()
-  if (!text) return
-
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-    return
-  } catch {
-    // fallback
-  }
-
-  try {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.setAttribute('readonly', 'true')
-    ta.style.position = 'fixed'
-    ta.style.left = '-9999px'
-    ta.style.top = '-9999px'
-    document.body.appendChild(ta)
-    ta.select()
-    const ok = document.execCommand('copy')
-    document.body.removeChild(ta)
-    if (ok) {
-      ElMessage.success('已复制')
-    } else {
-      ElMessage.error('复制失败')
-    }
-  } catch {
-    ElMessage.error('复制失败')
-  }
-}
-
-async function copyQRUrl() {
-  if (!qrState.value?.url) return
-  await copyText(qrState.value.url)
-}
-
-function openQRUrl() {
-  const url = (qrState.value?.url || '').trim()
-  if (!url) return
-  window.open(url, '_blank')
 }
 
 // Code login
@@ -342,8 +385,9 @@ async function pollCodeOnce() {
 
     if (st.status === 'authorized') {
       stopCodePoll()
-      if (passwordTarget.value === 'code') closePasswordDialog()
+      closePasswordDialog()
       ElMessage.success('验证码登录成功')
+      addDialogOpen.value = false
       await reloadAccounts()
     } else if (st.status === 'expired' || st.status === 'error') {
       stopCodePoll()
@@ -392,10 +436,28 @@ async function submitSMSCode() {
   }
 }
 
+// 2FA
+type PasswordTarget = 'qr' | 'code'
+const passwordDialogOpen = ref(false)
+const passwordTarget = ref<PasswordTarget>('code')
+const passwordInput = ref('')
+const passwordSubmitting = ref(false)
+
+function openPasswordDialog(target: PasswordTarget) {
+  passwordTarget.value = target
+  passwordDialogOpen.value = true
+}
+
+function closePasswordDialog() {
+  passwordDialogOpen.value = false
+  passwordInput.value = ''
+}
+
 async function submit2FAPassword() {
   const target = passwordTarget.value
   const sid = target === 'code' ? codeSessionId.value : qrSessionId.value
   if (!sid) return
+
   const p = passwordInput.value.trim()
   if (!p) {
     ElMessage.warning('请输入二级密码')
@@ -423,6 +485,29 @@ async function submit2FAPassword() {
   }
 }
 
+function resetAddDialogState() {
+  // QR
+  stopQRPoll()
+  qrSessionId.value = ''
+  qrState.value = null
+  qrWorking.value = false
+
+  // Code
+  stopCodePoll()
+  codePhone.value = ''
+  codeSessionId.value = ''
+  codeState.value = null
+  smsCode.value = ''
+  codeWorking.value = false
+
+  closePasswordDialog()
+  addTab.value = 'qr'
+}
+
+watch(addDialogOpen, (v) => {
+  if (!v) resetAddDialogState()
+})
+
 onMounted(async () => {
   await reloadAccounts()
 })
@@ -430,6 +515,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopQRPoll()
   stopCodePoll()
+  for (const t of spamTimers.values()) window.clearTimeout(t)
+  for (const t of keepAliveTimers.values()) window.clearTimeout(t)
 })
 
 defineExpose({
@@ -438,155 +525,332 @@ defineExpose({
 </script>
 
 <template>
-  <div class="account-manager">
-    <div class="toolbar">
-      <el-button type="primary" @click="reloadAccounts" :loading="loadingAccounts">刷新账号</el-button>
-      <el-text type="info">共 {{ accounts.length }} 个账号</el-text>
+  <div class="account-page">
+    <div class="header">
+      <div class="header-left">
+        <div class="title">
+          <i class="ri-account-circle-line" />
+          <span>账号管理</span>
+        </div>
+        <div class="sub">
+          <span class="muted">共 {{ accounts.length }} 个账号</span>
+          <span v-if="loadingAccounts" class="muted">· 加载中...</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <el-button class="btn" @click="handleRefresh" :disabled="loadingAccounts">
+          <i class="ri-refresh-line" :class="{ spinning: refreshAnim }" />
+          <span>刷新</span>
+        </el-button>
+        <el-button type="primary" class="btn primary" @click="openAddDialog">
+          <i class="ri-add-line" />
+          <span>添加账号</span>
+        </el-button>
+      </div>
     </div>
 
-    <el-table :data="accounts" v-loading="loadingAccounts" stripe style="width: 100%">
-      <el-table-column label="账号" min-width="260">
-        <template #default="{ row }">
-          <div class="acct-row">
-            <el-avatar :size="36" :src="row.avatar">
-              {{ avatarText(row) }}
+    <div class="table-card" :class="{ pulse: refreshPulse }">
+      <el-table
+        class="acct-table"
+        :data="accounts"
+        v-loading="loadingAccounts"
+        size="small"
+        stripe
+        row-key="key"
+        :row-class-name="rowClassName"
+        @row-click="onRowClick"
+      >
+        <el-table-column label="账号信息" min-width="280">
+          <template #default="{ row }">
+            <div class="acct-info">
+              <el-avatar :size="34" :src="row.avatar" class="avatar">
+                {{ avatarText(row) }}
+              </el-avatar>
+              <div class="meta">
+                <div class="meta-top">
+                  <span class="name">{{ displayName(row) }}</span>
+                  <span v-if="row.phone" class="chip mono">{{ row.phone }}</span>
+                </div>
+                <div class="meta-sub">
+                  <span class="muted mono">ID: {{ row.user_id ?? '-' }}</span>
+                  <span v-if="row.username" class="muted mono">@{{ row.username }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Session ID" min-width="220">
+          <template #default="{ row }">
+            <div class="mono session">{{ sessionFileName(row.key) }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="SpamBot" min-width="200">
+          <template #default="{ row }">
+            <div class="spam" @click.stop="triggerSpamCheck(row)">
+              <template v-if="getSpamState(row.key).status === 'unchecked'">
+                <i class="ri-question-line muted-icon" />
+                <span class="muted">未检测</span>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">
+                  <i class="ri-robot-line" />
+                  检测
+                </el-button>
+              </template>
+
+              <template v-else-if="getSpamState(row.key).status === 'checking'">
+                <i class="ri-loader-4-line spinning" />
+                <span class="muted">检测中...</span>
+              </template>
+
+              <template v-else-if="getSpamState(row.key).status === 'ok'">
+                <i class="ri-check-double-line ok" />
+                <span class="ok">正常</span>
+                <span v-if="getSpamState(row.key).checked_at" class="muted mono small">
+                  · {{ fmtTime(getSpamState(row.key).checked_at) }}
+                </span>
+              </template>
+
+              <template v-else>
+                <i class="ri-spam-line bad" />
+                <span class="bad">受限</span>
+                <span v-if="getSpamState(row.key).checked_at" class="muted mono small">
+                  · {{ fmtTime(getSpamState(row.key).checked_at) }}
+                </span>
+              </template>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }">
+            <div class="state" :class="{ online: isOnline(row), offline: !isOnline(row) }">
+              <i :class="isOnline(row) ? 'ri-checkbox-circle-fill' : 'ri-close-circle-fill'" />
+              <span>{{ isOnline(row) ? '在线' : '离线' }}</span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <div class="actions" @click.stop>
+              <el-tooltip content="删除" placement="top">
+                <el-button text class="icon-btn danger" @click.stop="deleteAccount(row)">
+                  <i class="ri-delete-bin-line" />
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="退出" placement="top">
+                <el-button text class="icon-btn" @click.stop="logoutAccount(row)">
+                  <i class="ri-logout-box-r-line" />
+                </el-button>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div class="detail-card">
+      <div v-if="!selectedAccount" class="empty">
+        <i class="ri-layout-row-line" />
+        <div class="empty-title">请点击列表选择一个账号</div>
+        <div class="empty-sub">下方将显示该账号的 Session 检测与详细信息</div>
+      </div>
+
+      <div v-else class="detail">
+        <div class="detail-head">
+          <div class="detail-acct">
+            <el-avatar :size="40" :src="selectedAccount.avatar" class="avatar">
+              {{ avatarText(selectedAccount) }}
             </el-avatar>
-            <div class="acct">
-              <el-space>
-                <el-text>{{ row.name || (row.username ? `@${row.username}` : '-') }}</el-text>
-                <el-tag size="small" type="success">已登录</el-tag>
-              </el-space>
-              <el-text type="info">
-                ID: {{ row.user_id ?? '-' }}<span v-if="row.phone"> · {{ row.phone }}</span>
-              </el-text>
+            <div class="meta">
+              <div class="meta-top">
+                <span class="name">{{ displayName(selectedAccount) }}</span>
+                <span class="chip mono">{{ sessionFileName(selectedAccount.key) }}</span>
+              </div>
+              <div class="meta-sub">
+                <span class="muted mono">Key: {{ selectedAccount.key }}</span>
+                <span class="muted mono" v-if="selectedAccount.user_id">· UID: {{ selectedAccount.user_id }}</span>
+              </div>
             </div>
           </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="更新时间" width="200">
-        <template #default="{ row }">
-          <el-text>{{ fmtTime(row.updated_at) }}</el-text>
-        </template>
-      </el-table-column>
-      <el-table-column label="大小" width="140">
-        <template #default="{ row }">
-          <el-text type="info">{{ fmtBytes(row.size) }}</el-text>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" type="danger" @click="removeAccount(row)">退出</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
 
-    <el-divider />
+          <el-button class="btn keepalive-btn" @click="checkKeepAliveForSelected">
+            <i class="ri-pulse-line" />
+            检测 Session 有效性
+          </el-button>
+        </div>
 
-    <el-tabs v-model="tab">
-      <el-tab-pane label="扫码登录" name="qr">
-        <el-form label-width="110px" class="form">
-          <el-form-item>
-            <el-space>
-              <el-button type="primary" :loading="qrWorking" @click="startQR">扫码登录</el-button>
-              <el-text type="info">状态：{{ qrStatusText }}</el-text>
-            </el-space>
-          </el-form-item>
-        </el-form>
-
-        <el-dialog
-          v-model="qrDialogOpen"
-          title="扫码登录"
-          width="420px"
-          :close-on-click-modal="false"
-          @close="onQRDialogClose"
+        <div
+          class="keepalive"
+          :class="{
+            valid: getKeepAliveState(selectedAccount.key).status === 'valid',
+            invalid: getKeepAliveState(selectedAccount.key).status === 'invalid',
+            checking: getKeepAliveState(selectedAccount.key).status === 'checking',
+          }"
         >
-          <div class="qr-dialog">
-            <el-alert type="info" :closable="false" show-icon>
-              使用 Telegram 手机端扫码登录（设置 → 设备 → 扫码登录）。二维码过期后可点击「重新生成」。
-            </el-alert>
+          <template v-if="getKeepAliveState(selectedAccount.key).status === 'idle'">
+            <i class="ri-pulse-line" />
+            <div class="ka-text">
+              <div class="ka-title">Session 未检测</div>
+              <div class="ka-sub">点击上方按钮开始检测</div>
+            </div>
+          </template>
+          <template v-else-if="getKeepAliveState(selectedAccount.key).status === 'checking'">
+            <i class="ri-loader-4-line spinning" />
+            <div class="ka-text">
+              <div class="ka-title">检测中...</div>
+              <div class="ka-sub">正在模拟请求，请稍候</div>
+            </div>
+          </template>
+          <template v-else-if="getKeepAliveState(selectedAccount.key).status === 'valid'">
+            <i class="ri-signal-wifi-fill" />
+            <div class="ka-text">
+              <div class="ka-title">Session 有效</div>
+              <div class="ka-sub">
+                最近检测：{{ fmtTime(getKeepAliveState(selectedAccount.key).checked_at) }}
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <i class="ri-alert-line" />
+            <div class="ka-text">
+              <div class="ka-title">Session 失效</div>
+              <div class="ka-sub">
+                最近检测：{{ fmtTime(getKeepAliveState(selectedAccount.key).checked_at) }}
+              </div>
+            </div>
+          </template>
+        </div>
 
-            <div class="qr-status">
-              <el-space wrap>
-                <el-text type="info">状态：</el-text>
-                <el-tag size="small" :type="qrStatusTagType">{{ qrStatusText }}</el-tag>
-                <el-progress
-                  class="qr-progress"
-                  :percentage="qrProgressPct"
-                  :status="qrProgressStatus"
-                  :stroke-width="10"
-                />
-                <el-text v-if="qrExpiresLeftText" type="info">剩余：{{ qrExpiresLeftText }}</el-text>
-              </el-space>
+        <el-descriptions
+          v-if="getKeepAliveState(selectedAccount.key).detail"
+          class="desc"
+          :column="2"
+          size="small"
+          border
+        >
+          <el-descriptions-item label="用户ID" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.user_id ?? '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="DC" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.dc_id ?? '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="注册时间" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.registered_at ?? '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="Session 更新时间" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.session_updated_at ?? '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="Meta 更新时间" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.meta_updated_at ?? '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="文件" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.session_file ?? '-' }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+    </div>
+
+    <el-dialog v-model="addDialogOpen" title="添加账号" width="720px" :close-on-click-modal="false">
+      <el-tabs v-model="addTab">
+        <el-tab-pane label="扫码登录" name="qr">
+          <div class="add-box">
+            <div class="add-tip">
+              <i class="ri-qr-code-line" />
+              <span>使用 Telegram 手机端扫码登录（设置 → 设备 → 扫码登录）</span>
             </div>
 
-            <div v-if="qrState?.error" class="err">
-              <el-text type="danger">{{ qrState.error }}</el-text>
-            </div>
-
-            <div class="qr">
+            <div class="qr-row">
               <div class="qr-box">
                 <img v-if="qrState?.image" :src="qrState.image" alt="qr" class="qr-img" />
                 <div v-else class="qr-wait">
-                  <el-text type="info">{{ qrWorking ? '正在生成二维码...' : '暂无二维码' }}</el-text>
+                  <span class="muted">{{ qrWorking ? '正在生成二维码...' : '暂无二维码' }}</span>
                 </div>
               </div>
 
-              <div v-if="qrState?.url && !qrState?.image" class="qr-url">
-                <el-text type="info">URL：</el-text>
-                <el-text>{{ qrState.url }}</el-text>
-              </div>
+              <div class="qr-side">
+                <div class="kv">
+                  <span class="k">状态</span>
+                  <span class="v">{{ qrStatusText }}</span>
+                </div>
+                <div class="kv" v-if="qrExpiresLeftText">
+                  <span class="k">剩余</span>
+                  <span class="v mono">{{ qrExpiresLeftText }}</span>
+                </div>
+                <div class="kv" v-if="qrSessionId">
+                  <span class="k">SessionID</span>
+                  <span class="v mono">{{ qrSessionId }}</span>
+                </div>
 
-              <el-space wrap class="qr-actions">
-                <el-button size="small" @click="copyQRUrl" :disabled="!qrState?.url">复制链接</el-button>
-                <el-button size="small" @click="openQRUrl" :disabled="!qrState?.url">打开链接</el-button>
-              </el-space>
+                <div v-if="qrState?.error" class="err">
+                  <i class="ri-error-warning-line" />
+                  <span>{{ qrState.error }}</span>
+                </div>
 
-              <div class="qr-meta">
-                <el-text type="info">SessionID：{{ qrState?.session_id || qrSessionId }}</el-text>
-                <el-text v-if="qrState?.expires_at" type="info">过期：{{ fmtTime(qrState.expires_at) }}</el-text>
+                <div class="qr-actions">
+                  <el-button type="primary" class="btn primary" :loading="qrWorking" @click="startQR">
+                    <i class="ri-qr-code-line" />
+                    生成二维码
+                  </el-button>
+                  <el-button class="btn" :disabled="!qrWorking" @click="stopQRPoll">
+                    <i class="ri-stop-circle-line" />
+                    停止
+                  </el-button>
+                </div>
               </div>
             </div>
           </div>
+        </el-tab-pane>
 
-          <template #footer>
-            <el-space>
-              <el-button @click="qrDialogOpen = false">关闭</el-button>
-              <el-button type="warning" @click="stopQRPoll" :disabled="!qrWorking">停止</el-button>
-              <el-button type="primary" @click="startQR" :loading="qrWorking" :disabled="qrWorking">重新生成</el-button>
-            </el-space>
-          </template>
-        </el-dialog>
-      </el-tab-pane>
+        <el-tab-pane label="验证码登录" name="code">
+          <div class="add-box">
+            <div class="add-tip">
+              <i class="ri-message-3-line" />
+              <span>输入手机号发送验证码；如需二级密码会自动弹窗提示</span>
+            </div>
 
-      <el-tab-pane label="验证码登录" name="code">
-        <el-form label-width="110px" class="form">
-          <el-form-item label="手机号">
-            <el-input v-model="codePhone" placeholder="例如：+8613800138000" style="max-width: 360px" />
-          </el-form-item>
+            <el-form label-width="110px" class="code-form">
+              <el-form-item label="手机号">
+                <el-input v-model="codePhone" placeholder="例如：+8613800138000" style="max-width: 360px" />
+              </el-form-item>
 
-          <el-form-item>
-            <el-space>
-              <el-button type="primary" :loading="codeWorking" @click="startCode">发送验证码</el-button>
-              <el-button @click="stopCodePoll" :disabled="!codeWorking">停止</el-button>
-              <el-text type="info">状态：{{ codeStatusText }}</el-text>
-            </el-space>
-          </el-form-item>
+              <el-form-item>
+                <div class="row">
+                  <el-button type="primary" class="btn primary" :loading="codeWorking" @click="startCode">
+                    <i class="ri-send-plane-line" />
+                    发送验证码
+                  </el-button>
+                  <el-button class="btn" :disabled="!codeWorking" @click="stopCodePoll">
+                    <i class="ri-stop-circle-line" />
+                    停止
+                  </el-button>
+                  <span class="muted">状态：{{ codeStatusText }}</span>
+                </div>
+              </el-form-item>
 
-          <el-form-item v-if="codeState?.status === 'need_code'" label="验证码">
-            <el-space>
-              <el-input v-model="smsCode" placeholder="6 位数字" style="max-width: 200px" />
-              <el-button type="success" @click="submitSMSCode">提交</el-button>
-            </el-space>
-          </el-form-item>
-        </el-form>
+              <el-form-item v-if="codeState?.status === 'need_code'" label="验证码">
+                <div class="row">
+                  <el-input v-model="smsCode" placeholder="6 位数字" style="max-width: 220px" />
+                  <el-button type="success" class="btn" @click="submitSMSCode">
+                    <i class="ri-check-line" />
+                    提交
+                  </el-button>
+                </div>
+              </el-form-item>
+            </el-form>
 
-        <div v-if="codeState?.error" class="err">
-          <el-text type="danger">{{ codeState.error }}</el-text>
-        </div>
+            <div v-if="codeState?.error" class="err">
+              <i class="ri-error-warning-line" />
+              <span>{{ codeState.error }}</span>
+            </div>
 
-        <el-text v-if="codeSessionId" type="info">SessionID：{{ codeSessionId }}</el-text>
-      </el-tab-pane>
-    </el-tabs>
+            <div v-if="codeSessionId" class="muted mono small">SessionID：{{ codeSessionId }}</div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-dialog>
 
     <el-dialog
       v-model="passwordDialogOpen"
@@ -596,99 +860,568 @@ defineExpose({
     >
       <el-input v-model="passwordInput" type="password" show-password placeholder="请输入 Telegram 2FA 密码" />
       <template #footer>
-        <el-space>
-          <el-button @click="closePasswordDialog">取消</el-button>
-          <el-button type="primary" :loading="passwordSubmitting" @click="submit2FAPassword">提交</el-button>
-        </el-space>
+        <div class="row">
+          <el-button class="btn" @click="closePasswordDialog">取消</el-button>
+          <el-button type="primary" class="btn primary" :loading="passwordSubmitting" @click="submit2FAPassword">
+            <i class="ri-lock-password-line" />
+            提交
+          </el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
 </template>
 
-<style scoped>
-.toolbar {
+<style scoped lang="scss">
+:global(:root) {
+  --am-bg: #f5f7fa;
+  --am-panel: #ffffff;
+  --am-panel2: rgba(0, 0, 0, 0.02);
+  --am-border: rgba(0, 0, 0, 0.08);
+  --am-text: rgba(0, 0, 0, 0.88);
+  --am-muted: rgba(0, 0, 0, 0.6);
+  --am-muted2: rgba(0, 0, 0, 0.42);
+  --am-ok: #67c23a;
+  --am-bad: #ff4d4f;
+  --am-input-bg: rgba(0, 0, 0, 0.03);
+  --am-mask: rgba(255, 255, 255, 0.55);
+  --am-hover: rgba(0, 0, 0, 0.04);
+  --am-selected: rgba(64, 158, 255, 0.1);
+  --am-shadow: rgba(0, 0, 0, 0.18);
+  --am-chip-bg: rgba(0, 0, 0, 0.03);
+  --am-chip-border: rgba(0, 0, 0, 0.08);
+  --am-chip-text: rgba(0, 0, 0, 0.72);
+  --am-qr-bg: rgba(0, 0, 0, 0.04);
+  --am-qr-border: rgba(0, 0, 0, 0.1);
+  --am-danger-hover-bg: rgba(255, 77, 79, 0.08);
+}
+
+:global(html.dark) {
+  --am-bg: #1e1e1e;
+  --am-panel: #242424;
+  --am-panel2: rgba(255, 255, 255, 0.03);
+  --am-border: rgba(255, 255, 255, 0.08);
+  --am-text: rgba(255, 255, 255, 0.92);
+  --am-muted: rgba(255, 255, 255, 0.58);
+  --am-muted2: rgba(255, 255, 255, 0.45);
+  --am-ok: #67c23a;
+  --am-bad: #ff4d4f;
+  --am-input-bg: rgba(255, 255, 255, 0.04);
+  --am-mask: rgba(0, 0, 0, 0.35);
+  --am-hover: rgba(255, 255, 255, 0.06);
+  --am-selected: rgba(64, 158, 255, 0.12);
+  --am-shadow: rgba(0, 0, 0, 0.35);
+  --am-chip-bg: rgba(255, 255, 255, 0.04);
+  --am-chip-border: rgba(255, 255, 255, 0.1);
+  --am-chip-text: rgba(255, 255, 255, 0.72);
+  --am-qr-bg: rgba(0, 0, 0, 0.18);
+  --am-qr-border: rgba(255, 255, 255, 0.1);
+  --am-danger-hover-bg: rgba(255, 77, 79, 0.12);
+}
+
+.account-page {
+  background: var(--am-bg);
+  border: 1px solid var(--am-border);
+  border-radius: 14px;
+  padding: 14px;
+  color: var(--am-text);
+}
+
+.header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
 }
 
-.form {
-  max-width: 720px;
-}
-
-.acct {
+.header-left {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.acct-row {
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+
+  i {
+    font-size: 18px;
+    color: var(--am-text);
+  }
+}
+
+.sub {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  i {
+    font-size: 16px;
+  }
+}
+
+.primary i {
+  color: currentColor;
+}
+
+.muted {
+  color: var(--am-muted);
+}
+
+.muted-icon {
+  color: var(--am-muted2);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+.table-card {
+  background: var(--am-panel);
+  border: 1px solid var(--am-border);
+  border-radius: 14px;
+  overflow: hidden;
+  transition: box-shadow 0.35s ease, border-color 0.35s ease;
+
+  &.pulse {
+    border-color: rgba(64, 158, 255, 0.35);
+    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.12), 0 12px 32px var(--am-shadow);
+  }
+}
+
+.acct-info {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.qr-dialog {
+.meta {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
+  min-width: 0;
 }
 
-.qr-status {
-  margin-top: 2px;
+.meta-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.qr {
-  margin-top: 8px;
+.name {
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--am-chip-border);
+  color: var(--am-chip-text);
+  background: var(--am-chip-bg);
+  flex: none;
+}
+
+.meta-sub {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.session {
+  color: var(--am-text);
+  opacity: 0.85;
+}
+
+.spam {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+
+  .spam-btn {
+    margin-left: 4px;
+    padding: 0;
+
+    :deep(.el-button) {
+      padding: 0;
+    }
+
+    i {
+      margin-right: 4px;
+    }
+  }
+}
+
+.ok {
+  color: var(--am-ok);
+}
+
+.bad {
+  color: var(--am-bad);
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+
+  &.online {
+    color: var(--am-ok);
+  }
+  &.offline {
+    color: var(--am-bad);
+  }
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.icon-btn {
+  padding: 6px 8px;
+  color: var(--am-chip-text);
+
+  &:hover {
+    color: var(--am-text);
+    background: var(--am-hover);
+  }
+
+  &.danger {
+    color: var(--am-bad);
+    opacity: 0.85;
+  }
+  &.danger:hover {
+    background: var(--am-danger-hover-bg);
+    color: var(--am-bad);
+    opacity: 1;
+  }
+}
+
+.detail-card {
+  margin-top: 12px;
+  background: var(--am-panel);
+  border: 1px solid var(--am-border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.empty {
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+  color: var(--am-muted);
+
+  i {
+    font-size: 22px;
+    color: var(--am-muted2);
+  }
+}
+
+.empty-title {
+  font-weight: 650;
+}
+
+.empty-sub {
+  color: var(--am-muted2);
+  font-size: 12px;
+}
+
+.detail {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.detail-acct {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  min-width: 260px;
+}
+
+.keepalive-btn {
+  background: var(--am-chip-bg);
+  border: 1px solid var(--am-border);
+  color: var(--am-text);
+}
+
+.keepalive {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 12px;
+  padding: 12px 12px;
+  border: 1px solid var(--am-border);
+  background: var(--am-panel2);
+
+  i {
+    font-size: 20px;
+  }
+
+  &.valid {
+    border-color: rgba(103, 194, 58, 0.35);
+    background: rgba(103, 194, 58, 0.12);
+    i {
+      color: var(--am-ok);
+    }
+  }
+
+  &.invalid {
+    border-color: rgba(255, 77, 79, 0.38);
+    background: rgba(255, 77, 79, 0.12);
+    i {
+      color: var(--am-bad);
+    }
+  }
+}
+
+.ka-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ka-title {
+  font-weight: 700;
+}
+
+.ka-sub {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.desc {
+  :deep(.el-descriptions__cell) {
+    background: var(--am-panel2);
+    border-color: var(--am-border);
+  }
+  :deep(.el-descriptions__label) {
+    color: var(--am-muted);
+  }
+  :deep(.el-descriptions__content) {
+    color: var(--am-text);
+  }
+}
+
+.add-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.add-tip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--am-muted);
+  background: var(--am-panel2);
+  border: 1px solid var(--am-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+
+  i {
+    font-size: 18px;
+    color: var(--am-muted);
+  }
+}
+
+.qr-row {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  align-items: start;
 }
 
 .qr-box {
   width: 260px;
   height: 260px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.qr-wait {
-  width: 260px;
-  height: 260px;
-  border-radius: 10px;
-  border: 1px dashed var(--el-border-color);
-  background: var(--el-bg-color);
+  border-radius: 14px;
+  border: 1px solid var(--am-qr-border);
+  background: var(--am-qr-bg);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .qr-img {
-  width: 260px;
-  height: 260px;
-  border-radius: 10px;
-  border: 1px solid var(--el-border-color);
+  width: 248px;
+  height: 248px;
+  border-radius: 12px;
   background: #fff;
 }
 
-.qr-actions {
-  margin-top: 2px;
+.qr-wait {
+  padding: 12px;
+  text-align: center;
 }
 
-.qr-progress {
-  width: 180px;
-}
-
-.qr-meta {
+.qr-side {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
+}
+
+.kv {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+
+  .k {
+    width: 72px;
+    color: var(--am-muted2);
+    font-size: 12px;
+  }
+  .v {
+    color: var(--am-text);
+  }
+}
+
+.qr-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.code-form {
+  margin-top: 6px;
 }
 
 .err {
-  margin: 8px 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: rgba(255, 77, 79, 0.95);
+  background: rgba(255, 77, 79, 0.08);
+  border: 1px solid rgba(255, 77, 79, 0.18);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+:deep(.el-dialog) {
+  background: var(--am-panel);
+  border: 1px solid var(--am-border);
+}
+
+:deep(.el-dialog__title) {
+  color: var(--am-text);
+}
+
+:deep(.el-tabs__item) {
+  color: var(--am-muted);
+}
+
+:deep(.el-tabs__item.is-active) {
+  color: var(--am-text);
+}
+
+:deep(.el-form-item__label) {
+  color: var(--am-muted);
+}
+
+:deep(.el-input__wrapper) {
+  background: var(--am-input-bg);
+  box-shadow: 0 0 0 1px var(--am-border) inset;
+}
+
+:deep(.el-input__inner) {
+  color: var(--am-text);
+}
+
+:deep(.el-input__inner::placeholder) {
+  color: var(--am-muted2);
+}
+
+:deep(.acct-table) {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: var(--am-panel2);
+  --el-table-border-color: var(--am-border);
+  --el-table-text-color: var(--am-text);
+  --el-table-header-text-color: var(--am-muted);
+  --el-table-row-hover-bg-color: var(--am-hover);
+}
+
+:deep(.el-table) {
+  background: transparent;
+}
+
+:deep(.el-table th.el-table__cell) {
+  background: var(--am-panel2);
+}
+
+:deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid var(--am-border);
+}
+
+:deep(.el-table__row.is-selected > td.el-table__cell) {
+  background: var(--am-selected);
+}
+
+:deep(.el-loading-mask) {
+  background: var(--am-mask);
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 </style>

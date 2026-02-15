@@ -4,6 +4,55 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html {
+        background: #f5f7fa;
+      }
+      @media (prefers-color-scheme: dark) {
+        html {
+          background: #0b1020;
+        }
+      }
+      html.dark {
+        background: #0b1020;
+      }
+      body {
+        background: transparent;
+      }
+    </style>
+    <script>
+      ;(() => {
+        const storageThemeKey = 'tgvive_ui_theme'
+
+        let theme = 'light'
+        try {
+          const saved = (localStorage.getItem(storageThemeKey) || '').trim()
+          if (saved === 'light' || saved === 'dark') {
+            theme = saved
+          } else if (window.matchMedia?.('(prefers-color-scheme: dark)')?.matches) {
+            theme = 'dark'
+          }
+        } catch {
+          try {
+            if (window.matchMedia?.('(prefers-color-scheme: dark)')?.matches) theme = 'dark'
+          } catch {
+            // ignore
+          }
+        }
+
+        const root = document.documentElement
+        try {
+          root.classList.toggle('dark', theme === 'dark')
+        } catch {
+          // ignore
+        }
+        try {
+          root.style.backgroundColor = theme === 'dark' ? '#0b1020' : '#f5f7fa'
+        } catch {
+          // ignore
+        }
+      })()
+    </script>
     <title>frontend</title>
   </head>
   <body>
