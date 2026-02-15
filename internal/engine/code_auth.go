@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -240,8 +241,16 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, phone string
 		return err
 	}
 
-	sessionPath := GetSessionPath(phone)
-	accountKey := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(sessionPath), ".json"), "session_")
+	finalSessionPath := GetSessionPath(phone)
+	pendingPath := pendingSessionPath(finalSessionPath)
+	sessionPath := pendingPath
+	usePending := true
+	if info, err := os.Stat(finalSessionPath); err == nil && info != nil && info.Mode().IsRegular() {
+		sessionPath = finalSessionPath
+		usePending = false
+	}
+
+	accountKey := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(finalSessionPath), ".json"), "session_")
 	client := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage: &FileSessionStorage{Path: sessionPath},
 	})
@@ -253,10 +262,11 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, phone string
 		passCh:    s.passwordCh,
 	}
 
+	authorized := false
 	err = client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
 			_ = updateAccountMetaFromAPI(ctx, accountKey, client.API())
-			publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusAuthorized})
+			authorized = true
 			return nil
 		}
 
@@ -266,17 +276,30 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, phone string
 		}
 
 		_ = updateAccountMetaFromAPI(ctx, accountKey, client.API())
-		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusAuthorized})
+		authorized = true
 		return nil
 	})
 
 	if err != nil {
+		if usePending {
+			cleanupPendingSession(pendingPath)
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusExpired, Error: err.Error()})
 			return err
 		}
 		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusError, Error: err.Error()})
 		return err
+	}
+
+	if authorized {
+		if usePending {
+			if err := promotePendingSession(pendingPath, finalSessionPath); err != nil {
+				publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusError, Error: "保存会话失败: " + err.Error()})
+				return err
+			}
+		}
+		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusAuthorized})
 	}
 	return nil
 }

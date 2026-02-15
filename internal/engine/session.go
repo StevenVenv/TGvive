@@ -10,6 +10,81 @@ import (
 	"my-go-server/internal/global"
 )
 
+func pendingSessionPath(finalSessionPath string) string {
+	finalSessionPath = strings.TrimSpace(finalSessionPath)
+	if finalSessionPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(finalSessionPath), ".pending", filepath.Base(finalSessionPath))
+}
+
+func cleanupPendingSession(pendingSessionPath string) {
+	pendingSessionPath = strings.TrimSpace(pendingSessionPath)
+	if pendingSessionPath == "" {
+		return
+	}
+	_ = os.Remove(pendingSessionPath)
+	_ = os.Remove(filepath.Dir(pendingSessionPath))
+}
+
+func promotePendingSession(pendingSessionPath, finalSessionPath string) error {
+	pendingSessionPath = strings.TrimSpace(pendingSessionPath)
+	finalSessionPath = strings.TrimSpace(finalSessionPath)
+	if pendingSessionPath == "" {
+		return fmt.Errorf("pending session path is empty")
+	}
+	if finalSessionPath == "" {
+		return fmt.Errorf("final session path is empty")
+	}
+
+	info, err := os.Stat(pendingSessionPath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("pending session path is a directory: %s", pendingSessionPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(finalSessionPath), 0o700); err != nil {
+		return err
+	}
+
+	if err := os.Rename(pendingSessionPath, finalSessionPath); err == nil {
+		_ = os.Remove(filepath.Dir(pendingSessionPath))
+		return nil
+	}
+
+	// Fallback: copy bytes + best-effort cleanup.
+	data, err := os.ReadFile(pendingSessionPath)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(finalSessionPath), "session_promote_*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, finalSessionPath); err != nil {
+		return err
+	}
+
+	cleanupPendingSession(pendingSessionPath)
+	return nil
+}
+
 // FileSessionStorage stores gotd session bytes in a local file.
 // The file contains sensitive credentials; it is written with 0600 permissions.
 type FileSessionStorage struct {

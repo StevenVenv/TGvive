@@ -5,13 +5,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
+	tgauth "github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	qrcode "rsc.io/qr"
 )
 
@@ -30,15 +33,21 @@ const (
 	QRStatusCreated    = "created"
 	QRStatusPending    = "pending"
 	QRStatusScanned    = "scanned"
+	QRStatusNeedPass   = "need_password"
 	QRStatusAuthorized = "authorized"
 	QRStatusExpired    = "expired"
 	QRStatusError      = "error"
 )
 
+type qrAuthSession struct {
+	passwordCh chan string
+}
+
 type qrHub struct {
 	mu     sync.RWMutex
 	states map[string]QRState
 	subs   map[string]map[chan QRState]struct{}
+	sess   map[string]*qrAuthSession
 }
 
 var qr = newQRHub()
@@ -47,15 +56,24 @@ func newQRHub() *qrHub {
 	return &qrHub{
 		states: make(map[string]QRState),
 		subs:   make(map[string]map[chan QRState]struct{}),
+		sess:   make(map[string]*qrAuthSession),
 	}
 }
 
 func InitQRSession(sessionID string) QRState {
+	sessionID = strings.TrimSpace(sessionID)
 	st := QRState{
 		SessionID: sessionID,
 		Status:    QRStatusCreated,
 		UpdatedAt: time.Now().Unix(),
 	}
+
+	qr.mu.Lock()
+	if qr.sess[sessionID] == nil {
+		qr.sess[sessionID] = &qrAuthSession{passwordCh: make(chan string, 1)}
+	}
+	qr.mu.Unlock()
+
 	qr.publish(sessionID, st)
 	return st
 }
@@ -66,6 +84,35 @@ func GetQRState(sessionID string) (QRState, bool) {
 
 func SubscribeQR(sessionID string) (<-chan QRState, func()) {
 	return qr.subscribe(sessionID)
+}
+
+func ProvideQRPassword(sessionID, password string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	password = strings.TrimSpace(password)
+	if sessionID == "" {
+		return errors.New("session_id is required")
+	}
+	if password == "" {
+		return errors.New("password is required")
+	}
+
+	qr.mu.RLock()
+	s := qr.sess[sessionID]
+	qr.mu.RUnlock()
+	if s == nil {
+		return errors.New("session not found")
+	}
+
+	select {
+	case s.passwordCh <- password:
+	default:
+		select {
+		case <-s.passwordCh:
+		default:
+		}
+		s.passwordCh <- password
+	}
+	return nil
 }
 
 func (h *qrHub) publish(sessionID string, st QRState) {
@@ -89,7 +136,7 @@ func (h *qrHub) publish(sessionID string, st QRState) {
 		if st.Error == "" && (st.Status == QRStatusError || st.Status == QRStatusExpired) {
 			st.Error = prev.Error
 		}
-		if st.Status != QRStatusError && st.Status != QRStatusExpired {
+		if st.Status != QRStatusError && st.Status != QRStatusExpired && st.Status != QRStatusNeedPass {
 			st.Error = ""
 		}
 	}
@@ -154,6 +201,11 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 	if sessionID == "" {
 		return errors.New("session_id is required")
 	}
+	defer func() {
+		qr.mu.Lock()
+		delete(qr.sess, sessionID)
+		qr.mu.Unlock()
+	}()
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return errors.New("session key is required")
@@ -164,7 +216,14 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 		return err
 	}
 
-	sessionPath := GetSessionPathForKey(key)
+	finalSessionPath := GetSessionPathForKey(key)
+	pendingPath := pendingSessionPath(finalSessionPath)
+	sessionPath := pendingPath
+	usePending := true
+	if info, err := os.Stat(finalSessionPath); err == nil && info != nil && info.Mode().IsRegular() {
+		sessionPath = finalSessionPath
+		usePending = false
+	}
 	qr.publish(sessionID, QRState{
 		Key:    key,
 		Status: QRStatusPending,
@@ -189,13 +248,11 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 		UpdateHandler:  d,
 	})
 
+	authorized := false
 	err = client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
 			_ = updateAccountMetaFromAPI(ctx, key, client.API())
-			qr.publish(sessionID, QRState{
-				Key:    key,
-				Status: QRStatusAuthorized,
-			})
+			authorized = true
 			return nil
 		}
 
@@ -214,18 +271,52 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 			return nil
 		})
 		if err != nil {
+			if tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
+				qr.publish(sessionID, QRState{Key: key, Status: QRStatusNeedPass})
+
+				qr.mu.RLock()
+				s := qr.sess[sessionID]
+				qr.mu.RUnlock()
+				if s == nil {
+					return errors.New("password session not found")
+				}
+
+				for {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case p := <-s.passwordCh:
+						p = strings.TrimSpace(p)
+						if p == "" {
+							continue
+						}
+						if _, err := client.Auth().Password(ctx, p); err != nil {
+							if errors.Is(err, tgauth.ErrPasswordInvalid) {
+								qr.publish(sessionID, QRState{Key: key, Status: QRStatusNeedPass, Error: "二级密码错误，请重试"})
+								continue
+							}
+							return err
+						}
+
+						_ = updateAccountMetaFromAPI(ctx, key, client.API())
+						authorized = true
+						return nil
+					}
+				}
+			}
+
 			return err
 		}
 
 		_ = updateAccountMetaFromAPI(ctx, key, client.API())
-		qr.publish(sessionID, QRState{
-			Key:    key,
-			Status: QRStatusAuthorized,
-		})
+		authorized = true
 		return nil
 	})
 
 	if err != nil {
+		if usePending {
+			cleanupPendingSession(pendingPath)
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			qr.publish(sessionID, QRState{
 				Key:    key,
@@ -240,6 +331,23 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 			Error:  err.Error(),
 		})
 		return err
+	}
+
+	if authorized {
+		if usePending {
+			if err := promotePendingSession(pendingPath, finalSessionPath); err != nil {
+				qr.publish(sessionID, QRState{
+					Key:    key,
+					Status: QRStatusError,
+					Error:  fmt.Sprintf("保存会话失败: %v", err),
+				})
+				return err
+			}
+		}
+		qr.publish(sessionID, QRState{
+			Key:    key,
+			Status: QRStatusAuthorized,
+		})
 	}
 
 	return nil

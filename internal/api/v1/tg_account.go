@@ -142,3 +142,18 @@ func (a *TGAuthApi) SubmitPassword(c *gin.Context) {
 
 	app.OkWithData(gin.H{"ok": true}, c)
 }
+
+func (a *TGAuthApi) SubmitQRPassword(c *gin.Context) {
+	var req TGPasswordSubmitReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		app.FailWithMsg("参数错误: "+err.Error(), c)
+		return
+	}
+
+	if err := engine.ProvideQRPassword(req.SessionID, req.Password); err != nil {
+		app.FailWithMsg("提交二级密码失败: "+err.Error(), c)
+		return
+	}
+
+	app.OkWithData(gin.H{"ok": true}, c)
+}

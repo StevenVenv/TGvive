@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { getTaskProgress, getTasks, taskAction, type Task, type TaskProgress } from '../api'
+
+const props = defineProps<{
+  active?: boolean
+}>()
 
 const tasks = ref<Task[]>([])
 const loading = ref(false)
@@ -148,6 +152,7 @@ function closeLogs() {
 function startPolling() {
   if (pollTimer) window.clearInterval(pollTimer)
   pollTimer = window.setInterval(() => {
+    if (props.active === false) return
     if (!autoRefresh.value) return
     void refreshProgress()
   }, 2000)
@@ -162,13 +167,25 @@ function stopPolling() {
 
 onMounted(async () => {
   await reloadTasks()
-  startPolling()
+  if (props.active !== false) startPolling()
 })
 
 onBeforeUnmount(() => {
   stopPolling()
   closeLogs()
 })
+
+watch(
+  () => props.active,
+  (v) => {
+    if (v === false) {
+      stopPolling()
+      closeLogs()
+      return
+    }
+    startPolling()
+  },
+)
 
 defineExpose({
   reloadTasks,
