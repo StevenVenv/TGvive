@@ -22,6 +22,9 @@ type Task struct {
 	SourceURL string `gorm:"type:varchar(255);not null" json:"source_url"` // 对方频道/群组
 	TargetURL string `gorm:"type:varchar(255);not null" json:"target_url"` // 自己频道/群组
 
+	// SourceChannelID 用于实时监听时的路由（SourceURL 解析后的数值 ID）
+	SourceChannelID int64 `gorm:"type:bigint;default:0;index" json:"source_channel_id"`
+
 	// 克隆模式: 1-转发, 2-发送, 3-下载上传
 	CloneMode int `gorm:"type:tinyint;not null" json:"clone_mode"`
 

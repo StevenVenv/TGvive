@@ -28,6 +28,7 @@ func InitConfig() {
 	v.SetDefault("telegram.api_id", 0)
 	v.SetDefault("telegram.api_hash", "")
 	v.SetDefault("telegram.session_path", "./sessions/")
+	v.SetDefault("telegram.session_key", "")
 
 	if err := v.ReadInConfig(); err != nil {
 		panic(fmt.Errorf("read config failed: %w", err))

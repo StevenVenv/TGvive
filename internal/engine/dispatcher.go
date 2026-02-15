@@ -30,12 +30,16 @@ type TaskManager struct {
 	cancelers map[uint]context.CancelFunc
 	states    map[uint]*taskState
 	grouper   *AlbumGrouper
+	dedup     *Deduper
+	tg        *telegramRuntime
 }
 
 var Manager = &TaskManager{
 	cancelers: make(map[uint]context.CancelFunc),
 	states:    make(map[uint]*taskState),
 	grouper:   NewAlbumGrouper(150 * time.Millisecond),
+	dedup:     NewDeduper(10*time.Minute, 50_000),
+	tg:        newTelegramRuntime(),
 }
 
 type taskState struct {
@@ -70,6 +74,11 @@ func (m *TaskManager) StartTask(t model.Task) {
 	}
 
 	m.mu.Lock()
+
+	if m.grouper != nil {
+		m.grouper.DropTask(t.ID)
+	}
+	m.unregisterTask(t.ID, 0)
 
 	if cancel, ok := m.cancelers[t.ID]; ok {
 		cancel()
@@ -121,6 +130,7 @@ func (m *TaskManager) PauseTask(taskID uint) {
 	if m.grouper != nil {
 		m.grouper.DropTask(taskID)
 	}
+	m.unregisterTask(taskID, 0)
 
 	if cancel, ok := m.cancelers[taskID]; ok {
 		cancel()
@@ -151,6 +161,7 @@ func (m *TaskManager) StopTask(taskID uint) {
 	if m.grouper != nil {
 		m.grouper.DropTask(taskID)
 	}
+	m.unregisterTask(taskID, 0)
 
 	if cancel, ok := m.cancelers[taskID]; ok {
 		cancel()

@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -21,101 +19,70 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 	if global.Logger != nil {
 		global.Logger.Info(
-			"transfer loop started",
+			"task engine started",
 			zap.Uint("task_id", taskID),
 			zap.String("source", t.SourceURL),
 			zap.String("target", t.TargetURL),
 		)
 	}
 
-	allowedTypes := normalizeTypeSet(t.ContentTypes.Strings())
-	rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(taskID)))
-
-	if global.DB != nil {
-		_ = global.DB.Model(&model.Task{}).Where("id = ?", taskID).Update("status", model.TaskStatusRunning).Error
+	api, err := m.ensureTelegram(ctx)
+	if err != nil {
+		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: "+err.Error())
+		m.setStateStatus(taskID, runID, model.TaskStatusError)
+		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		return
 	}
 
-	allTypes := []string{"text", "image", "video", "file", "audio"}
-
-	for {
-		if ctx.Err() != nil || !m.isActiveRun(taskID, runID) {
-			return
-		}
-
-		processed, total, realtime, completed := m.getCounters(taskID, runID)
-
-		// Initial sync finished.
-		if total > 0 && processed >= total {
-			if realtime {
-				if !completed {
-					m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
-					m.markCompleted(taskID, runID, false)
-				}
-
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(2 * time.Second):
-				}
-
-				// Simulate new message arrival in realtime mode.
-				if rng.Float64() < 0.35 {
-					msgType := allTypes[rng.Intn(len(allTypes))]
-					if len(allowedTypes) > 0 {
-						if _, ok := allowedTypes[msgType]; !ok {
-							m.record(taskID, runID, 1, 1, 0, 0, fmt.Sprintf("监控到新消息(%s)，但被过滤跳过", msgType))
-							continue
-						}
-					}
-
-					if rng.Float64() < 0.02 {
-						m.record(taskID, runID, 1, 1, 0, 1, fmt.Sprintf("监控到新消息(%s)搬运失败", msgType))
-						continue
-					}
-					m.record(taskID, runID, 1, 1, 1, 0, fmt.Sprintf("监控到新消息(%s)已搬运", msgType))
-				}
-				continue
-			}
-
-			m.record(taskID, runID, 0, 0, 0, 0, "搬运完成")
-			m.markCompleted(taskID, runID, true)
-
-			if global.DB != nil {
-				_ = global.DB.Model(&model.Task{}).Where("id = ?", taskID).Update("status", model.TaskStatusStopped).Error
-			}
-			return
-		}
-
-		msgType := allTypes[rng.Intn(len(allTypes))]
-
-		if len(allowedTypes) > 0 {
-			if _, ok := allowedTypes[msgType]; !ok {
-				m.record(taskID, runID, 0, 1, 0, 0, fmt.Sprintf("过滤跳过消息(%s)", msgType))
-				sleepWithContext(ctx, 300*time.Millisecond)
-				continue
-			}
-		}
-
-		switch t.CloneMode {
-		case 1:
-			m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("转发消息(%s)", msgType))
-		case 2:
-			m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("发送消息(%s)", msgType))
-		case 3:
-			m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("下载并上传消息(%s)", msgType))
-		default:
-			m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("处理消息(%s)", msgType))
-		}
-
-		// Simulate transfer result.
-		if rng.Float64() < 0.03 {
-			m.record(taskID, runID, 0, 1, 0, 1, fmt.Sprintf("消息(%s)搬运失败", msgType))
-		} else {
-			m.record(taskID, runID, 0, 1, 1, 0, fmt.Sprintf("消息(%s)搬运成功", msgType))
-		}
-
-		sleepWithContext(ctx, 400*time.Millisecond)
+	task := t
+	sourcePeer, targetPeer, sourceChannelID, err := m.SetupTaskPeers(ctx, api, &task)
+	if err != nil {
+		m.record(taskID, runID, 0, 0, 0, 1, "解析频道/群组失败: "+err.Error())
+		m.setStateStatus(taskID, runID, model.TaskStatusError)
+		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		return
 	}
+
+	m.record(taskID, runID, 0, 0, 0, 0, "开始克隆历史消息")
+	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		m.record(taskID, runID, 0, 0, 0, 1, "历史克隆失败: "+err.Error())
+		m.setStateStatus(taskID, runID, model.TaskStatusError)
+		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		return
+	}
+
+	if ctx.Err() != nil {
+		return
+	}
+
+	if task.Realtime {
+		if global.DB != nil {
+			var latest model.Task
+			if err := global.DB.Select("history_cursor", "history_order").Where("id = ?", taskID).First(&latest).Error; err == nil {
+				task.HistoryCursor = latest.HistoryCursor
+				task.HistoryOrder = latest.HistoryOrder
+			}
+		}
+
+		m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
+		m.markCompleted(taskID, runID, false)
+		_ = m.registerRealtimeTask(runtimeTask{
+			Task:       task,
+			RunID:      runID,
+			Ctx:        ctx,
+			TargetPeer: targetPeer,
+		}, sourceChannelID)
+		<-ctx.Done()
+		m.unregisterTask(taskID, sourceChannelID)
+		return
+	}
+
+	m.record(taskID, runID, 0, 0, 0, 0, "搬运完成")
+	m.markCompleted(taskID, runID, true)
+	_ = updateTaskStatus(taskID, model.TaskStatusStopped)
 }
 
 func (m *TaskManager) isActiveRun(taskID uint, runID uint64) bool {
@@ -227,4 +194,28 @@ func sleepWithContext(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-t.C:
 	}
+}
+
+func (m *TaskManager) setStateStatus(taskID uint, runID uint64, status int) {
+	if m == nil || taskID == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.states[taskID]
+	if st == nil || st.RunID != runID {
+		return
+	}
+	st.Status = status
+	if status != model.TaskStatusRunning {
+		st.SpeedBaseTime = time.Time{}
+		st.SpeedBaseProcessed = st.Processed
+	}
+}
+
+func updateTaskStatus(taskID uint, status int) error {
+	if taskID == 0 || global.DB == nil {
+		return nil
+	}
+	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).Update("status", status).Error
 }
