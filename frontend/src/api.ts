@@ -57,6 +57,7 @@ export type TGAccount = {
   username?: string
   name?: string
   phone?: string
+  avatar?: string
   meta_updated_at?: number
 }
 
@@ -134,6 +135,11 @@ export function getTaskProgress(id: number): Promise<TaskProgress> {
 
 export function listTGAccounts(): Promise<TGAccount[]> {
   return apiFetch<TGAccount[]>('/api/v1/tg/accounts', { method: 'GET' })
+}
+
+export function deleteTGAccount(key: string): Promise<{ ok: boolean }> {
+  const safe = encodeURIComponent(key || '')
+  return apiFetch<{ ok: boolean }>(`/api/v1/tg/accounts/${safe}`, { method: 'DELETE' })
 }
 
 export function startAccountQR(): Promise<{ session_id: string }> {

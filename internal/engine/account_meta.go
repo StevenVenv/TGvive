@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 )
 
@@ -19,6 +22,8 @@ type tgAccountMeta struct {
 	FirstName string `json:"first_name,omitempty"`
 	LastName  string `json:"last_name,omitempty"`
 	Phone     string `json:"phone,omitempty"`
+
+	Avatar string `json:"avatar,omitempty"` // data URI (base64)
 
 	UpdatedAt int64 `json:"updated_at"`
 }
@@ -121,12 +126,20 @@ func updateAccountMetaFromAPI(ctx context.Context, key string, api *tg.Client) e
 		return fmt.Errorf("unexpected user type: %T", users[0])
 	}
 
+	prev, ok := loadAccountMeta(key)
+
 	meta := tgAccountMeta{
 		UserID:    u.ID,
 		Username:  strings.TrimSpace(u.Username),
 		FirstName: strings.TrimSpace(u.FirstName),
 		LastName:  strings.TrimSpace(u.LastName),
 		Phone:     maskPhone(strings.TrimSpace(u.Phone)),
+	}
+	if ok {
+		meta.Avatar = prev.Avatar
+	}
+	if avatar := fetchSelfAvatarDataURI(ctx, api); avatar != "" {
+		meta.Avatar = avatar
 	}
 	return saveAccountMeta(key, meta)
 }
@@ -162,4 +175,115 @@ func maskPhone(phone string) string {
 	}
 
 	return prefix + string(digits[:start]) + strings.Repeat("*", len(digits)-start-end) + string(digits[len(digits)-end:])
+}
+
+func fetchSelfAvatarDataURI(ctx context.Context, api *tg.Client) string {
+	if err := ctx.Err(); err != nil {
+		return ""
+	}
+	if api == nil {
+		return ""
+	}
+
+	photos, err := api.PhotosGetUserPhotos(ctx, &tg.PhotosGetUserPhotosRequest{
+		UserID: &tg.InputUserSelf{},
+		Offset: 0,
+		MaxID:  0,
+		Limit:  1,
+	})
+	if err != nil {
+		return ""
+	}
+	list := photos.GetPhotos()
+	if len(list) == 0 {
+		return ""
+	}
+
+	p, ok := list[0].(*tg.Photo)
+	if !ok || p == nil {
+		return ""
+	}
+
+	thumbType, ok := bestAvatarThumbType(p.Sizes, 256*256)
+	if !ok {
+		return ""
+	}
+
+	loc := &tg.InputPhotoFileLocation{
+		ID:            p.ID,
+		AccessHash:    p.AccessHash,
+		FileReference: p.FileReference,
+		ThumbSize:     thumbType,
+	}
+
+	var buf bytes.Buffer
+	dl := downloader.NewDownloader()
+	if _, err := dl.Download(api, loc).WithThreads(1).WithVerify(true).Stream(ctx, &buf); err != nil {
+		return ""
+	}
+
+	b := buf.Bytes()
+	if len(b) == 0 || len(b) > 200_000 {
+		return ""
+	}
+
+	mime := detectImageMIME(b)
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(b)
+}
+
+func bestAvatarThumbType(sizes []tg.PhotoSizeClass, maxArea int) (string, bool) {
+	bestSmallType := ""
+	bestSmallArea := -1
+
+	bestType := ""
+	bestArea := -1
+
+	for _, t := range sizes {
+		w, h, typ := 0, 0, ""
+		switch v := t.(type) {
+		case *tg.PhotoSize:
+			w, h, typ = v.W, v.H, v.Type
+		case *tg.PhotoCachedSize:
+			w, h, typ = v.W, v.H, v.Type
+		case *tg.PhotoSizeProgressive:
+			w, h, typ = v.W, v.H, v.Type
+		}
+		typ = strings.TrimSpace(typ)
+		if w <= 0 || h <= 0 || typ == "" {
+			continue
+		}
+		area := w * h
+
+		if maxArea > 0 && area <= maxArea {
+			if area > bestSmallArea {
+				bestSmallArea = area
+				bestSmallType = typ
+			}
+		}
+		if area > bestArea {
+			bestArea = area
+			bestType = typ
+		}
+	}
+
+	if bestSmallType != "" {
+		return bestSmallType, true
+	}
+	if bestType != "" {
+		return bestType, true
+	}
+	return "", false
+}
+
+func detectImageMIME(b []byte) string {
+	if len(b) >= 8 && bytes.Equal(b[:8], []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}) {
+		return "image/png"
+	}
+	if len(b) >= 3 && bytes.Equal(b[:3], []byte{0xff, 0xd8, 0xff}) {
+		return "image/jpeg"
+	}
+	if len(b) >= 6 && (bytes.Equal(b[:6], []byte("GIF87a")) || bytes.Equal(b[:6], []byte("GIF89a"))) {
+		return "image/gif"
+	}
+	return "image/jpeg"
 }

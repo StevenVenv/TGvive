@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,7 @@ type TGAccount struct {
 	Username string `json:"username,omitempty"`
 	Name     string `json:"name,omitempty"`
 	Phone    string `json:"phone,omitempty"`
+	Avatar   string `json:"avatar,omitempty"` // data URI (base64)
 
 	MetaUpdatedAt int64 `json:"meta_updated_at,omitempty"`
 }
@@ -66,6 +68,7 @@ func ListTGAccounts() ([]TGAccount, error) {
 			out[i].Username = meta.Username
 			out[i].Name = meta.displayName()
 			out[i].Phone = meta.Phone
+			out[i].Avatar = meta.Avatar
 			out[i].MetaUpdatedAt = meta.UpdatedAt
 		}
 	}
@@ -78,4 +81,26 @@ func ListTGAccounts() ([]TGAccount, error) {
 	})
 
 	return out, nil
+}
+
+func RemoveTGAccount(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("key is required")
+	}
+
+	sessionPath := GetSessionPathForKey(key)
+	metaPath := sessionMetaPathForKey(key)
+
+	if Manager != nil && Manager.tg != nil {
+		Manager.tg.stopAndDelete(sessionPath)
+	}
+
+	if err := os.Remove(sessionPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

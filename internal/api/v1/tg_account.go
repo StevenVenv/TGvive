@@ -37,6 +37,20 @@ func (a *TGAuthApi) ListAccounts(c *gin.Context) {
 	app.OkWithData(accounts, c)
 }
 
+func (a *TGAuthApi) RemoveAccount(c *gin.Context) {
+	key := strings.TrimSpace(c.Param("key"))
+	if key == "" {
+		app.FailWithMsg("key 不能为空", c)
+		return
+	}
+
+	if err := engine.RemoveTGAccount(key); err != nil {
+		app.FailWithMsg("退出账号失败: "+err.Error(), c)
+		return
+	}
+	app.OkWithData(gin.H{"ok": true}, c)
+}
+
 func (a *TGAuthApi) StartAccountQR(c *gin.Context) {
 	sessionID, err := newSessionID()
 	if err != nil {

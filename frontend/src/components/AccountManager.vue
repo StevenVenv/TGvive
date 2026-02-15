@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
+  deleteTGAccount,
   getAccountQRStatus,
   getCodeLoginStatus,
   listTGAccounts,
@@ -44,6 +45,40 @@ function fmtBytes(size: number): string {
     i++
   }
   return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function avatarText(a: TGAccount): string {
+  const name = (a.name || '').trim()
+  if (name) return name.slice(0, 1).toUpperCase()
+  const u = (a.username || '').trim()
+  if (u) return u.slice(0, 1).toUpperCase()
+  if (a.user_id) return String(a.user_id).slice(-2)
+  return 'TG'
+}
+
+function accountTitle(a: TGAccount): string {
+  return (a.name || (a.username ? `@${a.username}` : '') || (a.user_id ? `ID:${a.user_id}` : '') || a.key).trim()
+}
+
+async function removeAccount(a: TGAccount) {
+  const title = accountTitle(a)
+  try {
+    await ElMessageBox.confirm(`确定退出账号 ${title} 吗？\n（将删除本地 sessions/session_*.json，会导致相关任务无法继续运行）`, '确认', {
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  try {
+    await deleteTGAccount(a.key)
+    ElMessage.success('账号已退出')
+    await reloadAccounts()
+  } catch (err: any) {
+    ElMessage.error(err?.message || '退出账号失败')
+  }
 }
 
 const tab = ref<'qr' | 'code'>('qr')
@@ -269,11 +304,19 @@ onBeforeUnmount(() => {
     <el-table :data="accounts" v-loading="loadingAccounts" stripe style="width: 100%">
       <el-table-column label="账号" min-width="260">
         <template #default="{ row }">
-          <div class="acct">
-            <el-text>{{ row.name || (row.username ? `@${row.username}` : '-') }}</el-text>
-            <el-text type="info">
-              ID: {{ row.user_id ?? '-' }}<span v-if="row.phone"> · {{ row.phone }}</span>
-            </el-text>
+          <div class="acct-row">
+            <el-avatar :size="36" :src="row.avatar">
+              {{ avatarText(row) }}
+            </el-avatar>
+            <div class="acct">
+              <el-space>
+                <el-text>{{ row.name || (row.username ? `@${row.username}` : '-') }}</el-text>
+                <el-tag size="small" type="success">已登录</el-tag>
+              </el-space>
+              <el-text type="info">
+                ID: {{ row.user_id ?? '-' }}<span v-if="row.phone"> · {{ row.phone }}</span>
+              </el-text>
+            </div>
           </div>
         </template>
       </el-table-column>
@@ -285,6 +328,11 @@ onBeforeUnmount(() => {
       <el-table-column label="大小" width="140">
         <template #default="{ row }">
           <el-text type="info">{{ fmtBytes(row.size) }}</el-text>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="120" fixed="right">
+        <template #default="{ row }">
+          <el-button size="small" type="danger" @click="removeAccount(row)">退出</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -402,6 +450,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .qr-dialog {

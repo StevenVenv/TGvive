@@ -62,6 +62,25 @@ func (rm *telegramRuntimeManager) snapshot() []*telegramRuntime {
 	return out
 }
 
+func (rm *telegramRuntimeManager) stopAndDelete(sessionPath string) {
+	if rm == nil {
+		return
+	}
+	sessionPath = strings.TrimSpace(sessionPath)
+	if sessionPath == "" {
+		return
+	}
+
+	rm.mu.Lock()
+	rt := rm.runtimes[sessionPath]
+	delete(rm.runtimes, sessionPath)
+	rm.mu.Unlock()
+
+	if rt != nil {
+		rt.shutdown()
+	}
+}
+
 type realtimeJobKind uint8
 
 const (
@@ -374,6 +393,33 @@ func newTelegramRuntime(sessionPath string) *telegramRuntime {
 		sessionPath: sessionPath,
 		tasksByID:   make(map[uint]*runtimeTask),
 		bySource:    make(map[int64]map[uint]*runtimeTask),
+	}
+}
+
+func (rt *telegramRuntime) shutdown() {
+	if rt == nil {
+		return
+	}
+
+	rt.tasksMu.Lock()
+	for _, t := range rt.tasksByID {
+		if t != nil {
+			t.stop()
+		}
+	}
+	rt.tasksByID = make(map[uint]*runtimeTask)
+	rt.bySource = make(map[int64]map[uint]*runtimeTask)
+	rt.tasksMu.Unlock()
+
+	rt.mu.Lock()
+	cancel := rt.cancel
+	rt.cancel = nil
+	rt.api = nil
+	rt.client = nil
+	rt.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 }
 

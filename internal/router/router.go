@@ -37,6 +37,7 @@ func SetupRouter() *gin.Engine {
 		// tgV1.Use(middleware.JWTAuth())
 		{
 			tgV1.GET("/accounts", tgAuthApi.ListAccounts)
+			tgV1.DELETE("/accounts/:key", tgAuthApi.RemoveAccount)
 			tgV1.POST("/accounts/qr", tgAuthApi.StartAccountQR)
 			tgV1.GET("/accounts/qr/status", tgAuthApi.CheckQRStatus)
 			tgV1.POST("/accounts/code", tgAuthApi.StartCodeLogin)

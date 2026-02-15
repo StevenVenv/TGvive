@@ -21,7 +21,7 @@ type App struct {
 // Apps stores built-in app credentials.
 // Note: Using 3rd-party/offical client credentials may violate Telegram ToS in some scenarios.
 var Apps = map[string]App{
-	// App created by iyear (tdl author).
+	// App created  (tdl author).
 	// Ref: https://github.com/iyear/tdl/blob/master/pkg/tclient/app.go
 	AppBuiltin: {ID: 15055931, Hash: "021d433426cbb920eeb95164498fe3d3"},
 	// Telegram Desktop (tdesktop).
