@@ -5,8 +5,6 @@ import (
 	"errors"
 	"strings"
 
-	"my-go-server/internal/global"
-
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 )
@@ -28,10 +26,9 @@ func NewTGClient(ctx context.Context, phone string) (*TGClient, error) {
 		return nil, errors.New("phone is required")
 	}
 
-	apiID := global.Config.Telegram.APIID
-	apiHash := strings.TrimSpace(global.Config.Telegram.APIHash)
-	if apiID == 0 || apiHash == "" {
-		return nil, errors.New("telegram config missing: telegram.api_id / telegram.api_hash")
+	apiID, apiHash, err := pickTelegramApp()
+	if err != nil {
+		return nil, err
 	}
 
 	sessionPath := GetSessionPath(phone)

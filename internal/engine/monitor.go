@@ -380,10 +380,9 @@ func (m *TaskManager) ensureTelegram(ctx context.Context, taskSessionKey string)
 		m.tg = newTelegramRuntimeManager()
 	}
 
-	apiID := global.Config.Telegram.APIID
-	apiHash := strings.TrimSpace(global.Config.Telegram.APIHash)
-	if apiID == 0 || apiHash == "" {
-		return nil, fmt.Errorf("telegram 配置缺失: telegram.api_id / telegram.api_hash")
+	apiID, apiHash, err := pickTelegramApp()
+	if err != nil {
+		return nil, err
 	}
 
 	sessionPath, err := pickSessionPath(taskSessionKey)

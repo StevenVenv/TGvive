@@ -62,6 +62,7 @@ const qrKey = ref('')
 const qrSessionId = ref('')
 const qrState = ref<QRState | null>(null)
 const qrWorking = ref(false)
+const qrDialogOpen = ref(false)
 let qrTimer: number | undefined
 
 const qrStatusText = computed(() => {
@@ -101,6 +102,7 @@ async function pollQROnce() {
 
     if (st.status === 'authorized') {
       stopQRPoll()
+      qrDialogOpen.value = false
       ElMessage.success('扫码登录成功')
       await reloadAccounts()
     } else if (st.status === 'expired' || st.status === 'error') {
@@ -122,6 +124,7 @@ async function startQR() {
     return
   }
 
+  qrDialogOpen.value = true
   qrWorking.value = true
   qrState.value = null
   try {
@@ -132,8 +135,13 @@ async function startQR() {
     qrTimer = window.setInterval(pollQROnce, 1000)
   } catch (err: any) {
     qrWorking.value = false
+    qrDialogOpen.value = false
     ElMessage.error(err?.message || '启动扫码登录失败')
   }
+}
+
+function onQRDialogClose() {
+  stopQRPoll()
 }
 
 // Code login
@@ -326,28 +334,52 @@ onBeforeUnmount(() => {
 
           <el-form-item>
             <el-space>
-              <el-button type="primary" :loading="qrWorking" @click="startQR">开始扫码</el-button>
-              <el-button @click="stopQRPoll" :disabled="!qrWorking">停止</el-button>
+              <el-button type="primary" :loading="qrWorking" @click="startQR">扫码登录</el-button>
               <el-text type="info">状态：{{ qrStatusText }}</el-text>
             </el-space>
           </el-form-item>
         </el-form>
 
-        <div v-if="qrState?.error" class="err">
-          <el-text type="danger">{{ qrState.error }}</el-text>
-        </div>
+        <el-dialog
+          v-model="qrDialogOpen"
+          title="扫码登录"
+          width="420px"
+          :close-on-click-modal="false"
+          @close="onQRDialogClose"
+        >
+          <div class="qr-dialog">
+            <el-text type="info">SessionKey：{{ qrKey || '-' }}</el-text>
+            <el-text type="info">状态：{{ qrStatusText }}</el-text>
 
-        <div v-if="qrState?.image || qrState?.url" class="qr">
-          <img v-if="qrState?.image" :src="qrState.image" alt="qr" class="qr-img" />
-          <div v-else class="qr-url">
-            <el-text type="info">URL：</el-text>
-            <el-text>{{ qrState?.url }}</el-text>
+            <div v-if="qrState?.error" class="err">
+              <el-text type="danger">{{ qrState.error }}</el-text>
+            </div>
+
+            <div class="qr">
+              <img v-if="qrState?.image" :src="qrState.image" alt="qr" class="qr-img" />
+              <div v-else class="qr-wait">
+                <el-text type="info">{{ qrWorking ? '正在生成二维码...' : '暂无二维码' }}</el-text>
+              </div>
+
+              <div v-if="qrState?.url && !qrState?.image" class="qr-url">
+                <el-text type="info">URL：</el-text>
+                <el-text>{{ qrState.url }}</el-text>
+              </div>
+
+              <div class="qr-meta">
+                <el-text type="info">SessionID：{{ qrState?.session_id || qrSessionId }}</el-text>
+                <el-text v-if="qrState?.expires_at" type="info">过期：{{ fmtTime(qrState.expires_at) }}</el-text>
+              </div>
+            </div>
           </div>
-          <div class="qr-meta">
-            <el-text type="info">SessionID：{{ qrState?.session_id }}</el-text>
-            <el-text v-if="qrState?.expires_at" type="info">过期：{{ fmtTime(qrState.expires_at) }}</el-text>
-          </div>
-        </div>
+
+          <template #footer>
+            <el-space>
+              <el-button @click="qrDialogOpen = false">关闭</el-button>
+              <el-button type="warning" @click="stopQRPoll" :disabled="!qrWorking">停止</el-button>
+            </el-space>
+          </template>
+        </el-dialog>
       </el-tab-pane>
 
       <el-tab-pane label="验证码登录" name="code">
@@ -408,11 +440,28 @@ onBeforeUnmount(() => {
   max-width: 720px;
 }
 
+.qr-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .qr {
   margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.qr-wait {
+  width: 260px;
+  height: 260px;
+  border-radius: 10px;
+  border: 1px dashed #dcdfe6;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .qr-img {
@@ -433,4 +482,3 @@ onBeforeUnmount(() => {
   margin: 8px 0;
 }
 </style>
-

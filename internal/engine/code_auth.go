@@ -3,12 +3,9 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
-
-	"my-go-server/internal/global"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
@@ -178,21 +175,6 @@ func publishCodeState(sessionID string, st CodeAuthState) {
 	codeAuth.mu.Unlock()
 }
 
-func pickAuthApp() (int, string, error) {
-	apiID := global.Config.Telegram.APIID
-	apiHash := strings.TrimSpace(global.Config.Telegram.APIHash)
-	if apiID != 0 && apiHash != "" {
-		return apiID, apiHash, nil
-	}
-
-	app, ok := Apps["desktop"]
-	if ok && app.ID != 0 && strings.TrimSpace(app.Hash) != "" {
-		return app.ID, strings.TrimSpace(app.Hash), nil
-	}
-
-	return 0, "", fmt.Errorf("telegram 配置缺失: telegram.api_id / telegram.api_hash")
-}
-
 type apiCodeAuth struct {
 	sessionID string
 	key       string
@@ -263,7 +245,7 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone s
 		return errors.New("session not found")
 	}
 
-	apiID, apiHash, err := pickAuthApp()
+	apiID, apiHash, err := pickTelegramApp()
 	if err != nil {
 		publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusError, Error: err.Error()})
 		return err

@@ -159,9 +159,9 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 		return errors.New("session key is required")
 	}
 
-	app, ok := Apps["desktop"]
-	if !ok || app.ID == 0 || strings.TrimSpace(app.Hash) == "" {
-		return errors.New("builtin app config missing")
+	apiID, apiHash, err := pickTelegramApp()
+	if err != nil {
+		return err
 	}
 
 	sessionPath := GetSessionPathForKey(key)
@@ -184,12 +184,12 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 		return nil
 	})
 
-	client := telegram.NewClient(app.ID, app.Hash, telegram.Options{
+	client := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage: &FileSessionStorage{Path: sessionPath},
 		UpdateHandler:  d,
 	})
 
-	err := client.Run(ctx, func(ctx context.Context) error {
+	err = client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
 			qr.publish(sessionID, QRState{
 				Key:    key,
