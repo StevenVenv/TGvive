@@ -3,8 +3,11 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sort"
 
+	"my-go-server/internal/engine/processor"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
@@ -65,25 +68,122 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 		return nil
 	}
 
+	msgToSend := msg
+	if procs := m.processors(); procs.Text != nil && procs.Text.Enabled() {
+		if out, changed := procs.Text.Process(msg.Message); changed {
+			cp := *msg
+			cp.Message = out
+			cp.Entities = nil
+			msgToSend = &cp
+		}
+	}
+
 	if msg.Media == nil {
-		return m.SendText(ctx, api, peer, msg)
+		return m.SendText(ctx, api, peer, msgToSend)
 	}
 
 	switch task.CloneMode {
 	case 2:
-		return m.SendMedia(ctx, api, msg, task, peer)
+		return m.SendMedia(ctx, api, msgToSend, task, peer)
 	case 3:
 		if m == nil || m.tg == nil || m.tg.client == nil {
 			return errors.New("telegram client is nil")
 		}
 
-		inputFile, err := m.TransferMedia(ctx, m.tg.client, msg)
+		localPath, _, cleanup, err := m.DownloadFile(ctx, api, msgToSend, task.ID)
 		if err != nil {
 			return err
 		}
-		inputMedia := m.WrapUploadedMedia(inputFile, msg)
+		if cleanup != nil {
+			defer func() { _ = cleanup() }()
+		}
+
+		uploadPath := localPath
+		var thumb tg.InputFileClass
+
+		procs := m.processors()
+		switch media := msgToSend.Media.(type) {
+		case *tg.MessageMediaPhoto:
+			if procs.Image != nil && procs.Image.Enabled() {
+				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					if err != processor.ErrUnsupportedImage && global.Logger != nil {
+						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						defer func() { _ = c() }()
+					}
+				}
+			}
+		case *tg.MessageMediaDocument:
+			if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
+				dir := filepath.Dir(localPath)
+				f, err := os.CreateTemp(dir, "tgcover_*.jpg")
+				if err == nil {
+					coverPath := f.Name()
+					_ = f.Close()
+					defer func() { _ = os.Remove(coverPath) }()
+
+					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+						if global.Logger != nil {
+							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
+						}
+					} else if ok {
+						coverUploadPath := coverPath
+						if procs.CoverImage != nil && procs.CoverImage.Enabled() {
+							if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
+								if err != processor.ErrUnsupportedImage && global.Logger != nil {
+									global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
+								}
+							} else if changed {
+								coverUploadPath = outPath
+								if c != nil {
+									defer func() { _ = c() }()
+								}
+							}
+						}
+
+						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+							if global.Logger != nil {
+								global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+							}
+						} else {
+							thumb = inputThumb
+						}
+					}
+				}
+			}
+
+			if isImageDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					if err != processor.ErrUnsupportedImage && global.Logger != nil {
+						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						defer func() { _ = c() }()
+					}
+				}
+			}
+		}
+
+		inputFile, err := m.UploadFile(ctx, api, uploadPath)
+		if err != nil {
+			return err
+		}
+		inputMedia, err := m.WrapUploadedMedia(ctx, m.tg.client, inputFile, msgToSend)
+		if err != nil {
+			return err
+		}
 		if inputMedia == nil {
 			return ErrUnsupportedMedia
+		}
+		if thumb != nil {
+			if doc, ok := inputMedia.(*tg.InputMediaUploadedDocument); ok {
+				doc.Thumb = thumb
+			}
 		}
 
 		rid, err := randomID()
@@ -94,11 +194,11 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 		req := &tg.MessagesSendMediaRequest{
 			Peer:     peer,
 			Media:    inputMedia,
-			Message:  msg.Message,
+			Message:  msgToSend.Message,
 			RandomID: rid,
 		}
-		if len(msg.Entities) > 0 {
-			req.Entities = msg.Entities
+		if len(msgToSend.Entities) > 0 {
+			req.Entities = msgToSend.Entities
 		}
 
 		_, err = api.MessagesSendMedia(ctx, req)
@@ -138,6 +238,22 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, pee
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].ID < filtered[j].ID
 	})
+
+	// Caption/entities only on the first item.
+	if procs := m.processors(); procs.Text != nil && procs.Text.Enabled() && len(filtered) > 0 {
+		first := filtered[0]
+		if first != nil {
+			if out, changed := procs.Text.Process(first.Message); changed {
+				cp := *first
+				cp.Message = out
+				cp.Entities = nil
+				copied := make([]*tg.Message, len(filtered))
+				copy(copied, filtered)
+				copied[0] = &cp
+				filtered = copied
+			}
+		}
+	}
 
 	switch task.CloneMode {
 	case 2:

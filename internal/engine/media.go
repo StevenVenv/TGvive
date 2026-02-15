@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"my-go-server/internal/engine/processor"
+	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
 	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"go.uber.org/zap"
 )
 
 var ErrUnsupportedMedia = errors.New("unsupported media")
@@ -240,17 +242,96 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, msg
 		return nil
 	}
 
-	localPath, meta, cleanup, err := downloadMessageMedia(ctx, api, msg, task.ID)
+	localPath, meta, cleanup, err := m.DownloadFile(ctx, api, msg, task.ID)
 	if err != nil {
 		return err
 	}
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
+	}
 
-	inputFile, err := uploader.NewUploader(api).WithThreads(4).FromPath(ctx, localPath)
+	uploadPath := localPath
+	var thumb tg.InputFileClass
+	procs := m.processors()
+
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		if procs.Image != nil && procs.Image.Enabled() {
+			if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+				if err != processor.ErrUnsupportedImage && global.Logger != nil {
+					global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+				}
+			} else if changed {
+				uploadPath = outPath
+				if c != nil {
+					defer func() { _ = c() }()
+				}
+			}
+		}
+	case *tg.MessageMediaDocument:
+		if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
+			dir := filepath.Dir(localPath)
+			f, err := os.CreateTemp(dir, "tgcover_*.jpg")
+			if err == nil {
+				coverPath := f.Name()
+				_ = f.Close()
+				defer func() { _ = os.Remove(coverPath) }()
+
+				if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+					if global.Logger != nil {
+						global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
+					}
+				} else if ok {
+					coverUploadPath := coverPath
+					if procs.CoverImage != nil && procs.CoverImage.Enabled() {
+						if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
+							if err != processor.ErrUnsupportedImage && global.Logger != nil {
+								global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
+							}
+						} else if changed {
+							coverUploadPath = outPath
+							if c != nil {
+								defer func() { _ = c() }()
+							}
+						}
+					}
+
+					if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+						if global.Logger != nil {
+							global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+						}
+					} else {
+						thumb = inputThumb
+					}
+				}
+			}
+		}
+
+		if isImageDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+			if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+				if err != processor.ErrUnsupportedImage && global.Logger != nil {
+					global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+				}
+			} else if changed {
+				uploadPath = outPath
+				if c != nil {
+					defer func() { _ = c() }()
+				}
+			}
+		}
+	}
+
+	inputFile, err := m.UploadFile(ctx, api, uploadPath)
 	if err != nil {
-		return fmt.Errorf("upload file %q: %w", localPath, err)
+		return fmt.Errorf("upload file %q: %w", uploadPath, err)
 	}
 
 	uploaded := uploadAsInputMediaUploaded(meta, inputFile)
+	if thumb != nil {
+		if doc, ok := uploaded.(*tg.InputMediaUploadedDocument); ok {
+			doc.Thumb = thumb
+		}
+	}
 	rid, err := randomID()
 	if err != nil {
 		return err
@@ -267,10 +348,9 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, msg
 	}
 
 	if _, err := api.MessagesSendMedia(ctx, req); err != nil {
-		return fmt.Errorf("send uploaded media failed (path=%q): %w", localPath, err)
+		return fmt.Errorf("send uploaded media failed (path=%q): %w", uploadPath, err)
 	}
 
-	_ = cleanup()
 	return nil
 }
 
@@ -309,21 +389,108 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 	cleanups := make([]func() error, 0, len(mediaMsgs))
 	localPaths := make([]string, 0, len(mediaMsgs))
 
+	defer func() {
+		for _, fn := range cleanups {
+			if fn != nil {
+				_ = fn()
+			}
+		}
+	}()
+
+	procs := m.processors()
+
 	for _, msg := range mediaMsgs {
-		localPath, meta, cleanup, err := downloadMessageMedia(ctx, api, msg, task.ID)
+		localPath, meta, cleanup, err := m.DownloadFile(ctx, api, msg, task.ID)
 		if err != nil {
 			return err
 		}
+		cleanups = append(cleanups, cleanup)
+		localPaths = append(localPaths, localPath)
 
-		inputFile, err := uploader.NewUploader(api).WithThreads(4).FromPath(ctx, localPath)
+		uploadPath := localPath
+		var thumb tg.InputFileClass
+
+		switch media := msg.Media.(type) {
+		case *tg.MessageMediaPhoto:
+			if procs.Image != nil && procs.Image.Enabled() {
+				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					if err != processor.ErrUnsupportedImage && global.Logger != nil {
+						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						cleanups = append(cleanups, c)
+					}
+				}
+			}
+		case *tg.MessageMediaDocument:
+			if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
+				dir := filepath.Dir(localPath)
+				f, err := os.CreateTemp(dir, "tgcover_*.jpg")
+				if err == nil {
+					coverPath := f.Name()
+					_ = f.Close()
+					cleanups = append(cleanups, func() error { return os.Remove(coverPath) })
+
+					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+						if global.Logger != nil {
+							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
+						}
+					} else if ok {
+						coverUploadPath := coverPath
+						if procs.CoverImage != nil && procs.CoverImage.Enabled() {
+							if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
+								if err != processor.ErrUnsupportedImage && global.Logger != nil {
+									global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
+								}
+							} else if changed {
+								coverUploadPath = outPath
+								if c != nil {
+									cleanups = append(cleanups, c)
+								}
+							}
+						}
+
+						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+							if global.Logger != nil {
+								global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+							}
+						} else {
+							thumb = inputThumb
+						}
+					}
+				}
+			}
+
+			if isImageDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					if err != processor.ErrUnsupportedImage && global.Logger != nil {
+						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						cleanups = append(cleanups, c)
+					}
+				}
+			}
+		}
+
+		inputFile, err := m.UploadFile(ctx, api, uploadPath)
 		if err != nil {
-			return fmt.Errorf("upload file %q: %w", localPath, err)
+			return fmt.Errorf("upload file %q: %w", uploadPath, err)
 		}
 
 		uploaded := uploadAsInputMediaUploaded(meta, inputFile)
+		if thumb != nil {
+			if doc, ok := uploaded.(*tg.InputMediaUploadedDocument); ok {
+				doc.Thumb = thumb
+			}
+		}
 		inputMedia, err := uploadMediaForAlbum(ctx, api, peer, uploaded)
 		if err != nil {
-			return fmt.Errorf("upload media for album failed (path=%q): %w", localPath, err)
+			return fmt.Errorf("upload media for album failed (path=%q): %w", uploadPath, err)
 		}
 
 		rid, err := randomID()
@@ -335,8 +502,6 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 			Media:    inputMedia,
 			RandomID: rid,
 		})
-		cleanups = append(cleanups, cleanup)
-		localPaths = append(localPaths, localPath)
 	}
 
 	if len(ups) == 0 {
@@ -359,9 +524,6 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 		return fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)
 	}
 
-	for _, fn := range cleanups {
-		_ = fn()
-	}
 	return nil
 }
 
