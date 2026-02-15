@@ -19,14 +19,279 @@ import (
 	"go.uber.org/zap"
 )
 
+type telegramRuntimeManager struct {
+	mu       sync.Mutex
+	runtimes map[string]*telegramRuntime // key: sessionPath
+}
+
+func newTelegramRuntimeManager() *telegramRuntimeManager {
+	return &telegramRuntimeManager{
+		runtimes: make(map[string]*telegramRuntime),
+	}
+}
+
+func (rm *telegramRuntimeManager) getOrCreate(sessionPath string) *telegramRuntime {
+	sessionPath = strings.TrimSpace(sessionPath)
+	if sessionPath == "" {
+		return nil
+	}
+
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rt := rm.runtimes[sessionPath]
+	if rt == nil {
+		rt = newTelegramRuntime(sessionPath)
+		rm.runtimes[sessionPath] = rt
+	}
+	return rt
+}
+
+func (rm *telegramRuntimeManager) snapshot() []*telegramRuntime {
+	if rm == nil {
+		return nil
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	out := make([]*telegramRuntime, 0, len(rm.runtimes))
+	for _, rt := range rm.runtimes {
+		if rt != nil {
+			out = append(out, rt)
+		}
+	}
+	return out
+}
+
+type realtimeJobKind uint8
+
+const (
+	realtimeJobSingle realtimeJobKind = iota
+	realtimeJobAlbum
+)
+
+type realtimeJob struct {
+	kind      realtimeJobKind
+	msg       *tg.Message
+	groupedID int64
+	albumCh   <-chan []*tg.Message
+}
+
 type runtimeTask struct {
 	Task       model.Task
 	RunID      uint64
 	Ctx        context.Context
 	TargetPeer tg.InputPeerClass
+
+	allowedTypes map[string]struct{}
+	delayMin     time.Duration
+	delayMax     time.Duration
+
+	queue    chan realtimeJob
+	stopOnce sync.Once
+
+	mu        sync.Mutex
+	albumWait map[int64]chan []*tg.Message
+}
+
+func newRuntimeTask(rt runtimeTask) *runtimeTask {
+	t := &runtimeTask{
+		Task:       rt.Task,
+		RunID:      rt.RunID,
+		Ctx:        rt.Ctx,
+		TargetPeer: rt.TargetPeer,
+
+		allowedTypes: normalizeTypeSet(rt.Task.ContentTypes.Strings()),
+		delayMin:     defaultMsgDelayMin,
+		delayMax:     defaultMsgDelayMax,
+
+		queue:     make(chan realtimeJob, 512),
+		albumWait: make(map[int64]chan []*tg.Message),
+	}
+
+	t.delayMin, t.delayMax = normalizeDelayRange(rt.Task.DelayMinMs, rt.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	return t
+}
+
+func (t *runtimeTask) stop() {
+	if t == nil {
+		return
+	}
+	t.stopOnce.Do(func() {
+		close(t.queue)
+
+		t.mu.Lock()
+		for gid, ch := range t.albumWait {
+			delete(t.albumWait, gid)
+			if ch != nil {
+				close(ch)
+			}
+		}
+		t.mu.Unlock()
+	})
+}
+
+func (t *runtimeTask) enqueue(job realtimeJob) {
+	if t == nil {
+		return
+	}
+	if t.Ctx == nil || t.Ctx.Err() != nil {
+		return
+	}
+
+	select {
+	case t.queue <- job:
+	default:
+		if global.Logger != nil {
+			global.Logger.Warn("realtime queue full, dropping message", zap.Uint("task_id", t.Task.ID))
+		}
+	}
+}
+
+func (t *runtimeTask) ensureAlbumWaiter(groupedID int64) (chan []*tg.Message, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.albumWait == nil {
+		t.albumWait = make(map[int64]chan []*tg.Message)
+	}
+	if ch, ok := t.albumWait[groupedID]; ok && ch != nil {
+		return ch, false
+	}
+	ch := make(chan []*tg.Message, 1)
+	t.albumWait[groupedID] = ch
+	return ch, true
+}
+
+func (t *runtimeTask) deliverAlbum(groupedID int64, batch []*tg.Message) {
+	t.mu.Lock()
+	ch := t.albumWait[groupedID]
+	delete(t.albumWait, groupedID)
+	t.mu.Unlock()
+
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- batch:
+	default:
+	}
+	close(ch)
+}
+
+func (t *runtimeTask) cursorSnapshot() (order int, cursor int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.Task.HistoryOrder, t.Task.HistoryCursor
+}
+
+func (t *runtimeTask) advanceCursor(cursor int) {
+	if t == nil || t.Task.ID == 0 || cursor <= 0 {
+		return
+	}
+
+	t.mu.Lock()
+	if t.Task.HistoryOrder == model.HistoryOrderNewToOld {
+		t.mu.Unlock()
+		return
+	}
+	if cursor <= t.Task.HistoryCursor {
+		t.mu.Unlock()
+		return
+	}
+	t.Task.HistoryCursor = cursor
+	t.mu.Unlock()
+
+	_ = persistHistoryCursor(t.Task.ID, cursor)
+}
+
+func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
+	if t == nil || m == nil || api == nil || t.TargetPeer == nil || t.Ctx == nil {
+		return
+	}
+
+	for {
+		select {
+		case <-t.Ctx.Done():
+			return
+		case job, ok := <-t.queue:
+			if !ok {
+				return
+			}
+			if err := t.Ctx.Err(); err != nil {
+				return
+			}
+
+			switch job.kind {
+			case realtimeJobAlbum:
+				var batch []*tg.Message
+				select {
+				case <-t.Ctx.Done():
+					return
+				case batch = <-job.albumCh:
+				}
+				if len(batch) == 0 {
+					continue
+				}
+
+				maxID := 0
+				for _, msg := range batch {
+					if msg != nil && msg.ID > maxID {
+						maxID = msg.ID
+					}
+				}
+
+				if err := processWithRetry(t.Ctx, func() error {
+					return m.processAlbumBatch(t.Ctx, api, t.TargetPeer, t.Task, batch, t.allowedTypes)
+				}); err != nil {
+					if global.Logger != nil {
+						global.Logger.Error(
+							"realtime process album failed",
+							zap.Uint("task_id", t.Task.ID),
+							zap.Int64("grouped_id", job.groupedID),
+							zap.Error(err),
+						)
+					}
+				}
+				if maxID > 0 {
+					t.advanceCursor(maxID)
+				}
+				sleepRandom(t.Ctx, t.delayMin, t.delayMax)
+
+			case realtimeJobSingle:
+				msg := job.msg
+				if msg == nil || msg.ID <= 0 {
+					continue
+				}
+
+				if t.allowedTypes != nil {
+					ct := m.DetectContentType(msg)
+					if _, ok := t.allowedTypes[ct]; !ok {
+						t.advanceCursor(msg.ID)
+						continue
+					}
+				}
+
+				if err := processWithRetry(t.Ctx, func() error {
+					return m.processSingleMessage(t.Ctx, api, t.TargetPeer, t.Task, msg)
+				}); err != nil {
+					if global.Logger != nil {
+						global.Logger.Error(
+							"realtime process message failed",
+							zap.Uint("task_id", t.Task.ID),
+							zap.Int("msg_id", msg.ID),
+							zap.Error(err),
+						)
+					}
+				}
+
+				t.advanceCursor(msg.ID)
+				sleepRandom(t.Ctx, t.delayMin, t.delayMax)
+			}
+		}
+	}
 }
 
 type telegramRuntime struct {
+	sessionPath string
+
 	mu sync.Mutex
 
 	ready     chan struct{}
@@ -43,14 +308,15 @@ type telegramRuntime struct {
 	bySource  map[int64]map[uint]*runtimeTask
 }
 
-func newTelegramRuntime() *telegramRuntime {
+func newTelegramRuntime(sessionPath string) *telegramRuntime {
 	return &telegramRuntime{
-		tasksByID: make(map[uint]*runtimeTask),
-		bySource:  make(map[int64]map[uint]*runtimeTask),
+		sessionPath: sessionPath,
+		tasksByID:   make(map[uint]*runtimeTask),
+		bySource:    make(map[int64]map[uint]*runtimeTask),
 	}
 }
 
-func (m *TaskManager) ensureTelegram(ctx context.Context) (*tg.Client, error) {
+func (m *TaskManager) ensureTelegram(ctx context.Context, taskSessionKey string) (*telegramRuntime, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -58,10 +324,38 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*tg.Client, error) {
 		return nil, errors.New("task manager is nil")
 	}
 	if m.tg == nil {
-		m.tg = newTelegramRuntime()
+		m.tg = newTelegramRuntimeManager()
 	}
 
-	rt := m.tg
+	apiID := global.Config.Telegram.APIID
+	apiHash := strings.TrimSpace(global.Config.Telegram.APIHash)
+	if apiID == 0 || apiHash == "" {
+		return nil, fmt.Errorf("telegram 配置缺失: telegram.api_id / telegram.api_hash")
+	}
+
+	sessionPath, err := pickSessionPath(taskSessionKey)
+	if err != nil {
+		return nil, err
+	}
+
+	rt := m.tg.getOrCreate(sessionPath)
+	if rt == nil {
+		return nil, errors.New("telegram runtime is nil")
+	}
+
+	if err := rt.ensureStarted(ctx, m, apiID, apiHash, sessionPath); err != nil {
+		return nil, err
+	}
+	return rt, nil
+}
+
+func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, apiID int, apiHash, sessionPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if rt == nil {
+		return errors.New("telegram runtime is nil")
+	}
 
 	rt.mu.Lock()
 	if rt.ready != nil {
@@ -70,31 +364,20 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*tg.Client, error) {
 
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		case <-ready:
 		}
 
 		rt.mu.Lock()
-		api := rt.api
 		err := rt.startErr
 		rt.mu.Unlock()
-		return api, err
+		return err
 	}
 
 	rt.ready = make(chan struct{})
 	ready := rt.ready
+	rt.sessionPath = sessionPath
 	rt.mu.Unlock()
-
-	apiID := global.Config.Telegram.APIID
-	apiHash := strings.TrimSpace(global.Config.Telegram.APIHash)
-	if apiID == 0 || apiHash == "" {
-		return m.finishTelegramStart(fmt.Errorf("telegram 配置缺失: telegram.api_id / telegram.api_hash"), ready)
-	}
-
-	sessionPath, err := pickSessionPath()
-	if err != nil {
-		return m.finishTelegramStart(err, ready)
-	}
 
 	d := tg.NewUpdateDispatcher()
 	d.OnNewMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewMessage) error {
@@ -103,7 +386,7 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*tg.Client, error) {
 			return nil
 		}
 		if chID, ok := peerToChannelID(msg.PeerID); ok {
-			m.dispatchChannelMessage(chID, msg)
+			m.dispatchChannelMessage(rt, chID, msg)
 		}
 		return nil
 	})
@@ -113,7 +396,7 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*tg.Client, error) {
 			return nil
 		}
 		if chID, ok := peerToChannelID(msg.PeerID); ok {
-			m.dispatchChannelMessage(chID, msg)
+			m.dispatchChannelMessage(rt, chID, msg)
 		}
 		return nil
 	})
@@ -136,60 +419,62 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*tg.Client, error) {
 		err := client.Run(runCtx, func(ctx context.Context) error {
 			status, err := client.Auth().Status(ctx)
 			if err != nil {
-				m.finishTelegramStart(err, ready)
+				rt.finishStart(err, ready)
 				return err
 			}
 			if !status.Authorized {
 				err := errors.New("Telegram 未授权：请先运行 cmd/auth_tool 登录或使用 /api/v1/tg/qr 扫码生成 session 文件")
-				m.finishTelegramStart(err, ready)
+				rt.finishStart(err, ready)
 				return err
 			}
 
-			m.finishTelegramStart(nil, ready)
+			rt.finishStart(nil, ready)
 			<-ctx.Done()
 			return ctx.Err()
 		})
 
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			m.finishTelegramStart(err, ready)
+			rt.finishStart(err, ready)
 			if global.Logger != nil {
-				global.Logger.Error("telegram runtime stopped", zap.Error(err))
+				global.Logger.Error("telegram runtime stopped", zap.String("session", sessionPath), zap.Error(err))
 			}
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return ctx.Err()
 	case <-ready:
 	}
 
 	rt.mu.Lock()
-	api := rt.api
 	startErr := rt.startErr
 	rt.mu.Unlock()
-	return api, startErr
+	return startErr
 }
 
-func (m *TaskManager) finishTelegramStart(err error, ready chan struct{}) (*tg.Client, error) {
-	rt := m.tg
+func (rt *telegramRuntime) finishStart(err error, ready chan struct{}) {
+	if rt == nil {
+		return
+	}
 	rt.mu.Lock()
 	if rt.startErr == nil && err != nil {
 		rt.startErr = err
 	}
-	// Close only once.
 	if rt.ready == ready && rt.ready != nil && !rt.startDone {
 		rt.startDone = true
 		close(rt.ready)
 	}
-	api := rt.api
-	startErr := rt.startErr
 	rt.mu.Unlock()
-	return api, startErr
 }
 
-func pickSessionPath() (string, error) {
-	// 1) Explicit session_key
+func pickSessionPath(taskSessionKey string) (string, error) {
+	// 0) Per-task session key.
+	if key := strings.TrimSpace(taskSessionKey); key != "" {
+		return GetSessionPathForKey(key), nil
+	}
+
+	// 1) Explicit global session_key
 	if key := strings.TrimSpace(global.Config.Telegram.SessionKey); key != "" {
 		return GetSessionPathForKey(key), nil
 	}
@@ -215,7 +500,7 @@ func pickSessionPath() (string, error) {
 	if len(matches) == 0 {
 		return "", fmt.Errorf("未找到 session 文件(%s)，请先登录生成 sessions/session_*.json 或配置 telegram.session_key", pattern)
 	}
-	return "", fmt.Errorf("发现多个 session 文件(%s)，请配置 telegram.session_key 或设置 TG_SESSION_KEY 指定使用哪个", pattern)
+	return "", fmt.Errorf("发现多个 session 文件(%s)，请配置 telegram.session_key / task.session_key 或设置 TG_SESSION_KEY 指定使用哪个", pattern)
 }
 
 func peerToChannelID(peer tg.PeerClass) (int64, bool) {
@@ -227,8 +512,8 @@ func peerToChannelID(peer tg.PeerClass) (int64, bool) {
 	}
 }
 
-func (m *TaskManager) registerRealtimeTask(rt runtimeTask, sourceChannelID int64) error {
-	if m == nil || m.tg == nil {
+func (m *TaskManager) registerRealtimeTask(tgRT *telegramRuntime, rt runtimeTask, sourceChannelID int64) error {
+	if m == nil || tgRT == nil {
 		return errors.New("telegram runtime not initialized")
 	}
 	if rt.Task.ID == 0 {
@@ -244,17 +529,26 @@ func (m *TaskManager) registerRealtimeTask(rt runtimeTask, sourceChannelID int64
 		return errors.New("task context is nil")
 	}
 
-	m.tg.tasksMu.Lock()
-	defer m.tg.tasksMu.Unlock()
-
-	cp := rt
-	m.tg.tasksByID[rt.Task.ID] = &cp
-	mm := m.tg.bySource[sourceChannelID]
+	tgRT.tasksMu.Lock()
+	if prev := tgRT.tasksByID[rt.Task.ID]; prev != nil {
+		prev.stop()
+	}
+	taskPtr := newRuntimeTask(rt)
+	tgRT.tasksByID[rt.Task.ID] = taskPtr
+	mm := tgRT.bySource[sourceChannelID]
 	if mm == nil {
 		mm = make(map[uint]*runtimeTask)
-		m.tg.bySource[sourceChannelID] = mm
+		tgRT.bySource[sourceChannelID] = mm
 	}
-	mm[rt.Task.ID] = &cp
+	mm[rt.Task.ID] = taskPtr
+	api := tgRT.api
+	tgRT.tasksMu.Unlock()
+
+	if api == nil {
+		return errors.New("tg api is nil")
+	}
+
+	go taskPtr.run(m, api)
 	return nil
 }
 
@@ -263,40 +557,55 @@ func (m *TaskManager) unregisterTask(taskID uint, sourceChannelID int64) {
 		return
 	}
 
-	m.tg.tasksMu.Lock()
-	delete(m.tg.tasksByID, taskID)
-	if sourceChannelID != 0 {
-		if mm := m.tg.bySource[sourceChannelID]; mm != nil {
-			delete(mm, taskID)
-			if len(mm) == 0 {
-				delete(m.tg.bySource, sourceChannelID)
+	runtimes := m.tg.snapshot()
+	for _, tgRT := range runtimes {
+		if tgRT == nil {
+			continue
+		}
+
+		var removed *runtimeTask
+		tgRT.tasksMu.Lock()
+		if cur := tgRT.tasksByID[taskID]; cur != nil {
+			removed = cur
+			delete(tgRT.tasksByID, taskID)
+		}
+		if sourceChannelID != 0 {
+			if mm := tgRT.bySource[sourceChannelID]; mm != nil {
+				delete(mm, taskID)
+				if len(mm) == 0 {
+					delete(tgRT.bySource, sourceChannelID)
+				}
+			}
+		} else {
+			// best-effort remove from all sources
+			for sid, mm := range tgRT.bySource {
+				delete(mm, taskID)
+				if len(mm) == 0 {
+					delete(tgRT.bySource, sid)
+				}
 			}
 		}
-	} else {
-		// best-effort remove from all sources
-		for sid, mm := range m.tg.bySource {
-			delete(mm, taskID)
-			if len(mm) == 0 {
-				delete(m.tg.bySource, sid)
-			}
+		tgRT.tasksMu.Unlock()
+
+		if removed != nil {
+			removed.stop()
 		}
 	}
-	m.tg.tasksMu.Unlock()
 
 	if m.dedup != nil {
 		m.dedup.DropTask(taskID)
 	}
 }
 
-func (m *TaskManager) dispatchChannelMessage(channelID int64, msg *tg.Message) {
-	if m == nil || m.tg == nil || channelID == 0 || msg == nil {
+func (m *TaskManager) dispatchChannelMessage(tgRT *telegramRuntime, channelID int64, msg *tg.Message) {
+	if m == nil || tgRT == nil || channelID == 0 || msg == nil {
 		return
 	}
 
-	m.tg.tasksMu.RLock()
-	mm := m.tg.bySource[channelID]
+	tgRT.tasksMu.RLock()
+	mm := tgRT.bySource[channelID]
 	if len(mm) == 0 {
-		m.tg.tasksMu.RUnlock()
+		tgRT.tasksMu.RUnlock()
 		return
 	}
 	tasks := make([]*runtimeTask, 0, len(mm))
@@ -305,12 +614,7 @@ func (m *TaskManager) dispatchChannelMessage(channelID int64, msg *tg.Message) {
 			tasks = append(tasks, rt)
 		}
 	}
-	api := m.tg.api
-	m.tg.tasksMu.RUnlock()
-
-	if api == nil {
-		return
-	}
+	tgRT.tasksMu.RUnlock()
 
 	for _, rt := range tasks {
 		if rt == nil || rt.TargetPeer == nil || rt.Ctx == nil {
@@ -326,30 +630,35 @@ func (m *TaskManager) dispatchChannelMessage(channelID int64, msg *tg.Message) {
 			continue
 		}
 
+		order, cursor := rt.cursorSnapshot()
 		// 基础去重：防止历史刚跑完，实时 difference 又推来同一条
-		if rt.Task.HistoryOrder != model.HistoryOrderNewToOld && rt.Task.HistoryCursor > 0 && msg.ID <= rt.Task.HistoryCursor {
+		if order != model.HistoryOrderNewToOld && cursor > 0 && msg.ID <= cursor {
 			continue
 		}
 		if m.dedup != nil && m.dedup.Seen(rt.Task.ID, msg.ID) {
 			continue
 		}
 
-		taskCopy := rt.Task
-		peer := rt.TargetPeer
-		taskCtx := rt.Ctx
-
-		go func() {
-			if err := m.ProcessMessage(taskCtx, api, peer, taskCopy, msg); err != nil {
-				if global.Logger != nil {
-					global.Logger.Error(
-						"realtime process message failed",
-						zap.Uint("task_id", taskCopy.ID),
-						zap.Int("msg_id", msg.ID),
-						zap.Error(err),
-					)
-				}
+		if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil {
+			groupedID := msg.GroupedID
+			ch, first := rt.ensureAlbumWaiter(groupedID)
+			m.grouper.Add(rt.Task.ID, groupedID, msg, func(batch []*tg.Message) {
+				rt.deliverAlbum(groupedID, batch)
+			})
+			if first {
+				rt.enqueue(realtimeJob{
+					kind:      realtimeJobAlbum,
+					groupedID: groupedID,
+					albumCh:   ch,
+				})
 			}
-		}()
+			continue
+		}
+
+		rt.enqueue(realtimeJob{
+			kind: realtimeJobSingle,
+			msg:  msg,
+		})
 	}
 }
 

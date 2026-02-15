@@ -86,10 +86,6 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 	case 2:
 		return m.SendMedia(ctx, api, msgToSend, task, peer)
 	case 3:
-		if m == nil || m.tg == nil || m.tg.client == nil {
-			return errors.New("telegram client is nil")
-		}
-
 		localPath, _, cleanup, err := m.DownloadFile(ctx, api, msgToSend, task.ID)
 		if err != nil {
 			return err
@@ -160,7 +156,7 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 				}
 			}
 
-			if isImageDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+			if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
 				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
 					if err != processor.ErrUnsupportedImage && global.Logger != nil {
 						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
@@ -183,7 +179,7 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 		if err != nil {
 			return err
 		}
-		inputMedia, err := m.WrapUploadedMedia(ctx, m.tg.client, inputFile, msgToSend)
+		inputMedia, err := m.WrapUploadedMedia(ctx, api, inputFile, msgToSend)
 		if err != nil {
 			return err
 		}

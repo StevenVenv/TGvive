@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -14,12 +13,12 @@ import (
 
 // WrapUploadedMedia 将上传后的文件封装为可发送的媒体对象（CloneMode=3）。
 // 使用原始消息的元数据（如 Attributes / Spoiler / TTLSeconds）来尽量还原显示效果。
-func (m *TaskManager) WrapUploadedMedia(ctx context.Context, client *telegram.Client, inputFile tg.InputFileClass, originalMsg *tg.Message) (tg.InputMediaClass, error) {
+func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inputFile tg.InputFileClass, originalMsg *tg.Message) (tg.InputMediaClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if client == nil {
-		return nil, fmt.Errorf("telegram client is nil")
+	if api == nil {
+		return nil, fmt.Errorf("tg api is nil")
 	}
 	if inputFile == nil || originalMsg == nil || originalMsg.Media == nil {
 		return nil, nil
@@ -70,7 +69,7 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, client *telegram.Cl
 			TTLSeconds: media.TTLSeconds,
 		}
 
-		if thumb := m.transferDocumentThumb(ctx, client, doc); thumb != nil {
+		if thumb := m.transferDocumentThumb(ctx, api, doc); thumb != nil {
 			out.Thumb = thumb
 		}
 
@@ -91,12 +90,12 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, client *telegram.Cl
 
 // transferDocumentThumb downloads the best available document thumbnail and uploads it as InputFile.
 // If anything fails, it returns nil (best-effort, should not block main media sending).
-func (m *TaskManager) transferDocumentThumb(ctx context.Context, client *telegram.Client, doc *tg.Document) tg.InputFileClass {
+func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client, doc *tg.Document) tg.InputFileClass {
 	_ = m
 	if err := ctx.Err(); err != nil {
 		return nil
 	}
-	if client == nil || doc == nil || len(doc.Thumbs) == 0 {
+	if api == nil || doc == nil || len(doc.Thumbs) == 0 {
 		return nil
 	}
 
@@ -125,7 +124,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, client *telegra
 	defer func() { _ = f.Close() }()
 
 	dl := downloader.NewDownloader()
-	if _, err := dl.Download(client.API(), loc).
+	if _, err := dl.Download(api, loc).
 		WithThreads(2).
 		WithVerify(true).
 		Parallel(ctx, f); err != nil {
@@ -135,7 +134,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, client *telegra
 		return nil
 	}
 
-	up := uploader.NewUploader(client.API()).WithThreads(2)
+	up := uploader.NewUploader(api).WithThreads(2)
 	inputFile, err := up.FromPath(ctx, path)
 	if err != nil {
 		return nil

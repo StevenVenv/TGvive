@@ -25,6 +25,9 @@ type Task struct {
 	// SourceChannelID 用于实时监听时的路由（SourceURL 解析后的数值 ID）
 	SourceChannelID int64 `gorm:"type:bigint;default:0;index" json:"source_channel_id"`
 
+	// Telegram session key (绑定账号). If empty, engine falls back to global telegram.session_key / TG_SESSION_KEY / auto-detect.
+	SessionKey string `gorm:"type:varchar(64);default:''" json:"session_key"`
+
 	// 克隆模式: 1-转发, 2-发送, 3-下载上传
 	CloneMode int `gorm:"type:tinyint;not null" json:"clone_mode"`
 
@@ -41,6 +44,10 @@ type Task struct {
 	CloneComment bool `gorm:"default:false" json:"clone_comment"` // 克隆评论
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`     // GPU 加速
 	ChangeMD5    bool `gorm:"default:false" json:"change_md5"`    // 下载上传时修改文件 MD5
+
+	// Anti-detection delays (random interval): sleep after each successfully processed message.
+	DelayMinMs int `gorm:"type:int;default:0" json:"delay_min_ms"`
+	DelayMaxMs int `gorm:"type:int;default:0" json:"delay_max_ms"`
 
 	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`

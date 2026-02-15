@@ -75,6 +75,14 @@ func (m *TaskManager) DetectContentType(msg *tg.Message) string {
 						return "audio"
 					}
 				}
+
+				mt := strings.ToLower(strings.TrimSpace(doc.MimeType))
+				if strings.HasPrefix(mt, "image/") {
+					return "image"
+				}
+				if strings.HasPrefix(mt, "audio/") {
+					return "audio"
+				}
 			}
 		}
 
@@ -312,7 +320,7 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, msg
 			}
 		}
 
-		if isImageDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+		if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
 			if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
 				if err != processor.ErrUnsupportedImage && global.Logger != nil {
 					global.Logger.Warn("image processor failed, skipped", zap.Error(err))
@@ -478,7 +486,7 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 				}
 			}
 
-			if isImageDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+			if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
 				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
 					if err != processor.ErrUnsupportedImage && global.Logger != nil {
 						global.Logger.Warn("image processor failed, skipped", zap.Error(err))

@@ -18,15 +18,29 @@ import (
 
 const (
 	defaultHistoryPageSize = 50
-	defaultReqDelay        = 600 * time.Millisecond
-	defaultMsgDelay        = 350 * time.Millisecond
+
+	// Throttling between history requests (helps avoid flood limits).
+	defaultReqDelayMin = 400 * time.Millisecond
+	defaultReqDelayMax = 900 * time.Millisecond
+
+	// Throttling between sends (anti-detection; task can override).
+	defaultMsgDelayMin = 250 * time.Millisecond
+	defaultMsgDelayMax = 650 * time.Millisecond
+
+	// Retry sending on transient errors (incl. FLOOD_WAIT).
+	defaultProcessRetries = 3
+	defaultRetryDelayMin  = 800 * time.Millisecond
+	defaultRetryDelayMax  = 2500 * time.Millisecond
+
+	// Safety valve if caller chooses to keep going on failures (unused for now).
+	maxConsecutiveFails = 10
 )
 
 // CloneHistory iterates source peer history and sends to target peer using current media pipeline.
 // It supports:
 //   - order: task.HistoryOrder (old->new / new->old)
 //   - resume: task.HistoryCursor
-//   - throttling: fixed request/message delays
+//   - throttling: randomized request/message delays
 //
 // NOTE: At this stage, CloneMode=2/3 are supported. CloneMode=1 (forward) is not implemented yet.
 func (m *TaskManager) CloneHistory(ctx context.Context, api *tg.Client, task model.Task) error {
@@ -131,6 +145,9 @@ func (m *TaskManager) cloneHistoryOldToNew(
 	allowedTypes map[string]struct{},
 	pageSize int,
 ) error {
+	msgDelayMin, msgDelayMax := normalizeDelayRange(task.DelayMinMs, task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
+
 	if bounds.MinID > 0 && cursor < bounds.MinID-1 {
 		cursor = bounds.MinID - 1
 	}
@@ -257,7 +274,9 @@ func (m *TaskManager) cloneHistoryOldToNew(
 
 				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
 				if len(group) > 0 {
-					if err := m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes); err != nil {
+					if err := processWithRetry(ctx, func() error {
+						return m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes)
+					}); err != nil {
 						return err
 					}
 					cursor = maxInGroup
@@ -266,7 +285,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					}
 					processed += len(group)
 					advanced = true
-					sleepWithContext(ctx, defaultMsgDelay)
+					sleepRandom(ctx, msgDelayMin, msgDelayMax)
 				}
 
 				i = j
@@ -287,7 +306,9 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				}
 			}
 
-			if err := m.processSingleMessage(ctx, api, targetPeer, task, msg); err != nil {
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, targetPeer, task, msg)
+			}); err != nil {
 				return err
 			}
 			cursor = msg.ID
@@ -297,13 +318,13 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			processed++
 			advanced = true
 			i++
-			sleepWithContext(ctx, defaultMsgDelay)
+			sleepRandom(ctx, msgDelayMin, msgDelayMax)
 		}
 
 		if !advanced {
 			return nil
 		}
-		sleepWithContext(ctx, defaultReqDelay)
+		sleepRandom(ctx, reqDelayMin, reqDelayMax)
 	}
 }
 
@@ -318,6 +339,9 @@ func (m *TaskManager) cloneHistoryNewToOld(
 	allowedTypes map[string]struct{},
 	pageSize int,
 ) error {
+	msgDelayMin, msgDelayMax := normalizeDelayRange(task.DelayMinMs, task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
+
 	if cursor <= 0 {
 		if bounds.MaxID > 0 {
 			// Include MaxID by setting offset_id to max+1.
@@ -432,7 +456,9 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 
 				if len(group) > 0 {
-					if err := m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes); err != nil {
+					if err := processWithRetry(ctx, func() error {
+						return m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes)
+					}); err != nil {
 						return err
 					}
 					cursor = minInGroup
@@ -441,7 +467,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					}
 					processed += len(group)
 					advanced = true
-					sleepWithContext(ctx, defaultMsgDelay)
+					sleepRandom(ctx, msgDelayMin, msgDelayMax)
 				}
 				i = j
 				continue
@@ -461,7 +487,9 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 			}
 
-			if err := m.processSingleMessage(ctx, api, targetPeer, task, msg); err != nil {
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, targetPeer, task, msg)
+			}); err != nil {
 				return err
 			}
 			cursor = msg.ID
@@ -471,14 +499,38 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			processed++
 			advanced = true
 			i++
-			sleepWithContext(ctx, defaultMsgDelay)
+			sleepRandom(ctx, msgDelayMin, msgDelayMax)
 		}
 
 		if !advanced {
 			return nil
 		}
-		sleepWithContext(ctx, defaultReqDelay)
+		sleepRandom(ctx, reqDelayMin, reqDelayMax)
 	}
+}
+
+func processWithRetry(ctx context.Context, fn func() error) error {
+	var last error
+	for attempt := 0; attempt < defaultProcessRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, ErrUnsupportedMedia) {
+			return nil
+		}
+		last = err
+		if ok, _ := tgerr.FloodWait(ctx, err); ok {
+			continue
+		}
+		if attempt < defaultProcessRetries-1 {
+			sleepRandom(ctx, defaultRetryDelayMin, defaultRetryDelayMax)
+		}
+	}
+	return last
 }
 
 func extractTGMessages(r tg.MessagesMessagesClass) []*tg.Message {

@@ -31,7 +31,7 @@ type TaskManager struct {
 	states    map[uint]*taskState
 	grouper   *AlbumGrouper
 	dedup     *Deduper
-	tg        *telegramRuntime
+	tg        *telegramRuntimeManager
 }
 
 var Manager = &TaskManager{
@@ -39,7 +39,7 @@ var Manager = &TaskManager{
 	states:    make(map[uint]*taskState),
 	grouper:   NewAlbumGrouper(150 * time.Millisecond),
 	dedup:     NewDeduper(10*time.Minute, 50_000),
-	tg:        newTelegramRuntime(),
+	tg:        newTelegramRuntimeManager(),
 }
 
 type taskState struct {

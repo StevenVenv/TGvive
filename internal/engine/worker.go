@@ -26,9 +26,16 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		)
 	}
 
-	api, err := m.ensureTelegram(ctx)
+	tgRT, err := m.ensureTelegram(ctx, t.SessionKey)
 	if err != nil {
 		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: "+err.Error())
+		m.setStateStatus(taskID, runID, model.TaskStatusError)
+		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		return
+	}
+	api := tgRT.api
+	if api == nil {
+		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: tg api is nil")
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
 		_ = updateTaskStatus(taskID, model.TaskStatusError)
 		return
@@ -69,7 +76,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 		m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
 		m.markCompleted(taskID, runID, false)
-		_ = m.registerRealtimeTask(runtimeTask{
+		_ = m.registerRealtimeTask(tgRT, runtimeTask{
 			Task:       task,
 			RunID:      runID,
 			Ctx:        ctx,
@@ -182,18 +189,6 @@ func normalizeTypeSet(in []string) map[string]struct{} {
 		return nil
 	}
 	return out
-}
-
-func sleepWithContext(ctx context.Context, d time.Duration) {
-	if d <= 0 {
-		return
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-	case <-t.C:
-	}
 }
 
 func (m *TaskManager) setStateStatus(taskID uint, runID uint64, status int) {

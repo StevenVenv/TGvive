@@ -41,6 +41,22 @@ func isImageDocument(media *tg.MessageMediaDocument) bool {
 	return strings.HasPrefix(mt, "image/")
 }
 
+func isStickerDocument(media *tg.MessageMediaDocument) bool {
+	if media == nil || media.Document == nil {
+		return false
+	}
+	doc, ok := media.Document.AsNotEmpty()
+	if !ok || doc == nil {
+		return false
+	}
+	for _, attr := range doc.Attributes {
+		if _, ok := attr.(*tg.DocumentAttributeSticker); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func documentHasThumbs(media *tg.MessageMediaDocument) bool {
 	if media == nil || media.Document == nil {
 		return false
