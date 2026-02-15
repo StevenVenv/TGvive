@@ -40,6 +40,7 @@ type Task struct {
 	Realtime     bool `gorm:"default:false" json:"realtime"`      // 实时监控
 	CloneComment bool `gorm:"default:false" json:"clone_comment"` // 克隆评论
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`     // GPU 加速
+	ChangeMD5    bool `gorm:"default:false" json:"change_md5"`    // 下载上传时修改文件 MD5
 
 	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`

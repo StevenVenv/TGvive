@@ -144,6 +144,11 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 							}
 						}
 
+						if task.ChangeMD5 {
+							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
+								return err
+							}
+						}
 						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
 							if global.Logger != nil {
 								global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
@@ -169,6 +174,11 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 			}
 		}
 
+		if task.ChangeMD5 {
+			if err := processor.ModifyFileMD5(uploadPath); err != nil {
+				return err
+			}
+		}
 		inputFile, err := m.UploadFile(ctx, api, uploadPath)
 		if err != nil {
 			return err
