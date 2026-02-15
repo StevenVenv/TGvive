@@ -3,11 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 
-import { createTask, listTGAccounts, type TGAccount, type Task } from '../api'
-
-const props = defineProps<{
-  token: string
-}>()
+import { createTask, type Task } from '../api'
 
 const emit = defineEmits<{
   (e: 'created', task: Task): void
@@ -16,37 +12,10 @@ const emit = defineEmits<{
 const open = ref(false)
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
-const accounts = ref<TGAccount[]>([])
-const accountsLoading = ref(false)
-
-async function reloadAccounts() {
-  if (!props.token.trim()) {
-    accounts.value = []
-    return
-  }
-  accountsLoading.value = true
-  try {
-    accounts.value = await listTGAccounts(props.token)
-  } catch {
-    // best-effort
-  } finally {
-    accountsLoading.value = false
-  }
-}
-
-function accountLabel(a: TGAccount): string {
-  const name = (a.name || (a.username ? `@${a.username}` : '')).trim()
-  const id = a.user_id ? `ID:${a.user_id}` : ''
-  const head = [name, id].filter(Boolean).join(' ')
-  if (head) return `${head} (${a.key})`
-  return a.key
-}
 
 const form = reactive({
   source_url: '',
   target_url: '',
-
-  session_key: '',
 
   clone_mode: 3,
   content_types: ['text', 'image', 'video', 'audio', 'file'],
@@ -80,7 +49,6 @@ const rules: FormRules = {
 function resetForm() {
   form.source_url = ''
   form.target_url = ''
-  form.session_key = ''
   form.clone_mode = 3
   form.content_types = ['text', 'image', 'video', 'audio', 'file']
   form.scope_type = 1
@@ -101,11 +69,6 @@ function resetForm() {
 }
 
 async function submit() {
-  if (!props.token.trim()) {
-    ElMessage.warning('请先填写 Token')
-    return
-  }
-
   const inst = formRef.value
   if (!inst) return
 
@@ -130,7 +93,6 @@ async function submit() {
     const payload: Partial<Task> = {
       source_url: form.source_url.trim(),
       target_url: form.target_url.trim(),
-      session_key: form.session_key.trim(),
 
       clone_mode: form.clone_mode,
       content_types: form.content_types,
@@ -152,7 +114,7 @@ async function submit() {
       run_window: form.run_window.trim(),
     }
 
-    const created = await createTask(props.token, payload)
+    const created = await createTask(payload)
     ElMessage.success(`任务已创建 #${created.ID}`)
     emit('created', created)
     open.value = false
@@ -164,13 +126,10 @@ async function submit() {
 }
 
 watch(open, (v) => {
-  if (v) {
-    void reloadAccounts()
-    return
+  if (!v) {
+    formRef.value?.clearValidate()
+    resetForm()
   }
-
-  formRef.value?.clearValidate()
-  resetForm()
 })
 </script>
 
@@ -185,23 +144,6 @@ watch(open, (v) => {
 
       <el-form-item label="目标频道/群组" prop="target_url">
         <el-input v-model="form.target_url" placeholder="例如：https://t.me/target 或 @target" />
-      </el-form-item>
-
-      <el-form-item label="绑定账号" prop="session_key">
-        <el-space>
-          <el-select
-            v-model="form.session_key"
-            filterable
-            allow-create
-            clearable
-            default-first-option
-            placeholder="可选：选择已登录账号（或手动输入）"
-            style="width: 360px"
-          >
-            <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key" />
-          </el-select>
-          <el-button size="small" @click="reloadAccounts" :loading="accountsLoading">刷新</el-button>
-        </el-space>
       </el-form-item>
 
       <el-divider />

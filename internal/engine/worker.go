@@ -26,7 +26,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		)
 	}
 
-	tgRT, err := m.ensureTelegram(ctx, t.SessionKey)
+	tgRT, err := m.ensureTelegram(ctx)
 	if err != nil {
 		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: "+err.Error())
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
@@ -74,14 +74,14 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			}
 		}
 
-			m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
-			m.markCompleted(taskID, runID, false)
-			_ = m.registerRealtimeTask(tgRT, runtimeTaskConfig{
-				Task:       task,
-				RunID:      runID,
-				Ctx:        ctx,
-				TargetPeer: targetPeer,
-			}, sourceChannelID)
+		m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
+		m.markCompleted(taskID, runID, false)
+		_ = m.registerRealtimeTask(tgRT, runtimeTaskConfig{
+			Task:       task,
+			RunID:      runID,
+			Ctx:        ctx,
+			TargetPeer: targetPeer,
+		}, sourceChannelID)
 		<-ctx.Done()
 		m.unregisterTask(taskID, sourceChannelID)
 		return

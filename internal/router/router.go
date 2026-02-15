@@ -18,17 +18,23 @@ func SetupRouter() *gin.Engine {
 	r.GET("/ping", v1.Ping)
 
 	taskApi := v1.TaskApi{}
+	authApi := v1.AuthApi{}
 	tgAuthApi := v1.TGAuthApi{}
 	apiV1 := r.Group("/api/v1")
 	{
 		apiV1.GET("/ping", v1.Ping)
+
+		authV1 := apiV1.Group("/auth")
+		{
+			authV1.GET("/dev/token", authApi.DevToken)
+		}
 
 		apiV1.GET("/tg/qr", tgAuthApi.GetQRCode)
 		apiV1.GET("/tg/qr/status", tgAuthApi.CheckQRStatus)
 		apiV1.GET("/tg/qr/ws", tgAuthApi.QRWebSocket)
 
 		tgV1 := apiV1.Group("/tg")
-		tgV1.Use(middleware.JWTAuth())
+		// tgV1.Use(middleware.JWTAuth())
 		{
 			tgV1.GET("/accounts", tgAuthApi.ListAccounts)
 			tgV1.POST("/accounts/qr", tgAuthApi.StartAccountQR)
@@ -40,7 +46,7 @@ func SetupRouter() *gin.Engine {
 		}
 
 		taskV1 := apiV1.Group("/tasks")
-		taskV1.Use(middleware.JWTAuth())
+		// taskV1.Use(middleware.JWTAuth())
 		{
 			taskV1.POST("", taskApi.CreateTask)
 			taskV1.GET("", taskApi.GetTaskList)

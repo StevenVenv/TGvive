@@ -28,7 +28,6 @@ func InitConfig() {
 	v.SetDefault("telegram.api_id", 0)
 	v.SetDefault("telegram.api_hash", "")
 	v.SetDefault("telegram.session_path", "./sessions/")
-	v.SetDefault("telegram.session_key", "")
 
 	// Processor defaults (all disabled by default).
 	v.SetDefault("processor.text.enabled", false)

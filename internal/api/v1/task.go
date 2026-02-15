@@ -132,5 +132,6 @@ func getCurrentUserID(c *gin.Context) uint {
 		}
 	}
 
-	return 0
+	// Local/single-user fallback when auth middleware is disabled.
+	return 1
 }

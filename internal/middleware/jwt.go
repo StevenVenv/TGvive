@@ -21,6 +21,13 @@ func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr, ok := parseBearerToken(c.GetHeader("Authorization"))
 		if !ok {
+			// Local/dev convenience: in debug mode allow anonymous access and bind to a default user.
+			// WARNING: do NOT use debug mode in public deployments.
+			if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) == "debug" {
+				c.Set("user_id", uint(1))
+				c.Next()
+				return
+			}
 			app.Fail(c, e.CodeUnauthorized, "未登录或 Token 缺失")
 			c.Abort()
 			return
@@ -28,6 +35,11 @@ func JWTAuth() gin.HandlerFunc {
 
 		secret := global.Config.JWT.Secret
 		if strings.TrimSpace(secret) == "" {
+			if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) == "debug" {
+				c.Set("user_id", uint(1))
+				c.Next()
+				return
+			}
 			app.FailWithMsg("服务端未配置 JWT Secret", c)
 			c.Abort()
 			return
@@ -46,6 +58,11 @@ func JWTAuth() gin.HandlerFunc {
 			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		)
 		if err != nil || !token.Valid || claims.UserID == 0 {
+			if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) == "debug" {
+				c.Set("user_id", uint(1))
+				c.Next()
+				return
+			}
 			app.Fail(c, e.CodeUnauthorized, "Token 无效")
 			c.Abort()
 			return

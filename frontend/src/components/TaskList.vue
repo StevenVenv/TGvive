@@ -1,12 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { getTaskProgress, getTasks, taskAction, type Task, type TaskProgress } from '../api'
-
-const props = defineProps<{
-  token: string
-}>()
 
 const tasks = ref<Task[]>([])
 const loading = ref(false)
@@ -54,15 +50,9 @@ function statusText(task: Task): string {
 }
 
 async function reloadTasks() {
-  if (!props.token.trim()) {
-    tasks.value = []
-    progressMap.value = {}
-    return
-  }
-
   loading.value = true
   try {
-    tasks.value = await getTasks(props.token)
+    tasks.value = await getTasks()
     await refreshProgress()
   } catch (err: any) {
     ElMessage.error(err?.message || '加载任务失败')
@@ -72,7 +62,6 @@ async function reloadTasks() {
 }
 
 async function refreshProgress() {
-  if (!props.token.trim()) return
   if (tasks.value.length === 0) return
 
   const ids = tasks.value.map((t) => t.ID).filter((id) => id > 0)
@@ -82,7 +71,7 @@ async function refreshProgress() {
     const results = await Promise.all(
       ids.map(async (id) => {
         try {
-          const p = await getTaskProgress(props.token, id)
+          const p = await getTaskProgress(id)
           return [id, p] as const
         } catch {
           return null
@@ -102,9 +91,9 @@ async function refreshProgress() {
 }
 
 async function refreshOne(id: number) {
-  if (!props.token.trim() || id <= 0) return
+  if (id <= 0) return
   try {
-    const p = await getTaskProgress(props.token, id)
+    const p = await getTaskProgress(id)
     progressMap.value = { ...progressMap.value, [id]: p }
   } catch {
     // best-effort
@@ -112,10 +101,6 @@ async function refreshOne(id: number) {
 }
 
 async function doAction(task: Task, action: 'start' | 'pause' | 'stop') {
-  if (!props.token.trim()) {
-    ElMessage.warning('请先填写 Token')
-    return
-  }
   if (task.ID <= 0) return
 
   if (action === 'stop') {
@@ -131,7 +116,7 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop') {
   }
 
   try {
-    await taskAction(props.token, task.ID, action)
+    await taskAction(task.ID, action)
     await reloadTasks()
     await refreshOne(task.ID)
     ElMessage.success('指令已发送')
@@ -174,13 +159,6 @@ function stopPolling() {
     pollTimer = undefined
   }
 }
-
-watch(
-  () => props.token,
-  async () => {
-    await reloadTasks()
-  },
-)
 
 onMounted(async () => {
   await reloadTasks()
@@ -385,4 +363,3 @@ defineExpose({
   color: #909399;
 }
 </style>
-

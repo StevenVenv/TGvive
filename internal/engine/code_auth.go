@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +15,6 @@ import (
 
 type CodeAuthState struct {
 	SessionID string `json:"session_id"`
-	Key       string `json:"key,omitempty"`
 	Phone     string `json:"phone,omitempty"`
 	Status    string `json:"status"`
 	Error     string `json:"error,omitempty"`
@@ -31,7 +31,6 @@ const (
 )
 
 type codeAuthSession struct {
-	key   string
 	phone string
 
 	codeCh     chan string
@@ -53,10 +52,9 @@ func newCodeAuthHub() *codeAuthHub {
 	}
 }
 
-func InitCodeSession(sessionID, key, phone string) CodeAuthState {
+func InitCodeSession(sessionID, phone string) CodeAuthState {
 	st := CodeAuthState{
 		SessionID: strings.TrimSpace(sessionID),
-		Key:       strings.TrimSpace(key),
 		Phone:     strings.TrimSpace(phone),
 		Status:    CodeStatusCreated,
 		UpdatedAt: time.Now().Unix(),
@@ -65,7 +63,6 @@ func InitCodeSession(sessionID, key, phone string) CodeAuthState {
 	codeAuth.mu.Lock()
 	codeAuth.states[st.SessionID] = st
 	codeAuth.sessions[st.SessionID] = &codeAuthSession{
-		key:        st.Key,
 		phone:      st.Phone,
 		codeCh:     make(chan string, 1),
 		passwordCh: make(chan string, 1),
@@ -155,9 +152,6 @@ func publishCodeState(sessionID string, st CodeAuthState) {
 
 	codeAuth.mu.Lock()
 	if prev, ok := codeAuth.states[sessionID]; ok {
-		if st.Key == "" {
-			st.Key = prev.Key
-		}
 		if st.Phone == "" {
 			st.Phone = prev.Phone
 		}
@@ -177,7 +171,6 @@ func publishCodeState(sessionID string, st CodeAuthState) {
 
 type apiCodeAuth struct {
 	sessionID string
-	key       string
 	phone     string
 	codeCh    <-chan string
 	passCh    <-chan string
@@ -188,7 +181,7 @@ func (a apiCodeAuth) Phone(ctx context.Context) (string, error) {
 }
 
 func (a apiCodeAuth) Password(ctx context.Context) (string, error) {
-	publishCodeState(a.sessionID, CodeAuthState{Key: a.key, Phone: a.phone, Status: CodeStatusNeedPassword})
+	publishCodeState(a.sessionID, CodeAuthState{Phone: a.phone, Status: CodeStatusNeedPassword})
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -211,7 +204,7 @@ func (a apiCodeAuth) SignUp(ctx context.Context) (auth.UserInfo, error) {
 
 func (a apiCodeAuth) Code(ctx context.Context, sentCode *tg.AuthSentCode) (string, error) {
 	_ = sentCode
-	publishCodeState(a.sessionID, CodeAuthState{Key: a.key, Phone: a.phone, Status: CodeStatusNeedCode})
+	publishCodeState(a.sessionID, CodeAuthState{Phone: a.phone, Status: CodeStatusNeedCode})
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -224,14 +217,10 @@ func (a apiCodeAuth) Code(ctx context.Context, sentCode *tg.AuthSentCode) (strin
 	}
 }
 
-func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone string) error {
+func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, phone string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return errors.New("session_id is required")
-	}
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return errors.New("session key is required")
 	}
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
@@ -247,18 +236,18 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone s
 
 	apiID, apiHash, err := pickTelegramApp()
 	if err != nil {
-		publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusError, Error: err.Error()})
+		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusError, Error: err.Error()})
 		return err
 	}
 
-	sessionPath := GetSessionPathForKey(key)
+	sessionPath := GetSessionPath(phone)
+	accountKey := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(sessionPath), ".json"), "session_")
 	client := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage: &FileSessionStorage{Path: sessionPath},
 	})
 
 	a := apiCodeAuth{
 		sessionID: sessionID,
-		key:       key,
 		phone:     phone,
 		codeCh:    s.codeCh,
 		passCh:    s.passwordCh,
@@ -266,8 +255,8 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone s
 
 	err = client.Run(ctx, func(ctx context.Context) error {
 		if status, err := client.Auth().Status(ctx); err == nil && status.Authorized {
-			_ = updateAccountMetaFromAPI(ctx, key, client.API())
-			publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusAuthorized})
+			_ = updateAccountMetaFromAPI(ctx, accountKey, client.API())
+			publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusAuthorized})
 			return nil
 		}
 
@@ -276,17 +265,17 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, key, phone s
 			return err
 		}
 
-		_ = updateAccountMetaFromAPI(ctx, key, client.API())
-		publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusAuthorized})
+		_ = updateAccountMetaFromAPI(ctx, accountKey, client.API())
+		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusAuthorized})
 		return nil
 	})
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusExpired, Error: err.Error()})
+			publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusExpired, Error: err.Error()})
 			return err
 		}
-		publishCodeState(sessionID, CodeAuthState{Key: key, Phone: phone, Status: CodeStatusError, Error: err.Error()})
+		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusError, Error: err.Error()})
 		return err
 	}
 	return nil

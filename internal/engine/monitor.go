@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -376,7 +377,7 @@ func newTelegramRuntime(sessionPath string) *telegramRuntime {
 	}
 }
 
-func (m *TaskManager) ensureTelegram(ctx context.Context, taskSessionKey string) (*telegramRuntime, error) {
+func (m *TaskManager) ensureTelegram(ctx context.Context) (*telegramRuntime, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -392,7 +393,7 @@ func (m *TaskManager) ensureTelegram(ctx context.Context, taskSessionKey string)
 		return nil, err
 	}
 
-	sessionPath, err := pickSessionPath(taskSessionKey)
+	sessionPath, err := pickSessionPath()
 	if err != nil {
 		return nil, err
 	}
@@ -527,23 +528,8 @@ func (rt *telegramRuntime) finishStart(err error, ready chan struct{}) {
 	rt.mu.Unlock()
 }
 
-func pickSessionPath(taskSessionKey string) (string, error) {
-	// 0) Per-task session key.
-	if key := strings.TrimSpace(taskSessionKey); key != "" {
-		return GetSessionPathForKey(key), nil
-	}
-
-	// 1) Explicit global session_key
-	if key := strings.TrimSpace(global.Config.Telegram.SessionKey); key != "" {
-		return GetSessionPathForKey(key), nil
-	}
-
-	// 2) ENV override (useful for local dev / CI)
-	if key := strings.TrimSpace(os.Getenv("TG_SESSION_KEY")); key != "" {
-		return GetSessionPathForKey(key), nil
-	}
-
-	// 3) Fallback: auto-detect if there is exactly one session_*.json under session_path
+func pickSessionPath() (string, error) {
+	// Auto-detect session_*.json under session_path.
 	base := strings.TrimSpace(global.Config.Telegram.SessionPath)
 	if base == "" {
 		base = "./sessions/"
@@ -551,15 +537,50 @@ func pickSessionPath(taskSessionKey string) (string, error) {
 	pattern := filepath.Join(base, "session_*.json")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return "", fmt.Errorf("扫描 session 文件失败: %w", err)
+		return "", fmt.Errorf("扫描会话文件失败: %w", err)
 	}
-	if len(matches) == 1 {
-		return matches[0], nil
+
+	// Filter out meta files and non-regular files.
+	sessions := make([]string, 0, len(matches))
+	for _, p := range matches {
+		name := filepath.Base(p)
+		if strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err != nil || info == nil || info.IsDir() {
+			continue
+		}
+		sessions = append(sessions, p)
 	}
-	if len(matches) == 0 {
-		return "", fmt.Errorf("未找到 session 文件(%s)，请先登录生成 sessions/session_*.json 或配置 telegram.session_key", pattern)
+
+	if len(sessions) == 0 {
+		return "", fmt.Errorf("未找到账号会话文件(%s)，请先在「账号管理」里登录生成 sessions/session_*.json", pattern)
 	}
-	return "", fmt.Errorf("发现多个 session 文件(%s)，请配置 telegram.session_key / task.session_key 或设置 TG_SESSION_KEY 指定使用哪个", pattern)
+	if len(sessions) == 1 {
+		return sessions[0], nil
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		a, errA := os.Stat(sessions[i])
+		b, errB := os.Stat(sessions[j])
+		if errA != nil || a == nil {
+			return false
+		}
+		if errB != nil || b == nil {
+			return true
+		}
+		if a.ModTime().Equal(b.ModTime()) {
+			return sessions[i] < sessions[j]
+		}
+		return a.ModTime().After(b.ModTime())
+	})
+
+	picked := sessions[0]
+	if global.Logger != nil {
+		global.Logger.Warn("发现多个账号会话文件，默认选择最新的一个", zap.String("picked", picked), zap.Int("count", len(sessions)))
+	}
+	return picked, nil
 }
 
 func peerToChannelID(peer tg.PeerClass) (int64, bool) {

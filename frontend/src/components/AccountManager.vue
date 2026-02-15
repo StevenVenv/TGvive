@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import {
@@ -15,22 +15,13 @@ import {
   type TGAccount,
 } from '../api'
 
-const props = defineProps<{
-  token: string
-}>()
-
 const accounts = ref<TGAccount[]>([])
 const loadingAccounts = ref(false)
 
 async function reloadAccounts() {
-  if (!props.token.trim()) {
-    accounts.value = []
-    return
-  }
-
   loadingAccounts.value = true
   try {
-    accounts.value = await listTGAccounts(props.token)
+    accounts.value = await listTGAccounts()
   } catch (err: any) {
     ElMessage.error(err?.message || '加载账号失败')
   } finally {
@@ -58,7 +49,6 @@ function fmtBytes(size: number): string {
 const tab = ref<'qr' | 'code'>('qr')
 
 // QR login
-const qrKey = ref('')
 const qrSessionId = ref('')
 const qrState = ref<QRState | null>(null)
 const qrWorking = ref(false)
@@ -95,9 +85,9 @@ function stopQRPoll() {
 }
 
 async function pollQROnce() {
-  if (!props.token.trim() || !qrSessionId.value) return
+  if (!qrSessionId.value) return
   try {
-    const st = await getAccountQRStatus(props.token, qrSessionId.value)
+    const st = await getAccountQRStatus(qrSessionId.value)
     qrState.value = st
 
     if (st.status === 'authorized') {
@@ -114,21 +104,11 @@ async function pollQROnce() {
 }
 
 async function startQR() {
-  if (!props.token.trim()) {
-    ElMessage.warning('请先填写 Token')
-    return
-  }
-  const key = qrKey.value.trim()
-  if (!key) {
-    ElMessage.warning('请输入 SessionKey')
-    return
-  }
-
   qrDialogOpen.value = true
   qrWorking.value = true
   qrState.value = null
   try {
-    const { session_id } = await startAccountQR(props.token, key)
+    const { session_id } = await startAccountQR()
     qrSessionId.value = session_id
     await pollQROnce()
     if (qrTimer) window.clearInterval(qrTimer)
@@ -145,7 +125,6 @@ function onQRDialogClose() {
 }
 
 // Code login
-const codeKey = ref('')
 const codePhone = ref('')
 const codeSessionId = ref('')
 const codeState = ref<CodeAuthState | null>(null)
@@ -187,9 +166,9 @@ function stopCodePoll() {
 }
 
 async function pollCodeOnce() {
-  if (!props.token.trim() || !codeSessionId.value) return
+  if (!codeSessionId.value) return
   try {
-    const st = await getCodeLoginStatus(props.token, codeSessionId.value)
+    const st = await getCodeLoginStatus(codeSessionId.value)
     codeState.value = st
 
     if (st.status === 'need_password') {
@@ -210,16 +189,7 @@ async function pollCodeOnce() {
 }
 
 async function startCode() {
-  if (!props.token.trim()) {
-    ElMessage.warning('请先填写 Token')
-    return
-  }
-  const key = codeKey.value.trim()
   const phone = codePhone.value.trim()
-  if (!key) {
-    ElMessage.warning('请输入 SessionKey')
-    return
-  }
   if (!phone) {
     ElMessage.warning('请输入手机号（含国家码）')
     return
@@ -229,7 +199,7 @@ async function startCode() {
   codeState.value = null
   smsCode.value = ''
   try {
-    const { session_id } = await startCodeLogin(props.token, key, phone)
+    const { session_id } = await startCodeLogin(phone)
     codeSessionId.value = session_id
     await pollCodeOnce()
     if (codeTimer) window.clearInterval(codeTimer)
@@ -242,7 +212,6 @@ async function startCode() {
 }
 
 async function submitSMSCode() {
-  if (!props.token.trim()) return
   if (!codeSessionId.value) return
   const code = smsCode.value.trim()
   if (!code) {
@@ -250,7 +219,7 @@ async function submitSMSCode() {
     return
   }
   try {
-    await submitCode(props.token, codeSessionId.value, code)
+    await submitCode(codeSessionId.value, code)
     ElMessage.success('验证码已提交')
     await pollCodeOnce()
   } catch (err: any) {
@@ -259,7 +228,6 @@ async function submitSMSCode() {
 }
 
 async function submit2FAPassword() {
-  if (!props.token.trim()) return
   if (!codeSessionId.value) return
   const p = passwordInput.value.trim()
   if (!p) {
@@ -269,7 +237,7 @@ async function submit2FAPassword() {
 
   passwordSubmitting.value = true
   try {
-    await submitPassword(props.token, codeSessionId.value, p)
+    await submitPassword(codeSessionId.value, p)
     ElMessage.success('二级密码已提交')
     passwordDialogOpen.value = false
     passwordInput.value = ''
@@ -280,17 +248,6 @@ async function submit2FAPassword() {
     passwordSubmitting.value = false
   }
 }
-
-watch(
-  () => props.token,
-  async () => {
-    stopQRPoll()
-    stopCodePoll()
-    qrState.value = null
-    codeState.value = null
-    await reloadAccounts()
-  },
-)
 
 onMounted(async () => {
   await reloadAccounts()
@@ -320,7 +277,6 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="key" label="SessionKey" min-width="220" />
       <el-table-column label="更新时间" width="200">
         <template #default="{ row }">
           <el-text>{{ fmtTime(row.updated_at) }}</el-text>
@@ -338,10 +294,6 @@ onBeforeUnmount(() => {
     <el-tabs v-model="tab">
       <el-tab-pane label="扫码登录" name="qr">
         <el-form label-width="110px" class="form">
-          <el-form-item label="SessionKey">
-            <el-input v-model="qrKey" placeholder="例如：acc_main / 13800138000" style="max-width: 360px" />
-          </el-form-item>
-
           <el-form-item>
             <el-space>
               <el-button type="primary" :loading="qrWorking" @click="startQR">扫码登录</el-button>
@@ -358,7 +310,6 @@ onBeforeUnmount(() => {
           @close="onQRDialogClose"
         >
           <div class="qr-dialog">
-            <el-text type="info">SessionKey：{{ qrKey || '-' }}</el-text>
             <el-text type="info">状态：{{ qrStatusText }}</el-text>
 
             <div v-if="qrState?.error" class="err">
@@ -394,9 +345,6 @@ onBeforeUnmount(() => {
 
       <el-tab-pane label="验证码登录" name="code">
         <el-form label-width="110px" class="form">
-          <el-form-item label="SessionKey">
-            <el-input v-model="codeKey" placeholder="例如：acc_main / 13800138000" style="max-width: 360px" />
-          </el-form-item>
           <el-form-item label="手机号">
             <el-input v-model="codePhone" placeholder="例如：+8613800138000" style="max-width: 360px" />
           </el-form-item>

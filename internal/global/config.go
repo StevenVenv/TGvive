@@ -30,7 +30,6 @@ type TelegramConfig struct {
 	APIID       int    `mapstructure:"api_id"`
 	APIHash     string `mapstructure:"api_hash"`
 	SessionPath string `mapstructure:"session_path"`
-	SessionKey  string `mapstructure:"session_key"`
 }
 
 type ProcessorConfig struct {
