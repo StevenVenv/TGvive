@@ -63,10 +63,10 @@ func (m *TaskManager) CloneHistory(ctx context.Context, api *tg.Client, task mod
 		return fmt.Errorf("resolve target peer %q: %w", task.TargetURL, err)
 	}
 
-	return m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task)
+	return m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, 0)
 }
 
-func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, task model.Task) error {
+func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, task model.Task, runID uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -99,11 +99,13 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 		pageSize = 1
 	}
 
+	quota := newTaskQuota(task)
+
 	cursor := task.HistoryCursor
 	if order == model.HistoryOrderOldToNew {
-		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize)
+		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, runID, quota)
 	}
-	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize)
+	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, runID, quota)
 }
 
 type historyBounds struct {
@@ -144,6 +146,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 	bounds historyBounds,
 	allowedTypes map[string]struct{},
 	pageSize int,
+	runID uint64,
+	quota *taskQuota,
 ) error {
 	msgDelayMin, msgDelayMax := normalizeDelayRange(task.DelayMinMs, task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
@@ -169,6 +173,10 @@ func (m *TaskManager) cloneHistoryOldToNew(
 		}
 		if bounds.MaxID > 0 && cursor >= bounds.MaxID {
 			return nil
+		}
+
+		if err := m.waitForQuota(ctx, task.ID, runID, quota, 1); err != nil {
+			return err
 		}
 
 		limit := pageSize
@@ -274,10 +282,21 @@ func (m *TaskManager) cloneHistoryOldToNew(
 
 				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
 				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
+					}
 					if err := processWithRetry(ctx, func() error {
 						return m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes)
 					}); err != nil {
 						return err
+					}
+					if need > 0 {
+						if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
 					}
 					cursor = maxInGroup
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
@@ -306,10 +325,21 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				}
 			}
 
+			need := quotaSendableCount(m, msg, allowedTypes)
+			if need > 0 {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
+			}
 			if err := processWithRetry(ctx, func() error {
 				return m.processSingleMessage(ctx, api, targetPeer, task, msg)
 			}); err != nil {
 				return err
+			}
+			if need > 0 {
+				if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
 			}
 			cursor = msg.ID
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {
@@ -338,6 +368,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 	bounds historyBounds,
 	allowedTypes map[string]struct{},
 	pageSize int,
+	runID uint64,
+	quota *taskQuota,
 ) error {
 	msgDelayMin, msgDelayMax := normalizeDelayRange(task.DelayMinMs, task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
@@ -361,6 +393,10 @@ func (m *TaskManager) cloneHistoryNewToOld(
 		}
 		if bounds.MinID > 0 && cursor <= bounds.MinID {
 			return nil
+		}
+
+		if err := m.waitForQuota(ctx, task.ID, runID, quota, 1); err != nil {
+			return err
 		}
 
 		limit := pageSize
@@ -456,10 +492,21 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 
 				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
+					}
 					if err := processWithRetry(ctx, func() error {
 						return m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes)
 					}); err != nil {
 						return err
+					}
+					if need > 0 {
+						if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
 					}
 					cursor = minInGroup
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
@@ -487,10 +534,21 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 			}
 
+			need := quotaSendableCount(m, msg, allowedTypes)
+			if need > 0 {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
+			}
 			if err := processWithRetry(ctx, func() error {
 				return m.processSingleMessage(ctx, api, targetPeer, task, msg)
 			}); err != nil {
 				return err
+			}
+			if need > 0 {
+				if err := m.quotaAdd(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
 			}
 			cursor = msg.ID
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {

@@ -49,6 +49,12 @@ type Task struct {
 	DelayMinMs int `gorm:"type:int;default:0" json:"delay_min_ms"`
 	DelayMaxMs int `gorm:"type:int;default:0" json:"delay_max_ms"`
 
+	// Quota & scheduler
+	DailyLimit int    `gorm:"type:int;default:0" json:"daily_limit"` // 0 = unlimited
+	TodayCount int    `gorm:"type:int;default:0" json:"today_count"`
+	TodayDate  string `gorm:"type:varchar(10);default:''" json:"today_date"` // YYYY-MM-DD (server local)
+	RunWindow  string `gorm:"type:varchar(32);default:''" json:"run_window"` // e.g. "09:00-18:00", empty = always
+
 	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`
 

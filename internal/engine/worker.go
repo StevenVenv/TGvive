@@ -51,7 +51,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	}
 
 	m.record(taskID, runID, 0, 0, 0, 0, "开始克隆历史消息")
-	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task); err != nil {
+	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, runID); err != nil {
 		if ctx.Err() != nil {
 			return
 		}
