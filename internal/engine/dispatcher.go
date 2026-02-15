@@ -29,11 +29,13 @@ type TaskManager struct {
 	mu        sync.RWMutex
 	cancelers map[uint]context.CancelFunc
 	states    map[uint]*taskState
+	grouper   *AlbumGrouper
 }
 
 var Manager = &TaskManager{
 	cancelers: make(map[uint]context.CancelFunc),
 	states:    make(map[uint]*taskState),
+	grouper:   NewAlbumGrouper(150 * time.Millisecond),
 }
 
 type taskState struct {
@@ -116,6 +118,10 @@ func (m *TaskManager) PauseTask(taskID uint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.grouper != nil {
+		m.grouper.DropTask(taskID)
+	}
+
 	if cancel, ok := m.cancelers[taskID]; ok {
 		cancel()
 		delete(m.cancelers, taskID)
@@ -141,6 +147,10 @@ func (m *TaskManager) StopTask(taskID uint) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.grouper != nil {
+		m.grouper.DropTask(taskID)
+	}
 
 	if cancel, ok := m.cancelers[taskID]; ok {
 		cancel()
