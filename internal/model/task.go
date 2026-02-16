@@ -62,7 +62,7 @@ type Task struct {
 	Status int `gorm:"type:tinyint;default:0" json:"status"`
 
 	// 历史克隆进度（断点续传）
-	HistoryCursor int `gorm:"type:int;default:0" json:"history_cursor"` // 最近一次成功搬运的消息 ID
+	HistoryCursor int `gorm:"type:int;default:0" json:"history_cursor"` // 最近一次成功转发的消息 ID
 	// 历史克隆方向：1-从旧到新，2-从新到旧
 	HistoryOrder int `gorm:"type:tinyint;default:1" json:"history_order"`
 }

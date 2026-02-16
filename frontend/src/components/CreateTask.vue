@@ -3,6 +3,7 @@ import axios from 'axios'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
+import { UserFilled } from '@element-plus/icons-vue'
 
 type ApiResponse<T> = {
   code: number
@@ -24,6 +25,7 @@ type AccountItem = {
   name?: string
   username?: string
   phone?: string
+  avatar?: string
 }
 
 type StrategyItem = {
@@ -192,9 +194,9 @@ onMounted(() => {
 
   <el-dialog v-model="open" title="新建搬运任务" width="560px" class="bt-dialog">
     <div v-loading="loading" class="body">
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
+        <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-form-item label="源频道 (Source)" prop="source_url">
-          <el-input v-model="form.source_url" placeholder="[可疑链接已删除]..." />
+          <el-input v-model="form.source_url" placeholder="例如：https://t.me/source 或 @source" />
         </el-form-item>
 
         <el-form-item label="目标频道 (Target)" prop="target_url">
@@ -202,12 +204,21 @@ onMounted(() => {
         </el-form-item>
 
         <el-form-item label="执行账号 (Account)" prop="session_key">
-          <el-select v-model="form.session_key" placeholder="请选择执行账号" style="width: 100%" filterable>
+          <el-select
+            v-model="form.session_key"
+            placeholder="请选择执行账号"
+            style="width: 100%"
+            filterable
+            popper-class="tgvive-dark-popper"
+          >
             <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
               <div class="opt">
                 <div class="opt-left">
-                  <div class="opt-title">{{ accountLabel(a) }}</div>
-                  <div class="opt-sub">{{ accountFileName(a.key) }}</div>
+                  <el-avatar class="opt-avatar" :size="26" :src="a.avatar" :icon="UserFilled" />
+                  <div class="opt-meta">
+                    <div class="opt-title">{{ accountLabel(a) }}</div>
+                    <div class="opt-sub">{{ accountFileName(a.key) }}</div>
+                  </div>
                 </div>
                 <div class="opt-right muted">{{ a.username ? '@' + a.username : '' }}</div>
               </div>
@@ -217,7 +228,13 @@ onMounted(() => {
         </el-form-item>
 
         <el-form-item label="策略模版 (Strategy)" prop="strategy_id">
-          <el-select v-model="form.strategy_id" placeholder="请选择策略模版" style="width: 100%" filterable>
+          <el-select
+            v-model="form.strategy_id"
+            placeholder="请选择策略模版"
+            style="width: 100%"
+            filterable
+            popper-class="tgvive-dark-popper"
+          >
             <el-option v-for="s in strategies" :key="s.ID" :label="s.name" :value="s.ID">
               <div class="opt">
                 <div class="opt-left">
@@ -271,6 +288,17 @@ onMounted(() => {
 .opt-left {
   min-width: 0;
   display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.opt-avatar {
+  flex: none;
+}
+
+.opt-meta {
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   gap: 4px;
 }
@@ -278,6 +306,7 @@ onMounted(() => {
 .opt-title {
   font-weight: 700;
   color: var(--el-text-color-primary);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -286,6 +315,7 @@ onMounted(() => {
 .opt-sub {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -310,5 +340,67 @@ onMounted(() => {
   :deep(.el-dialog__footer) {
     border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
+}
+
+/* Bug A: ensure select/input text & placeholder readable in dark mode */
+:global(html.dark) .bt-dialog :deep(.el-input__inner) {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+:global(html.dark) .bt-dialog :deep(.el-input__inner::placeholder) {
+  color: rgba(191, 203, 217, 0.6);
+}
+
+:global(html.dark) .bt-dialog :deep(.el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+:global(html.dark) .bt-dialog :deep(.el-select__wrapper) {
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+:global(html.dark) .bt-dialog :deep(.el-select__selected-item) {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+:global(html.dark) .bt-dialog :deep(.el-select__placeholder) {
+  color: rgba(191, 203, 217, 0.6);
+}
+
+:global(html.dark) .bt-dialog :deep(.el-select__input) {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+:global(html.dark) .bt-dialog :deep(.el-select__input::placeholder) {
+  color: rgba(191, 203, 217, 0.6);
+}
+
+:global(html.dark) .bt-dialog :deep(.el-select__caret) {
+  color: rgba(191, 203, 217, 0.75);
+}
+
+:global(html.dark) .tgvive-dark-popper.el-select-dropdown {
+  background: rgba(20, 20, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+:global(html.dark) .tgvive-dark-popper .el-select-dropdown__item {
+  color: rgba(191, 203, 217, 0.92);
+  height: auto;
+  line-height: normal;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+:global(html.dark) .tgvive-dark-popper .el-select-dropdown__item.is-hovering {
+  background: rgba(64, 158, 255, 0.12);
+}
+
+:global(html.dark) .tgvive-dark-popper .el-select-dropdown__item.is-selected {
+  color: #409eff;
 }
 </style>

@@ -120,7 +120,7 @@ func (m *TaskManager) StartTask(t model.Task) {
 	}
 	st.SpeedBaseTime = time.Now()
 	st.SpeedBaseProcessed = st.Processed
-	st.appendLogLocked(fmt.Sprintf("开始搬运任务 [%d]: %s -> %s", t.ID, t.SourceURL, t.TargetURL))
+	st.appendLogLocked(fmt.Sprintf("开始转发任务 [%d]: %s -> %s", t.ID, t.SourceURL, t.TargetURL))
 
 	m.mu.Unlock()
 

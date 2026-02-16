@@ -266,7 +266,7 @@ go get -u github.com/spf13/viper
 
 根据你提供的 UI 截图，我们需要设计一个复杂的 Task 模型来支撑那些开关和选项。
 
-1. 搬运任务模型 (internal/model/task.go)
+1. 转发任务模型 (internal/model/task.go)
 
 这里映射了你 UI 上的所有配置项，包括：克隆模式、内容类型、消息范围等。
 
@@ -316,7 +316,7 @@ import (
 
 type TaskApi struct{}
 
-// CreateTask 创建搬运任务
+// CreateTask 创建转发任务
 func (a *TaskApi) CreateTask(c *gin.Context) {
 	var task model.Task
 	if err := c.ShouldBindJSON(&task); err != nil {
@@ -428,7 +428,7 @@ Gemini said
 
 🛠️ 任务：实现【任务控制与状态实时更新】
 
-根据你提供的 UI 第二张图，搬运工具不仅仅是“保存配置”，还需要启动、暂停、查看实时日志和进度。
+根据你提供的 UI 第二张图，转发工具不仅仅是“保存配置”，还需要启动、暂停、查看实时日志和进度。
 
 我们需要新增一个 TaskAction 接口来控制任务的生命周期，并模拟实时进度的更新。
 
@@ -469,7 +469,7 @@ func (a *TaskApi) UpdateTaskStatus(c *gin.Context) {
 		return
 	}
 
-	// 3. 这里本应触发真正的搬运引擎逻辑（即你后续要写的 TG Bot 核心）
+	// 3. 这里本应触发真正的转发引擎逻辑（即你后续要写的 TG Bot 核心）
 	// 目前先返回成功
 	app.OkWithData(gin.H{"status": task.Status, "msg": "指令已发送"}, c)
 }
@@ -511,11 +511,11 @@ Go
             taskV1.POST("/action", taskApi.UpdateTaskStatus) // 开始/停止
             taskV1.GET("/:id/progress", taskApi.GetTaskProgress) // 实时进度/日志
         }
-💡 后端“奴役”建议：引入真正的搬运引擎
+💡 后端“奴役”建议：引入真正的转发引擎
 
 你现在的后端已经是一个合格的 API 管理后台了。但要实现图片里那样的“实时日志”，Go 后端通常需要引入以下两个技术点：
 
-异步任务 (Worker Pool)： 搬运视频是很耗时的，不能写在 Controller 里（会阻塞请求）。你需要一个后台协程（Goroutine）去跑搬运逻辑。
+异步任务 (Worker Pool)： 转发视频是很耗时的，不能写在 Controller 里（会阻塞请求）。你需要一个后台协程（Goroutine）去跑转发逻辑。
 
 WebSocket： UI 上的日志是滚动的。如果用 Ajax 轮询会很卡，建议下一步让我帮你写一个 WebSocket 中间件，实现服务端向前端主动推日志。
 
@@ -545,13 +545,13 @@ WebSocket： UI 上的日志是滚动的。如果用 Ajax 轮询会很卡，建�
 - ping.go: internal/service/ping.go
 
 ## My request for Codex:
-🛠️ 下一阶段：实现异步搬运调度器 (Engine Core)
+🛠️ 下一阶段：实现异步转发调度器 (Engine Core)
 
 我们要把 task_runtime.go 里的“假进度”换成一个真正的工作流。
 
 1. 定义引擎结构 (internal/engine/dispatcher.go)
 
-这个调度器负责管理成百上千个并发跑的搬运任务。
+这个调度器负责管理成百上千个并发跑的转发任务。
 
 Go
 package engine
@@ -588,7 +588,7 @@ func (m *TaskManager) StartTask(t model.Task) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelers[t.ID] = cancel
 
-	// 开启异步搬运协程
+	// 开启异步转发协程
 	go m.runTransferLoop(ctx, t)
 }
 
@@ -600,14 +600,14 @@ func (m *TaskManager) StopTask(taskID uint) {
 		delete(m.cancelers, taskID)
 	}
 }
-2. 实现搬运逻辑流水线 (internal/engine/worker.go)
+2. 实现转发逻辑流水线 (internal/engine/worker.go)
 
 这是你要“奴役” ChatGPT 写业务逻辑的地方。
 
 Go
 func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task) {
 	// 1. 初始化 TG 客户端 (此处预留给接下来的 Telegram 协议接入)
-	fmt.Printf("开始搬运任务 [%d]: %s -> %s\n", t.ID, t.SourceURL, t.TargetURL)
+	fmt.Printf("开始转发任务 [%d]: %s -> %s\n", t.ID, t.SourceURL, t.TargetURL)
 
 	for {
 		select {
@@ -615,7 +615,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task) {
 			fmt.Printf("任务 [%d] 已停止\n", t.ID)
 			return
 		default:
-			// 2. 模拟真正的搬运步骤
+			// 2. 模拟真正的转发步骤
 			// TODO: 1. 抓取源频道最新消息
 			// TODO: 2. 过滤内容 (关键字/类型)
 			// TODO: 3. 下载媒体文件 (若模式为下载上传)
@@ -634,7 +634,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task) {
 现在的代码已经可以“异步跑起来”了，但它还不知道怎么和 Telegram 说话。
 你有两个选择，决定了我们要往哪个方向写：
 
-方案 A：使用 Telegram Bot API（简单、官方支持，但不能搬运某些受限频道，且无法获取历史记录）。
+方案 A：使用 Telegram Bot API（简单、官方支持，但不能转发某些受限频道，且无法获取历史记录）。
 
 方案 B：使用 Telegram User API (MTProto)（强大、模拟真实用户，可以克隆任何频道，这正是你截图里那种专业工具的做法）。
 
@@ -644,7 +644,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task) {
 
 ## 2026-02-14T10:53:22Z — assistant
 
-- 引擎核心已落地：`internal/engine/dispatcher.go:1`（`TaskManager` 管理并发任务/取消信号/进度状态）、`internal/engine/worker.go:1`（`runTransferLoop` 真正异步跑“搬运流水线”，实时写入进度+日志）。
+- 引擎核心已落地：`internal/engine/dispatcher.go:1`（`TaskManager` 管理并发任务/取消信号/进度状态）、`internal/engine/worker.go:1`（`runTransferLoop` 真正异步跑“转发流水线”，实时写入进度+日志）。
 - 任务动作已接入引擎：`internal/service/task.go:1`（`ApplyTaskAction` 的 start/pause/stop 改为调用 `engine.Manager`）。
 - 进度接口已改为读引擎快照：`internal/api/v1/task.go:1`（`GetTaskProgress` 返回引擎侧的实时进度/日志，不再按时间推算“假进度”）。
 - 下一步要接 Telegram 协议：你选方案 A（Bot API）还是方案 B（MTProto：gotd/telegram-go）？
@@ -716,7 +716,7 @@ st *taskState
 - worker.go: internal/engine/worker.go
 
 ## My request for Codex:
-既然选择了 方案 A（快速起步），我们的目标是：先让后端拥有“身份”，直接跳过复杂的网页验证码交互，把搬运跑通。
+既然选择了 方案 A（快速起步），我们的目标是：先让后端拥有“身份”，直接跳过复杂的网页验证码交互，把转发跑通。
 
 在 MTProto 协议中，登录后的状态被称为 Session。方案 A 的核心就是：我们在本地生成一个 Session 文件，让后端程序直接“吃”掉这个文件，从而实现静默登录。
 
@@ -967,7 +967,7 @@ func (a *TGAuthApi) CheckQRStatus(c *gin.Context) {
 
 任务调度（开始/暂停/停止）
 
-数据模型（搬运配置）
+数据模型（转发配置）
 
 
 
@@ -1066,7 +1066,7 @@ func QRAuthTool(ctx context.Context) error {
 
 A. WebSocket 扫码接口： 实现前端点击“扫码登录”，后端实时推二维码，扫码成功后前端自动跳转。
 
-B. 任务引擎升级： 将 worker.go 改为从数据库读取 AppID/Hash，实现多账号并行搬运，支持你截图里的“任务 ID”切换。
+B. 任务引擎升级： 将 worker.go 改为从数据库读取 AppID/Hash，实现多账号并行转发，支持你截图里的“任务 ID”切换。
 
 ---
 
@@ -1206,7 +1206,7 @@ func (a *TGAuthApi) CheckQRStatus(c *gin.Context) {
 
 任务调度（开始/暂停/停止）
 
-数据模型（搬运配置）
+数据模型（转发配置）
 
 
 
@@ -1305,7 +1305,7 @@ func QRAuthTool(ctx context.Context) error {
 
 A. WebSocket 扫码接口： 实现前端点击“扫码登录”，后端实时推二维码，扫码成功后前端自动跳转。
 
-B. 任务引擎升级： 将 worker.go 改为从数据库读取 AppID/Hash，实现多账号并行搬运，支持你截图里的“任务 ID”切换。
+B. 任务引擎升级： 将 worker.go 改为从数据库读取 AppID/Hash，实现多账号并行转发，支持你截图里的“任务 ID”切换。
 先完成a 在完成b
 
 ---
@@ -1347,11 +1347,11 @@ You said
 已实现 Web 扫码授权（WebSocket + 轮询）：apps.go (line 1)（内置 App 凭据）、qr_auth.go (line 1)（QR 状态缓存/订阅推送 + engine.Manager.StartQRAuth）、tg_auth.go (line 1)（HTTP + WS 接口）、router.go (line 1)（路由注册）、session.go (line 1)（新增 GetSessionPathForKey 用于按 session_id 落盘 Session）。
 新接口（无需 JWT）：GET /api/v1/tg/qr 返回 session_id 并异步启动扫码；GET /api/v1/tg/qr/ws?session_id=... WS 实时推送 {status,url,...}；GET /api/v1/tg/qr/status?session_id=... 轮询拿状态。
 Gemini said
-太出色了！你现在已经彻底打通了用户接入层。通过内置官方凭据并实现 Web 扫码，你的工具在用户体验和安全性上已经能和市面上最顶级的 TG 搬运工具比肩了。
+太出色了！你现在已经彻底打通了用户接入层。通过内置官方凭据并实现 Web 扫码，你的工具在用户体验和安全性上已经能和市面上最顶级的 TG 转发工具比肩了。
 
 现在，我们要攻克这款软件的“心脏”——消息抓取与分发引擎。根据你提供的 UI 截图，这涉及到“实时监控模式”和“克隆历史消息”。
 
-我们先从 A：实时搬运监听器 开始，因为它最能体现 MTProto 的实时优势。
+我们先从 A：实时转发监听器 开始，因为它最能体现 MTProto 的实时优势。
 
 🛠️ 任务：实现实时更新监听器 (Update Handler)
 
@@ -1636,7 +1636,7 @@ func (m *TaskManager) SendMedia(ctx context.Context, api *tg.Client, msg *tg.Mes
 }
 2. 升级流水线以支持“图组” (Album/MultiMedia)
 
-截图里的工具通常支持搬运图组。在 TG 中，图组是由多个带有相同 GroupedID 的消息组成的。
+截图里的工具通常支持转发图组。在 TG 中，图组是由多个带有相同 GroupedID 的消息组成的。
 
 Go
 // processMultiMedia 处理相册/图组
@@ -1997,7 +1997,7 @@ Build check: `go test ./...` passes.
 ## 2026-02-15T01:35:42Z — user
 
 Gemini said
-太棒了！你的搬运工现在已经练成了“麒麟臂”，无论是单张图片还是复杂的图组，无论是直接转发还是下载上传，底层的能力都已经就绪。
+太棒了！你的转发工现在已经练成了“麒麟臂”，无论是单张图片还是复杂的图组，无论是直接转发还是下载上传，底层的能力都已经就绪。
 
 但现在有一个致命的隐患需要解决，这决定了你的工具是“玩具级”还是“工业级”。
 
@@ -2042,7 +2042,7 @@ Gemini said
 
 核心难点：
 
-方向控制： messages.getHistory 默认是从新往旧拉。但搬运通常要求 “从旧往新”（保持发布顺序）。
+方向控制： messages.getHistory 默认是从新往旧拉。但转发通常要求 “从旧往新”（保持发布顺序）。
 
 断点续传： 必须记录“搬到了哪一条 ID”，防止重启后从头开始。
 
@@ -2060,7 +2060,7 @@ Gemini said
 
 常规做法 (OffsetID): 这种通常用于“向下翻页”（查看更旧的消息）。
 
-搬运做法 (MinID): 我们通常是从 ID=1 (或上次停止的 ID=1024) 开始，想看 1025, 1026...。使用 MinID=1024 会让 TG 返回比 1024 大的消息。
+转发做法 (MinID): 我们通常是从 ID=1 (或上次停止的 ID=1024) 开始，想看 1025, 1026...。使用 MinID=1024 会让 TG 返回比 1024 大的消息。
 
 注意: TG 的 GetHistory 行为比较怪异。如果 MinID 不生效，可能需要结合 Reverse: true 参数测试一下（不同 DC 行为偶有差异）。或者最笨的方法：不设 MinID，直接按 Offset 拉取更旧的，直到拉不到，然后反向遍历。但在量大的情况下，MinID 是最高效的。
 
@@ -2129,7 +2129,7 @@ Task 表里存的是 SourceURL (字符串，如 https://t.me/abc)，但实时监
 
 3. 集成到启动流程 (internal/engine/dispatcher.go)
 
-修改你的 StartTask 或 runTransferLoop，在真正的搬运逻辑开始前，先跑这个检查。
+修改你的 StartTask 或 runTransferLoop，在真正的转发逻辑开始前，先跑这个检查。
 
 4. 效果验收
 
@@ -2158,7 +2158,7 @@ Task 表里存的是 SourceURL (字符串，如 https://t.me/abc)，但实时监
 
 ## 2026-02-15T03:21:18Z — user
 
-我正在使用 Go 语言的 gotd/td 库开发 Telegram 搬运工具。
+我正在使用 Go 语言的 gotd/td 库开发 Telegram 转发工具。
 
 请帮我完整实现 internal/engine/transfer.go 文件中的 TransferMedia 函数。
 
@@ -2192,9 +2192,9 @@ func (m *TaskManager) TransferMedia(ctx context.Context, client *telegram.Client
 
 指名道姓 downloader 和 uploader：防止 AI 尝试手写 HTTP 请求去下载文件（TG 的文件必须走 MTProto 协议下载）。
 
-强调“选最大的图”：这是 gotd 的大坑。TG 一张图有 5 个尺寸，如果不写这个逻辑，AI 经常会随便拿一个，导致你搬运过去的图片全是模糊的马赛克。
+强调“选最大的图”：这是 gotd 的大坑。TG 一张图有 5 个尺寸，如果不写这个逻辑，AI 经常会随便拿一个，导致你转发过去的图片全是模糊的马赛克。
 
-强制 os.CreateTemp 和 os.Remove：这是为了你的服务器安全。如果不删临时文件，搬运几百个视频后你的服务器硬盘就满了。
+强制 os.CreateTemp 和 os.Remove：这是为了你的服务器安全。如果不删临时文件，转发几百个视频后你的服务器硬盘就满了。
 
 ---
 
@@ -2269,7 +2269,7 @@ func (m *TaskManager) processMessage(ctx context.Context, api *tg.Client, msg *t
 		// 1. 执行下载并上传 (耗时操作)
 		inputFile, err := m.TransferMedia(ctx, m.GetTGClient(task.UserID), msg)
 		if err != nil {
-			m.Log(task.ID, "搬运失败: "+err.Error())
+			m.Log(task.ID, "转发失败: "+err.Error())
 			return
 		}
 
@@ -2298,14 +2298,14 @@ func (m *TaskManager) processMessage(ctx context.Context, api *tg.Client, msg *t
 }
 ⚠️ 只有 1% 的开发者注意到的细节：视频缩略图 (Thumb)
 
-如果你直接用上面的代码搬运视频，你会发现：视频能播放，但发送在群里时，封面是黑的（没有预览图）。
+如果你直接用上面的代码转发视频，你会发现：视频能播放，但发送在群里时，封面是黑的（没有预览图）。
 
-因为 TransferMedia 只搬运了视频主文件，没有搬运 Document.Thumbs。
+因为 TransferMedia 只转发了视频主文件，没有转发 Document.Thumbs。
 
 你要追求完美吗？
 如果要完美复刻截图里的专业工具，你需要对 WrapUploadedMedia 做一个小升级：
 
-指令： “实现视频封面的搬运。在上传主文件的同时，尝试下载原视频的 Thumb，上传后填入 InputMediaUploadedDocument.Thumb。”
+指令： “实现视频封面的转发。在上传主文件的同时，尝试下载原视频的 Thumb，上传后填入 InputMediaUploadedDocument.Thumb。”
 
 ---
 
@@ -2318,7 +2318,7 @@ func (m *TaskManager) processMessage(ctx context.Context, api *tg.Client, msg *t
   - `tg.InputMediaUploadedDocument`（克隆 `MimeType/Attributes`，并补齐 `DocumentAttributeFilename`；保留 `Spoiler/TTLSeconds/VideoCover/VideoTimestamp`，`ForceFile=false`）
 - `internal/engine/pipeline.go:60`：CloneMode=3 改为：`TransferMedia` 下载+上传 → `WrapUploadedMedia` 组装 → `MessagesSendMedia` 发送（带 `Entities` + `RandomID`）。
 
-视频封面 `Thumb` 暂未搬运；如果你要“黑封面”问题一起解决，我可以在 `WrapUploadedMedia` 里加：下载原 `Document.Thumbs` → 上传 → 填 `InputMediaUploadedDocument.Thumb`。
+视频封面 `Thumb` 暂未转发；如果你要“黑封面”问题一起解决，我可以在 `WrapUploadedMedia` 里加：下载原 `Document.Thumbs` → 上传 → 填 `InputMediaUploadedDocument.Thumb`。
 
 ---
 
@@ -2327,21 +2327,21 @@ func (m *TaskManager) processMessage(ctx context.Context, api *tg.Client, msg *t
 太棒了！你的执行力非常强。现在的逻辑已经是一个标准的 ETL（提取-转换-加载） 闭环了。
 
 关于你提到的 “黑封面” 问题：一定要解决！
-既然要做“克隆”工具，细节决定成败。如果搬运过去的视频全是黑的，用户体验会大打折扣。而且 Telegram 的视频如果没有缩略图（Thumb），在某些客户端上甚至无法预览加载，看起来像个未知文件。
+既然要做“克隆”工具，细节决定成败。如果转发过去的视频全是黑的，用户体验会大打折扣。而且 Telegram 的视频如果没有缩略图（Thumb），在某些客户端上甚至无法预览加载，看起来像个未知文件。
 
-既然你已经实现了 downloader 和 uploader 的基础设施，增加封面搬运只是“顺手”的事。
+既然你已经实现了 downloader 和 uploader 的基础设施，增加封面转发只是“顺手”的事。
 
 建议直接修改 media_wrapper.go，让它变身为一个更智能的 PrepareUpload 过程。为了保持代码整洁，我建议把“下载上传封面”的逻辑封装成一个小函数，然后在 WrapUploadedMedia 里调用。
 
-以下是 支持视频封面搬运 的完整补全方案：
+以下是 支持视频封面转发 的完整补全方案：
 
-🛠️ 1. 新增：封面搬运助手 (internal/engine/media_wrapper.go)
+🛠️ 1. 新增：封面转发助手 (internal/engine/media_wrapper.go)
 
 在同一个文件中增加这个 helper 函数。它的逻辑和 TransferMedia 类似，但更轻量（因为封面通常很小）。
 
 Go
 // transferThumbnail 专门用于提取、下载、上传缩略图
-// 注意：如果缩略图搬运失败，我们通常选择忽略错误（返回 nil），保全主视频能发出去
+// 注意：如果缩略图转发失败，我们通常选择忽略错误（返回 nil），保全主视频能发出去
 func (m *TaskManager) transferThumbnail(ctx context.Context, client *telegram.Client, thumbs []tg.PhotoSizeClass) tg.InputFileClass {
 	if len(thumbs) == 0 {
 		return nil
@@ -2418,7 +2418,7 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, client *telegram.Cl
 	case *tg.MessageMediaDocument:
 		doc, _ := media.Document.AsNotEmpty()
 		
-		// 1. 尝试搬运封面 (Cover)
+		// 1. 尝试转发封面 (Cover)
 		var thumbInput tg.InputFileClass
 		
 		// 只有当原文件有缩略图时才处理
@@ -2629,9 +2629,9 @@ Go 项目引入图片处理库（用于给封面/图片加水印）：
 
 TransferMedia 重构：你现在的 TransferMedia 是“下载即上传”。为了做处理，你需要把它拆成 DownloadFile (返回路径) 和 UploadFile (接收路径)。
 
-性能警告：视频加水印（转码）非常消耗 CPU。如果你的服务器配置不高，或者并发任务多，开启此功能会导致搬运速度从“每秒 1 条”变成“每分钟 1 条”。
+性能警告：视频加水印（转码）非常消耗 CPU。如果你的服务器配置不高，或者并发任务多，开启此功能会导致转发速度从“每秒 1 条”变成“每分钟 1 条”。
 
-封面提取是刚需：很多时候搬运的视频没有预览图，用 ffmpeg 提取第 1 帧做封面，用户体验提升巨大。
+封面提取是刚需：很多时候转发的视频没有预览图，用 ffmpeg 提取第 1 帧做封面，用户体验提升巨大。
 
 你想让我先帮你把 Text Processor (文案过滤) 完整代码写出来，还是先搞定 Video Processor (FFmpeg 调用)？
 
@@ -2664,7 +2664,7 @@ TransferMedia 重构：你现在的 TransferMedia 是“下载即上传”。为
 - image.go: internal/engine/processor/image.go
 
 ## My request for Codex:
-Telegram（以及大多数网盘/社交平台）会根据文件的 MD5 哈希值来“秒传”或判定重复文件。如果你只是下载再上传，文件的 MD5 不变，Telegram 实际上并不会存储一份新文件，而是直接引用旧文件的指针。这意味着：你并没有真正拥有这个文件，源文件被删，你的可能也会挂，或者被算法判定为“搬运工”。
+Telegram（以及大多数网盘/社交平台）会根据文件的 MD5 哈希值来“秒传”或判定重复文件。如果你只是下载再上传，文件的 MD5 不变，Telegram 实际上并不会存储一份新文件，而是直接引用旧文件的指针。这意味着：你并没有真正拥有这个文件，源文件被删，你的可能也会挂，或者被算法判定为“转发工”。
 
 为了实现**“MD5 变更”并保持代码的规范性 (Specification)**，我们需要遵循之前的工程化结构，将这个功能作为一个独立的 Processor 模块引入。
 
@@ -2756,7 +2756,7 @@ Telegram（以及大多数网盘/社交平台）会根据文件的 MD5 哈希值
 🧱 模块二：批量高效处理 (核心：断点续传)
 
 你提到了 “断点续传” 和 “自动错误重试”。
-如果搬运几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
+如果转发几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
 
 1. 改造历史抓取逻辑 (internal/engine/history.go)
 
@@ -2812,7 +2812,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 🧱 模块二：批量高效处理 (核心：断点续传)
 
 你提到了 “断点续传” 和 “自动错误重试”。
-如果搬运几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
+如果转发几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
 
 1. 改造历史抓取逻辑 (internal/engine/history.go)
 
@@ -2868,7 +2868,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 🧱 模块二：批量高效处理 (核心：断点续传)
 
 你提到了 “断点续传” 和 “自动错误重试”。
-如果搬运几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
+如果转发几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
 
 1. 改造历史抓取逻辑 (internal/engine/history.go)
 
@@ -2952,7 +2952,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 🧱 模块二：批量高效处理 (核心：断点续传)
 
 你提到了 “断点续传” 和 “自动错误重试”。
-如果搬运几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
+如果转发几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
 
 1. 改造历史抓取逻辑 (internal/engine/history.go)
 
@@ -3008,7 +3008,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 🧱 模块二：批量高效处理 (核心：断点续传)
 
 你提到了 “断点续传” 和 “自动错误重试”。
-如果搬运几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
+如果转发几万条消息，中途程序挂了，重启后必须能从上次中断的地方继续，而不是从头开始。
 
 1. 改造历史抓取逻辑 (internal/engine/history.go)
 
@@ -3062,7 +3062,7 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 我们需要在任务执行前加一道**“阀门”**：
 
-每日配额 (Daily Limit)：每天只能搬运 N 条。超过后，任务自动进入“睡眠”状态，直到第二天凌晨重置。
+每日配额 (Daily Limit)：每天只能转发 N 条。超过后，任务自动进入“睡眠”状态，直到第二天凌晨重置。
 
 时间窗口 (Time Window)：只在指定时间段（比如 8:00 - 22:00）运行，半夜不跑。
 
@@ -3080,7 +3080,7 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 新建这个文件，专门负责“查水表”。
 
-3. 接入搬运流水线 (internal/engine/worker.go)
+3. 接入转发流水线 (internal/engine/worker.go)
 
 在你的 runTransferLoop 或者 processMessage 的入口处加上这道阀门。
 
@@ -3092,7 +3092,7 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 用户设置 DailyLimit = 50。
 
-程序早上启动，一口气搬运了 50 条。
+程序早上启动，一口气转发了 50 条。
 
 第 51 次循环时，CheckQuota 返回 false。
 
@@ -3102,7 +3102,7 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 到了第二天凌晨 00:00，日期变更，TodayCount 重置为 0。
 
-程序自动苏醒，继续搬运。
+程序自动苏醒，继续转发。
 
 场景二：只在白天工作
 
@@ -3120,8 +3120,8 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 - 模型字段：`internal/model/task.go:1` 新增 `daily_limit / today_count / today_date / run_window`（GORM 自动迁移建列）
 - 配额模块：`internal/engine/quota.go:1` 新增 `waitForQuota/quotaAdd`，支持 `run_window`（如 `09:00-18:00`，也兼容 `～`/`~`），每日 00:00（服务器本地时区）自动重置 `today_*`；阻塞时最多每 `10m` 醒一次复查
-- 历史搬运接入：`internal/engine/history.go:1` 每次请求/发送前过阀门；发送成功后原子递增 `today_count`，确保重启不丢进度
-- 实时搬运接入：`internal/engine/monitor.go:1` 串行队列处理前过阀门；发送成功才计数
+- 历史转发接入：`internal/engine/history.go:1` 每次请求/发送前过阀门；发送成功后原子递增 `today_count`，确保重启不丢进度
+- 实时转发接入：`internal/engine/monitor.go:1` 串行队列处理前过阀门；发送成功才计数
 - Worker 串联：`internal/engine/worker.go:1` 把 `runID` 透传进历史克隆用于 `[暂停]/[继续]` 日志与状态切换
 
 使用示例（创建/更新任务时传入即可）：
@@ -3133,7 +3133,7 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 ## 2026-02-15T09:04:48Z — user
 
-现在的后台已经能跑任务了，但前端还是一片漆黑。我们需要一个 仪表盘 (Dashboard)，让你像指挥官一样监控所有搬运任务的状态、进度和日志。
+现在的后台已经能跑任务了，但前端还是一片漆黑。我们需要一个 仪表盘 (Dashboard)，让你像指挥官一样监控所有转发任务的状态、进度和日志。
 
 这个组件将包含以下核心功能：
 
@@ -3168,7 +3168,7 @@ Telegram 的粗体、链接、代码块存储在 Message.Entities 中。发送�
 
 点击 “启动”，状态变更为 运行中 (绿色 Badge)。
 
-点击 “日志”，右侧抽屉弹出，你应该能看到后端 worker 打印的 [搬运中] 正在处理 MsgID: 1024...。
+点击 “日志”，右侧抽屉弹出，你应该能看到后端 worker 打印的 [转发中] 正在处理 MsgID: 1024...。
 
 ---
 
@@ -3182,7 +3182,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 
 ## 2026-02-15T09:34:32Z — user
 
-现在的后台已经能跑任务了，但前端还是一片漆黑。我们需要一个 仪表盘 (Dashboard)，让你像指挥官一样监控所有搬运任务的状态、进度和日志。
+现在的后台已经能跑任务了，但前端还是一片漆黑。我们需要一个 仪表盘 (Dashboard)，让你像指挥官一样监控所有转发任务的状态、进度和日志。
 
 这个组件将包含以下核心功能：
 
@@ -3217,7 +3217,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 
 点击 “启动”，状态变更为 运行中 (绿色 Badge)。
 
-点击 “日志”，右侧抽屉弹出，你应该能看到后端 worker 打印的 [搬运中] 正在处理 MsgID: 1024...。
+点击 “日志”，右侧抽屉弹出，你应该能看到后端 worker 打印的 [转发中] 正在处理 MsgID: 1024...。
 
 ---
 
@@ -5452,7 +5452,7 @@ iyear
 
 Role: 你是一位精通 Golang (Gin) 和 Vue 3 (TypeScript) 的全栈架构师。
 
-Task: 我们需要为当前的 Telegram 搬运工具实现 “实时监控系统”，打通后端数据采集到前端仪表盘显示的完整链路。
+Task: 我们需要为当前的 Telegram 转发工具实现 “实时监控系统”，打通后端数据采集到前端仪表盘显示的完整链路。
 
 当前状态:
 
@@ -5522,7 +5522,7 @@ global.AddDownloadBytes(uint64(readSize))
 Go
 global.IncSuccess()
 // 或者
-global.BroadcastLog("[Info] 任务 1024 搬运成功")
+global.BroadcastLog("[Info] 任务 1024 转发成功")
 这样仪表盘的数字才会真的跳动起来！
 
 ---
@@ -5556,7 +5556,7 @@ The user interrupted the previous turn on purpose. Any running unified exec proc
 
 Role: 你是一位精通 Golang (Gin) 和 Vue 3 (TypeScript) 的全栈架构师。
 
-Task: 我们需要为当前的 Telegram 搬运工具实现 “实时监控系统”，打通后端数据采集到前端仪表盘显示的完整链路。
+Task: 我们需要为当前的 Telegram 转发工具实现 “实时监控系统”，打通后端数据采集到前端仪表盘显示的完整链路。
 
 当前状态:
 
@@ -5626,7 +5626,7 @@ global.AddDownloadBytes(uint64(readSize))
 Go
 global.IncSuccess()
 // 或者
-global.BroadcastLog("[Info] 任务 1024 搬运成功")
+global.BroadcastLog("[Info] 任务 1024 转发成功")
 这样仪表盘的数字才会真的跳动起来！
 
 ---

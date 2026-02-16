@@ -87,7 +87,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		return
 	}
 
-	m.record(taskID, runID, 0, 0, 0, 0, "搬运完成")
+	m.record(taskID, runID, 0, 0, 0, 0, "转发完成")
 	m.markCompleted(taskID, runID, true)
 	_ = updateTaskStatus(taskID, model.TaskStatusStopped)
 }

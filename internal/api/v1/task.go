@@ -27,7 +27,7 @@ type CreateTaskReq struct {
 	StrategyID uint   `json:"strategy_id" binding:"required"`
 }
 
-// CreateTask 创建搬运任务
+// CreateTask 创建转发任务
 func (a *TaskApi) CreateTask(c *gin.Context) {
 	var req CreateTaskReq
 	if err := c.ShouldBindJSON(&req); err != nil {
