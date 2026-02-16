@@ -6,6 +6,9 @@ type LogItem = { id: number; level: LogLevel; text: string; ts: number }
 
 type StatsSnapshot = {
   ts: number
+  os_info?: string
+  kernel?: string
+  uptime_sec?: number
   cpu_pct: number
   mem_used: number
   mem_total: number
@@ -19,6 +22,10 @@ type StatsSnapshot = {
   filtered: number
   ffmpeg_active: number
   ffmpeg_threads: number
+  has_gpu?: boolean
+  gpu_model?: string
+  gpu_memory?: string
+  gpu_driver?: string
   gpu_detected: boolean
   gpu_name?: string
 }
@@ -65,13 +72,18 @@ function fmtTime(ts: number): string {
 }
 
 const sys = reactive({
+  osInfo: '',
+  kernel: '',
+  uptimeSec: 0,
   cpu: 0,
   memUsed: 0,
   memTotal: 0,
   diskUsed: 0,
   diskTotal: 0,
-  gpuDetected: false,
-  gpuName: '',
+  hasGPU: false,
+  gpuModel: '',
+  gpuMemory: '',
+  gpuDriver: '',
   upBps: 0,
   downBps: 0,
 })
@@ -94,6 +106,35 @@ const service = reactive({
 const cpuPct = computed(() => Math.round(sys.cpu))
 const memPct = computed(() => clamp(Math.round((sys.memUsed / Math.max(0.1, sys.memTotal)) * 100), 0, 100))
 const diskPct = computed(() => clamp(Math.round((sys.diskUsed / Math.max(0.1, sys.diskTotal)) * 100), 0, 100))
+
+function fmtUptime(sec: number): string {
+  const s = Math.max(0, Math.floor(Number(sec || 0)))
+  if (!s) return '--'
+  const days = Math.floor(s / 86400)
+  const hours = Math.floor((s % 86400) / 3600)
+  const mins = Math.floor((s % 3600) / 60)
+  if (days > 0) return `${days}天${hours}小时`
+  if (hours > 0) return `${hours}小时${mins}分钟`
+  return `${Math.max(1, mins)}分钟`
+}
+
+const osIcon = computed(() => {
+  const v = String(sys.osInfo || '').toLowerCase()
+  if (v.includes('ubuntu')) return 'ri-ubuntu-line'
+  if (v.includes('windows')) return 'ri-windows-fill'
+  if (v.includes('mac') || v.includes('macos') || v.includes('darwin') || v.includes('os x')) return 'ri-apple-fill'
+  return 'ri-computer-line'
+})
+
+const osTone = computed(() => {
+  const v = String(sys.osInfo || '').toLowerCase()
+  if (v.includes('ubuntu')) return 'ubuntu'
+  if (v.includes('windows')) return 'windows'
+  if (v.includes('mac') || v.includes('macos') || v.includes('darwin') || v.includes('os x')) return 'apple'
+  return 'generic'
+})
+
+const uptimeText = computed(() => fmtUptime(sys.uptimeSec))
 
 const proxyText = computed(() => {
   if (!service.proxyEnabled || !service.proxyEndpoint) return '直连模式'
@@ -153,6 +194,9 @@ function loadProxyConfig() {
 
 function applyStats(d: StatsSnapshot) {
   if (!d) return
+  sys.osInfo = String(d.os_info || '')
+  sys.kernel = String(d.kernel || '')
+  sys.uptimeSec = Math.max(0, Number(d.uptime_sec || 0))
   sys.cpu = clamp(Number(d.cpu_pct || 0), 0, 100)
   sys.memUsed = toGiB(Number(d.mem_used || 0))
   sys.memTotal = Math.max(0.1, toGiB(Number(d.mem_total || 0)) || 0.1)
@@ -160,8 +204,10 @@ function applyStats(d: StatsSnapshot) {
   sys.diskTotal = Math.max(0.1, toGiB(Number(d.disk_total || 0)) || 0.1)
   sys.upBps = Math.max(0, Number(d.up_bps || 0))
   sys.downBps = Math.max(0, Number(d.down_bps || 0))
-  sys.gpuDetected = !!d.gpu_detected
-  sys.gpuName = String(d.gpu_name || '')
+  sys.hasGPU = !!(d.has_gpu ?? d.gpu_detected)
+  sys.gpuModel = String(d.gpu_model || d.gpu_name || '')
+  sys.gpuMemory = String(d.gpu_memory || '')
+  sys.gpuDriver = String(d.gpu_driver || '')
 
   biz.pending = Math.max(0, Number(d.pending || 0))
   biz.forwarded = Math.max(0, Number(d.success || 0))
@@ -329,13 +375,35 @@ onBeforeUnmount(() => {
 
           <div class="split-line" />
 
-          <div class="gpu-row">
-            <i class="ri-cpu-line" :class="sys.gpuDetected ? 'gpu-ok' : 'gpu-off'" />
-            <div class="gpu-meta">
-              <div class="gpu-name" :class="{ muted: !sys.gpuDetected }">
-                {{ sys.gpuDetected ? sys.gpuName : '未检测到 GPU' }}
+          <div class="overview-grid">
+            <div class="ov-card">
+              <div class="ov-icon">
+                <i :class="[osIcon, 'os-icon', osTone]" />
               </div>
-              <div class="gpu-sub muted">GPU Status</div>
+              <div class="ov-meta">
+                <div class="ov-main">{{ sys.osInfo || 'Unknown OS' }}</div>
+                <div class="ov-sub muted">
+                  <span v-if="sys.kernel">Kernel {{ sys.kernel }}</span>
+                  <span v-if="sys.kernel && sys.uptimeSec" class="dot">·</span>
+                  <span v-if="sys.uptimeSec">已运行 {{ uptimeText }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="ov-card">
+              <div class="ov-icon">
+                <i class="ri-cpu-line" :class="sys.hasGPU ? 'gpu-ok' : 'gpu-off'" />
+              </div>
+              <div class="ov-meta">
+                <div class="ov-main" :class="{ muted: !sys.hasGPU }">
+                  {{ sys.gpuModel || 'Integrated Graphics / No GPU' }}
+                </div>
+                <div class="ov-tags">
+                  <el-tag v-if="sys.gpuMemory" size="small" effect="dark" class="ov-tag">显存: {{ sys.gpuMemory }}</el-tag>
+                  <el-tag v-if="sys.gpuDriver" size="small" effect="dark" class="ov-tag">驱动: v{{ sys.gpuDriver }}</el-tag>
+                  <el-tag v-if="!sys.hasGPU" size="small" effect="dark" type="info" class="ov-tag">NO GPU</el-tag>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -635,16 +703,6 @@ onBeforeUnmount(() => {
   }
 }
 
-.gpu-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-
-  i {
-    font-size: 18px;
-  }
-}
-
 .gpu-ok {
   color: #67c23a;
 }
@@ -653,19 +711,77 @@ onBeforeUnmount(() => {
   color: rgba(191, 203, 217, 0.55);
 }
 
-.gpu-meta {
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.ov-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.ov-icon {
+  margin-top: 2px;
+
+  i {
+    font-size: 18px;
+  }
+}
+
+.os-icon {
+  color: rgba(191, 203, 217, 0.9);
+}
+
+.os-icon.ubuntu {
+  color: #e95420;
+}
+
+.os-icon.windows {
+  color: #409eff;
+}
+
+.os-icon.apple {
+  color: rgba(191, 203, 217, 0.92);
+}
+
+.ov-meta {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.gpu-name {
-  font-weight: 650;
+.ov-main {
+  font-weight: 750;
   font-size: 13px;
+  line-height: 1.25;
+  color: var(--el-text-color-primary);
+  word-break: break-word;
 }
 
-.gpu-sub {
+.ov-sub {
   font-size: 12px;
+  line-height: 1.2;
+}
+
+.ov-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ov-tag {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(191, 203, 217, 0.92);
 }
 
 .net-row {
@@ -935,6 +1051,10 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .mini-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-grid {
     grid-template-columns: 1fr;
   }
 

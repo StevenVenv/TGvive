@@ -2,10 +2,12 @@ package global
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,11 +15,16 @@ import (
 
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type StatsSnapshot struct {
 	TS int64 `json:"ts"`
+
+	OSInfo    string `json:"os_info,omitempty"`
+	Kernel    string `json:"kernel,omitempty"`
+	UptimeSec uint64 `json:"uptime_sec"`
 
 	CPUPercent float64 `json:"cpu_pct"`
 
@@ -38,6 +45,12 @@ type StatsSnapshot struct {
 	FFmpegActive  int `json:"ffmpeg_active"`
 	FFmpegThreads int `json:"ffmpeg_threads"`
 
+	HasGPU    bool   `json:"has_gpu"`
+	GPUModel  string `json:"gpu_model,omitempty"`
+	GPUMemory string `json:"gpu_memory,omitempty"`
+	GPUDriver string `json:"gpu_driver,omitempty"`
+
+	// Legacy aliases for earlier dashboard UI.
 	GPUDetected bool   `json:"gpu_detected"`
 	GPUName     string `json:"gpu_name,omitempty"`
 }
@@ -191,6 +204,11 @@ type AppStats struct {
 
 	seq uint64
 
+	osInfo atomic.Value // string
+	kernel atomic.Value // string
+
+	uptimeSec uint64
+
 	cpuBits uint64 // float64 bits
 
 	memUsed  uint64
@@ -212,6 +230,10 @@ type AppStats struct {
 
 	ffmpegActive int64
 
+	gpuModel  atomic.Value // string
+	gpuMemory atomic.Value // string
+	gpuDriver atomic.Value // string
+
 	gpuDetected uint32
 	gpuName     atomic.Value // string
 
@@ -228,6 +250,11 @@ func newAppStats() *AppStats {
 		logs:   newLogRing(600),
 		hub:    newLogHub(),
 	}
+	s.osInfo.Store(runtime.GOOS)
+	s.kernel.Store("")
+	s.gpuModel.Store("Integrated Graphics / No GPU")
+	s.gpuMemory.Store("")
+	s.gpuDriver.Store("")
 	s.gpuName.Store("")
 	return s
 }
@@ -259,6 +286,11 @@ func (s *AppStats) monitorLoop() {
 	lastTS := time.Now()
 
 	gpuTick := 0
+
+	// Prime basic host/GPU info early to avoid an empty dashboard on first connect.
+	s.sampleHost()
+	s.sampleSystem()
+	s.sampleGPU(time.Now())
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -292,6 +324,7 @@ func (s *AppStats) monitorLoop() {
 			lastTS = now
 
 			s.sampleSystem()
+			s.sampleHost()
 
 			gpuTick++
 			if gpuTick >= 10 {
@@ -323,6 +356,34 @@ func (s *AppStats) sampleSystem() {
 	}
 }
 
+func (s *AppStats) sampleHost() {
+	info, err := host.Info()
+	if err != nil || info == nil {
+		return
+	}
+
+	osInfo := strings.TrimSpace(info.Platform)
+	if v := strings.TrimSpace(info.PlatformVersion); v != "" && !strings.Contains(osInfo, v) {
+		if osInfo == "" {
+			osInfo = v
+		} else {
+			osInfo = osInfo + " " + v
+		}
+	}
+	if osInfo == "" {
+		osInfo = strings.TrimSpace(info.OS)
+	}
+	if osInfo == "" {
+		osInfo = runtime.GOOS
+	}
+	s.osInfo.Store(osInfo)
+
+	kernel := strings.TrimSpace(info.KernelVersion)
+	s.kernel.Store(kernel)
+
+	atomic.StoreUint64(&s.uptimeSec, info.Uptime)
+}
+
 func diskRootPath() string {
 	if runtime.GOOS == "windows" {
 		drive := strings.TrimSpace(os.Getenv("SystemDrive"))
@@ -340,33 +401,81 @@ func (s *AppStats) sampleGPU(now time.Time) {
 	if err != nil {
 		atomic.StoreUint32(&s.gpuDetected, 0)
 		s.gpuName.Store("")
+		s.gpuModel.Store("Integrated Graphics / No GPU")
+		s.gpuMemory.Store("")
+		s.gpuDriver.Store("")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 850*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, path, "--query-gpu=name", "--format=csv,noheader")
+	cmd := exec.CommandContext(
+		ctx,
+		path,
+		"--query-gpu=name,memory.used,memory.total,driver_version",
+		"--format=csv,noheader,nounits",
+	)
 	out, err := cmd.Output()
 	if err != nil {
 		atomic.StoreUint32(&s.gpuDetected, 0)
 		s.gpuName.Store("")
+		s.gpuModel.Store("Integrated Graphics / No GPU")
+		s.gpuMemory.Store("")
+		s.gpuDriver.Store("")
 		return
 	}
 
 	lines := strings.Split(string(out), "\n")
 	for _, ln := range lines {
-		name := strings.TrimSpace(ln)
-		if name == "" {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
 			continue
 		}
+
+		parts := strings.Split(ln, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+
+		name := ""
+		if len(parts) > 0 {
+			name = parts[0]
+		}
+		if name == "" {
+			name = "NVIDIA GPU"
+		}
+
+		memStr := ""
+		driver := ""
+		if len(parts) >= 4 {
+			driver = parts[3]
+			usedMiB, _ := strconv.ParseFloat(parts[1], 64)
+			totalMiB, _ := strconv.ParseFloat(parts[2], 64)
+			if totalMiB > 0 {
+				totalGB := int(math.Round(totalMiB / 1024.0))
+				if usedMiB > 0 {
+					usedGB := int(math.Round(usedMiB / 1024.0))
+					memStr = fmt.Sprintf("%dGB / %dGB", usedGB, totalGB)
+				} else {
+					memStr = fmt.Sprintf("%dGB", totalGB)
+				}
+			}
+		}
+
 		atomic.StoreUint32(&s.gpuDetected, 1)
 		s.gpuName.Store(name)
+		s.gpuModel.Store(name)
+		s.gpuMemory.Store(memStr)
+		s.gpuDriver.Store(strings.TrimSpace(driver))
 		return
 	}
 
-	atomic.StoreUint32(&s.gpuDetected, 1)
-	s.gpuName.Store("NVIDIA GPU")
+	atomic.StoreUint32(&s.gpuDetected, 0)
+	s.gpuName.Store("")
+	s.gpuModel.Store("Integrated Graphics / No GPU")
+	s.gpuMemory.Store("")
+	s.gpuDriver.Store("")
 }
 
 func (s *AppStats) Snapshot() StatsSnapshot {
@@ -374,14 +483,24 @@ func (s *AppStats) Snapshot() StatsSnapshot {
 		return StatsSnapshot{TS: time.Now().UnixMilli()}
 	}
 
+	osInfo, _ := s.osInfo.Load().(string)
+	kernel, _ := s.kernel.Load().(string)
+
 	cpuPct := math.Float64frombits(atomic.LoadUint64(&s.cpuBits))
 	upBps := math.Float64frombits(atomic.LoadUint64(&s.uploadBpsBits))
 	downBps := math.Float64frombits(atomic.LoadUint64(&s.downloadBpsBits))
 
+	gpuModel, _ := s.gpuModel.Load().(string)
+	gpuMemory, _ := s.gpuMemory.Load().(string)
+	gpuDriver, _ := s.gpuDriver.Load().(string)
 	gpuName, _ := s.gpuName.Load().(string)
+	hasGPU := atomic.LoadUint32(&s.gpuDetected) == 1
 
 	return StatsSnapshot{
 		TS:          time.Now().UnixMilli(),
+		OSInfo:      strings.TrimSpace(osInfo),
+		Kernel:      strings.TrimSpace(kernel),
+		UptimeSec:   atomic.LoadUint64(&s.uptimeSec),
 		CPUPercent:  clampF(cpuPct, 0, 100),
 		MemUsed:     atomic.LoadUint64(&s.memUsed),
 		MemTotal:    atomic.LoadUint64(&s.memTotal),
@@ -404,7 +523,11 @@ func (s *AppStats) Snapshot() StatsSnapshot {
 			return int(n)
 		}(),
 		FFmpegThreads: runtime.GOMAXPROCS(0),
-		GPUDetected:   atomic.LoadUint32(&s.gpuDetected) == 1,
+		HasGPU:        hasGPU,
+		GPUModel:      strings.TrimSpace(gpuModel),
+		GPUMemory:     strings.TrimSpace(gpuMemory),
+		GPUDriver:     strings.TrimSpace(gpuDriver),
+		GPUDetected:   hasGPU,
 		GPUName:       strings.TrimSpace(gpuName),
 	}
 }
