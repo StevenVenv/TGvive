@@ -80,6 +80,11 @@ func (p *VideoProcessor) ExtractCover(ctx context.Context, videoPath, outImagePa
 		outImagePath,
 	)
 
+	if global.Stats != nil {
+		global.Stats.IncFFmpegActive()
+		defer global.Stats.DecFFmpegActive()
+	}
+
 	cmd := exec.CommandContext(ctx, p.ffmpegPath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

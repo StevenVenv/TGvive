@@ -37,6 +37,7 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, peer t
 	contentType := m.DetectContentType(msg)
 	if allowedTypes != nil {
 		if _, ok := allowedTypes[contentType]; !ok {
+			global.IncFiltered()
 			return nil
 		}
 	}

@@ -4,12 +4,42 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
+
+	"my-go-server/internal/global"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 )
+
+type uploadByteProgress struct {
+	last int64
+}
+
+func (p *uploadByteProgress) Chunk(ctx context.Context, st uploader.ProgressState) error {
+	_ = ctx
+	cur := st.Uploaded
+	if cur <= 0 {
+		return nil
+	}
+	for {
+		prev := atomic.LoadInt64(&p.last)
+		if cur <= prev {
+			return nil
+		}
+		if atomic.CompareAndSwapInt64(&p.last, prev, cur) {
+			delta := cur - prev
+			if delta > 0 {
+				global.AddUploadBytes(uint64(delta))
+			}
+			return nil
+		}
+	}
+}
 
 // DownloadFile downloads Photo/Document media from msg into a local file and returns (path, meta, cleanup).
 // The file is stored under tmpMediaRoot.
@@ -32,7 +62,24 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 		return nil, errors.New("empty local path")
 	}
 
-	return uploader.NewUploader(api).WithThreads(4).FromPath(ctx, localPath)
+	var size int64
+	if fi, err := os.Stat(localPath); err == nil && fi != nil {
+		size = fi.Size()
+	}
+
+	progress := &uploadByteProgress{}
+	inputFile, err := uploader.NewUploader(api).
+		WithThreads(4).
+		WithProgress(progress).
+		FromPath(ctx, localPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if size > 0 {
+		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%.1fMB)", filepath.Base(localPath), float64(size)/1024.0/1024.0))
+	}
+	return inputFile, nil
 }
 
 // TransferMedia downloads Photo/Document media from msg into a temporary local file,

@@ -20,6 +20,7 @@ func SetupRouter() *gin.Engine {
 	taskApi := v1.TaskApi{}
 	authApi := v1.AuthApi{}
 	tgAuthApi := v1.TGAuthApi{}
+	dashboardApi := v1.DashboardApi{}
 	apiV1 := r.Group("/api/v1")
 	{
 		apiV1.GET("/ping", v1.Ping)
@@ -54,6 +55,17 @@ func SetupRouter() *gin.Engine {
 			taskV1.GET("", taskApi.GetTaskList)
 			taskV1.POST("/action", taskApi.UpdateTaskStatus)
 			taskV1.GET("/:id/progress", taskApi.GetTaskProgress)
+		}
+
+		dashV1 := apiV1.Group("/dashboard")
+		{
+			dashV1.GET("/summary", dashboardApi.Summary)
+			dashV1.GET("/events", dashboardApi.Events)
+		}
+
+		wsV1 := apiV1.Group("/ws")
+		{
+			wsV1.GET("/dashboard", dashboardApi.DashboardWS)
 		}
 	}
 

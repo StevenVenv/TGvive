@@ -1,21 +1,37 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Menu as IconMenu, Moon, RefreshRight, Sunny, Tickets, User } from '@element-plus/icons-vue'
+import { Menu as IconMenu, Moon, RefreshRight, Sunny } from '@element-plus/icons-vue'
 
 import CreateTask from './components/CreateTask.vue'
 import TaskList from './components/TaskList.vue'
 import AccountManager from './components/AccountManager.vue'
+import Dashboard from './views/Dashboard.vue'
+import Settings from './views/Settings.vue'
 import type { Task } from './api'
 
 const taskListRef = ref<InstanceType<typeof TaskList> | null>(null)
 const accountRef = ref<InstanceType<typeof AccountManager> | null>(null)
+const dashboardRef = ref<InstanceType<typeof Dashboard> | null>(null)
+const settingsRef = ref<InstanceType<typeof Settings> | null>(null)
 
 const storageViewKey = 'tgvive_ui_active_view'
 const storageCollapseKey = 'tgvive_ui_sidebar_collapse'
 const storageThemeKey = 'tgvive_ui_theme'
 
-const activeView = ref<'tasks' | 'accounts'>((localStorage.getItem(storageViewKey) as any) || 'tasks')
+type ActiveView = 'dashboard' | 'tasks' | 'accounts' | 'settings_proxy'
+
+function getInitialView(): ActiveView {
+  try {
+    const saved = (localStorage.getItem(storageViewKey) || '').trim()
+    if (saved === 'dashboard' || saved === 'tasks' || saved === 'accounts' || saved === 'settings_proxy') return saved
+  } catch {
+    // ignore
+  }
+  return 'dashboard'
+}
+
+const activeView = ref<ActiveView>(getInitialView())
 const collapsed = ref(localStorage.getItem(storageCollapseKey) === '1')
 
 watch(activeView, (v) => localStorage.setItem(storageViewKey, v))
@@ -44,7 +60,7 @@ function applyTheme(v: UITheme) {
   try {
     const root = document.documentElement
     root.classList.toggle('dark', v === 'dark')
-    root.style.backgroundColor = v === 'dark' ? '#0b1020' : '#f5f7fa'
+    root.style.backgroundColor = v === 'dark' ? '#1e1e1e' : '#f5f7fa'
   } catch {
     // ignore
   }
@@ -60,7 +76,18 @@ watch(theme, (v) => {
   applyTheme(v)
 })
 
-const pageTitle = computed(() => (activeView.value === 'tasks' ? '任务管理' : '账号管理'))
+const pageTitle = computed(() => {
+  switch (activeView.value) {
+    case 'dashboard':
+      return '系统仪表盘'
+    case 'tasks':
+      return '任务管理'
+    case 'accounts':
+      return '账号管理'
+    case 'settings_proxy':
+      return '网络代理'
+  }
+})
 
 function onCreated(_: Task) {
   void taskListRef.value?.reloadTasks()
@@ -75,7 +102,9 @@ async function refreshCurrent() {
     if (activeView.value === 'tasks') {
       await taskListRef.value?.reloadTasks()
     } else {
-      await accountRef.value?.reloadAccounts()
+      if (activeView.value === 'accounts') await accountRef.value?.reloadAccounts()
+      if (activeView.value === 'dashboard') dashboardRef.value?.refresh?.()
+      if (activeView.value === 'settings_proxy') settingsRef.value?.reload?.()
     }
     ElMessage.success('已刷新')
   } catch {
@@ -88,9 +117,7 @@ function toggleTheme() {
 }
 
 function onMenuSelect(idx: string) {
-  if (idx === 'tasks' || idx === 'accounts') {
-    activeView.value = idx
-  }
+  if (idx === 'dashboard' || idx === 'tasks' || idx === 'accounts' || idx === 'settings_proxy') activeView.value = idx
 }
 </script>
 
@@ -102,24 +129,52 @@ function onMenuSelect(idx: string) {
         <div v-if="!collapsed" class="name">TGvive</div>
       </div>
 
-      <el-menu
-        class="menu"
-        :default-active="activeView"
-        :collapse="collapsed"
-        background-color="#1f2d3d"
-        text-color="#bfcbd9"
-        active-text-color="#409eff"
-        @select="onMenuSelect"
-      >
-        <el-menu-item index="tasks">
-          <el-icon><Tickets /></el-icon>
-          <span>任务管理</span>
-        </el-menu-item>
-        <el-menu-item index="accounts">
-          <el-icon><User /></el-icon>
-          <span>账号管理</span>
-        </el-menu-item>
-      </el-menu>
+      <div class="aside-menus">
+        <el-menu
+          class="menu"
+          :default-active="activeView"
+          :collapse="collapsed"
+          background-color="#1e1e1e"
+          text-color="#bfcbd9"
+          active-text-color="#409eff"
+          @select="onMenuSelect"
+        >
+          <el-menu-item index="dashboard">
+            <el-icon><i class="ri-dashboard-3-line" /></el-icon>
+            <span>仪表盘</span>
+          </el-menu-item>
+          <el-menu-item index="tasks">
+            <el-icon><i class="ri-todo-line" /></el-icon>
+            <span>任务管理</span>
+          </el-menu-item>
+          <el-menu-item index="accounts">
+            <el-icon><i class="ri-user-3-line" /></el-icon>
+            <span>账号管理</span>
+          </el-menu-item>
+        </el-menu>
+
+        <el-menu
+          class="menu menu-bottom"
+          :default-active="activeView"
+          :collapse="collapsed"
+          background-color="#1e1e1e"
+          text-color="#bfcbd9"
+          active-text-color="#409eff"
+          :default-openeds="activeView === 'settings_proxy' ? ['settings'] : []"
+          @select="onMenuSelect"
+        >
+          <el-sub-menu index="settings">
+            <template #title>
+              <el-icon><i class="ri-settings-3-line" /></el-icon>
+              <span>系统设置</span>
+            </template>
+            <el-menu-item index="settings_proxy">
+              <el-icon><i class="ri-global-line" /></el-icon>
+              <span>网络代理</span>
+            </el-menu-item>
+          </el-sub-menu>
+        </el-menu>
+      </div>
     </el-aside>
 
     <el-container>
@@ -148,9 +203,11 @@ function onMenuSelect(idx: string) {
       </el-header>
 
       <el-main class="main">
-        <div class="content">
-          <TaskList v-show="activeView === 'tasks'" ref="taskListRef" :active="activeView === 'tasks'" />
-          <AccountManager v-show="activeView === 'accounts'" ref="accountRef" />
+        <div class="content" :class="{ wide: activeView === 'dashboard' }">
+          <Dashboard v-if="activeView === 'dashboard'" ref="dashboardRef" />
+          <TaskList v-if="activeView === 'tasks'" ref="taskListRef" :active="true" />
+          <AccountManager v-if="activeView === 'accounts'" ref="accountRef" />
+          <Settings v-if="activeView === 'settings_proxy'" ref="settingsRef" />
         </div>
       </el-main>
     </el-container>
@@ -163,7 +220,7 @@ function onMenuSelect(idx: string) {
 }
 
 .aside {
-  background: #1f2d3d;
+  background: #1e1e1e;
   color: #bfcbd9;
   display: flex;
   flex-direction: column;
@@ -207,6 +264,17 @@ function onMenuSelect(idx: string) {
   border-right: none;
 }
 
+.aside-menus {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.menu-bottom {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -240,11 +308,15 @@ function onMenuSelect(idx: string) {
 
 .main {
   padding: 16px;
-  background: var(--el-bg-color-page);
+  background: transparent;
 }
 
 .content {
   max-width: 1200px;
   margin: 0 auto;
+}
+
+.content.wide {
+  max-width: 1440px;
 }
 </style>

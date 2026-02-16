@@ -168,6 +168,9 @@ func (t *runtimeTask) enqueue(job realtimeJob) {
 
 	select {
 	case t.queue <- job:
+		if global.Stats != nil {
+			global.Stats.AddPending(1)
+		}
 	default:
 		if global.Logger != nil {
 			global.Logger.Warn("realtime queue full, dropping message", zap.Uint("task_id", t.Task.ID))
@@ -239,10 +242,26 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 	for {
 		select {
 		case <-t.Ctx.Done():
-			return
+			// Best-effort drain to keep global pending counter consistent on cancel.
+			for {
+				select {
+				case _, ok := <-t.queue:
+					if !ok {
+						return
+					}
+					if global.Stats != nil {
+						global.Stats.AddPending(-1)
+					}
+				default:
+					return
+				}
+			}
 		case job, ok := <-t.queue:
 			if !ok {
 				return
+			}
+			if global.Stats != nil {
+				global.Stats.AddPending(-1)
 			}
 			if err := t.Ctx.Err(); err != nil {
 				return
@@ -261,6 +280,9 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				need := quotaSendableAlbumCount(m, batch, t.allowedTypes)
+				if skipped := len(batch) - need; skipped > 0 {
+					global.AddFiltered(uint64(skipped))
+				}
 				if need > 0 {
 					if err := m.waitForQuota(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
 						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -284,6 +306,11 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					return m.processAlbumBatch(t.Ctx, api, t.TargetPeer, t.Task, batch, t.allowedTypes)
 				})
 				if err != nil {
+					if need > 0 {
+						global.AddFail(uint64(need))
+					} else {
+						global.IncFail()
+					}
 					if global.Logger != nil {
 						global.Logger.Error(
 							"realtime process album failed",
@@ -292,6 +319,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							zap.Error(err),
 						)
 					}
+				} else if need > 0 {
+					global.AddSuccess(uint64(need))
 				}
 				if err == nil && need > 0 {
 					if err := m.quotaAdd(t.Ctx, t.Task.ID, t.quota, need); err != nil {
@@ -318,6 +347,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				if t.allowedTypes != nil {
 					ct := m.DetectContentType(msg)
 					if _, ok := t.allowedTypes[ct]; !ok {
+						global.IncFiltered()
 						t.advanceCursor(msg.ID)
 						continue
 					}
@@ -340,6 +370,11 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					return m.processSingleMessage(t.Ctx, api, t.TargetPeer, t.Task, msg)
 				})
 				if err != nil {
+					if need > 0 {
+						global.AddFail(uint64(need))
+					} else {
+						global.IncFail()
+					}
 					if global.Logger != nil {
 						global.Logger.Error(
 							"realtime process message failed",
@@ -348,6 +383,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							zap.Error(err),
 						)
 					}
+				} else if need > 0 {
+					global.AddSuccess(uint64(need))
 				}
 
 				if err == nil && need > 0 {

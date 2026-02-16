@@ -34,6 +34,18 @@ type TaskManager struct {
 	tg        *telegramRuntimeManager
 }
 
+type TaskCounters struct {
+	TaskID     uint `json:"task_id"`
+	Status     int  `json:"status"`
+	Total      int  `json:"total"`
+	Processed  int  `json:"processed"`
+	Success    int  `json:"success"`
+	Fail       int  `json:"fail"`
+	Realtime   bool `json:"realtime"`
+	Completed  bool `json:"completed"`
+	HasRuntime bool `json:"has_runtime"`
+}
+
 var Manager = &TaskManager{
 	cancelers: make(map[uint]context.CancelFunc),
 	states:    make(map[uint]*taskState),
@@ -205,6 +217,35 @@ func (m *TaskManager) GetTaskProgress(t model.Task) TaskProgress {
 	return progress
 }
 
+func (m *TaskManager) GetTaskCounters(t model.Task) TaskCounters {
+	if t.ID == 0 {
+		return TaskCounters{}
+	}
+
+	m.getOrCreateState(t)
+
+	m.mu.RLock()
+	st := m.states[t.ID]
+	_, hasRuntime := m.cancelers[t.ID]
+	if st == nil {
+		m.mu.RUnlock()
+		return TaskCounters{TaskID: t.ID, HasRuntime: hasRuntime}
+	}
+	out := TaskCounters{
+		TaskID:     st.TaskID,
+		Status:     st.Status,
+		Total:      st.Total,
+		Processed:  st.Processed,
+		Success:    st.Success,
+		Fail:       st.Fail,
+		Realtime:   st.Realtime,
+		Completed:  st.Completed,
+		HasRuntime: hasRuntime,
+	}
+	m.mu.RUnlock()
+	return out
+}
+
 func (m *TaskManager) getOrCreateState(t model.Task) *taskState {
 	m.mu.RLock()
 	st := m.states[t.ID]
@@ -323,6 +364,11 @@ func (st *taskState) appendLogLocked(msg string) {
 	st.Logs = append(st.Logs, fmt.Sprintf("[%s] %s", ts, msg))
 	if len(st.Logs) > maxLogs {
 		st.Logs = st.Logs[len(st.Logs)-maxLogs:]
+	}
+	if st.TaskID > 0 {
+		global.BroadcastLog(fmt.Sprintf("[Task-%d] %s", st.TaskID, msg))
+	} else {
+		global.BroadcastLog(msg)
 	}
 }
 

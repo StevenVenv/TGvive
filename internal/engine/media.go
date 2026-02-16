@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,19 @@ import (
 var ErrUnsupportedMedia = errors.New("unsupported media")
 
 const tmpMediaRoot = "./tmp/tgmedia"
+
+type countingWriterAt struct {
+	dst     io.WriterAt
+	onWrite func(n int)
+}
+
+func (c countingWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	n, err := c.dst.WriteAt(p, off)
+	if n > 0 && c.onWrite != nil {
+		c.onWrite(n)
+	}
+	return n, err
+}
 
 type mediaKind uint8
 
@@ -690,9 +704,20 @@ func downloadMessageMedia(ctx context.Context, api *tg.Client, msg *tg.Message, 
 	if _, err := d.Download(api, loc).
 		WithThreads(4).
 		WithVerify(true).
-		Parallel(ctx, f); err != nil {
+		Parallel(ctx, countingWriterAt{
+			dst: f,
+			onWrite: func(n int) {
+				global.AddDownloadBytes(uint64(n))
+			},
+		}); err != nil {
 		_ = os.Remove(path)
 		return "", mediaMeta{}, nil, fmt.Errorf("download media to %q: %w", path, err)
+	}
+
+	if fi, err := f.Stat(); err == nil && fi != nil {
+		if sz := fi.Size(); sz > 0 {
+			global.BroadcastLog(fmt.Sprintf("Downloaded %s (%.1fMB)", filepath.Base(path), float64(sz)/1024.0/1024.0))
+		}
 	}
 
 	return path, meta, func() error { return os.Remove(path) }, nil

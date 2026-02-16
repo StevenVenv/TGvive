@@ -20,6 +20,9 @@ func main() {
 	}()
 	initialize.InitDB()
 
+	// Start dashboard monitor (CPU/mem/disk/net counters).
+	global.StartMonitor()
+
 	r := router.SetupRouter()
 	addr := fmt.Sprintf(":%d", global.Config.Server.Port)
 	global.Logger.Info("server starting", zap.String("addr", addr))

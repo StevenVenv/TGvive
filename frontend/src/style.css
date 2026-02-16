@@ -15,8 +15,12 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--el-bg-color-page, #f5f7fa);
+  background: #f5f7fa;
   color: var(--el-text-color-primary);
+}
+
+html.dark body {
+  background: #1e1e1e;
 }
 
 #app {
