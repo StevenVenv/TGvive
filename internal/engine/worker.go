@@ -26,7 +26,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		)
 	}
 
-	tgRT, err := m.ensureTelegram(ctx)
+	tgRT, err := m.ensureTelegramForTask(ctx, t)
 	if err != nil {
 		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: "+err.Error())
 		m.setStateStatus(taskID, runID, model.TaskStatusError)

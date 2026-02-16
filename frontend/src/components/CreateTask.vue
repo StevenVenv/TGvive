@@ -1,71 +1,142 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
-import type { FormInstance, FormRules } from 'element-plus'
+import axios from 'axios'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
 
-import { createTask, type Task } from '../api'
+type ApiResponse<T> = {
+  code: number
+  msg: string
+  data: T
+}
 
 const emit = defineEmits<{
-  (e: 'created', task: Task): void
+  (e: 'refresh'): void
 }>()
 
 const open = ref(false)
+const loading = ref(false)
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
+
+type AccountItem = {
+  key: string
+  name?: string
+  username?: string
+  phone?: string
+}
+
+type StrategyItem = {
+  ID: number
+  name: string
+  remark?: string
+}
+
+const accounts = ref<AccountItem[]>([])
+const strategies = ref<StrategyItem[]>([])
 
 const form = reactive({
   source_url: '',
   target_url: '',
-
-  clone_mode: 3,
-  content_types: ['text', 'image', 'video', 'audio', 'file'],
-
-  scope_type: 1,
-  scope_value: '',
-  history_order: 1,
-
-  keep_reply: false,
-  realtime: false,
-  clone_comment: false,
-  gpu_accel: false,
-  change_md5: false,
-
-  delay_min_ms: 1000,
-  delay_max_ms: 3000,
-
-  daily_limit: 0,
-  run_window: '',
+  session_key: '',
+  strategy_id: 0,
 })
 
 const rules: FormRules = {
   source_url: [{ required: true, message: '请输入源频道/群组', trigger: 'blur' }],
   target_url: [{ required: true, message: '请输入目标频道/群组', trigger: 'blur' }],
-  clone_mode: [{ required: true, message: '请选择克隆模式', trigger: 'change' }],
-  scope_type: [{ required: true, message: '请选择消息范围', trigger: 'change' }],
-  delay_min_ms: [{ type: 'number', required: true, message: '请输入最小延时', trigger: 'change' }],
-  delay_max_ms: [{ type: 'number', required: true, message: '请输入最大延时', trigger: 'change' }],
+  session_key: [{ required: true, message: '请选择执行账号', trigger: 'change' }],
+  strategy_id: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        const n = Number(v || 0)
+        if (n > 0) cb()
+        else cb(new Error('请选择策略模版'))
+      },
+      trigger: 'change',
+    },
+  ],
 }
 
 function resetForm() {
   form.source_url = ''
   form.target_url = ''
-  form.clone_mode = 3
-  form.content_types = ['text', 'image', 'video', 'audio', 'file']
-  form.scope_type = 1
-  form.scope_value = ''
-  form.history_order = 1
+  form.session_key = ''
+  form.strategy_id = 0
+}
 
-  form.keep_reply = false
-  form.realtime = false
-  form.clone_comment = false
-  form.gpu_accel = false
-  form.change_md5 = false
+const tokenStorageKey = 'tgvive_jwt_token'
 
-  form.delay_min_ms = 1000
-  form.delay_max_ms = 3000
+function getStoredToken(): string {
+  try {
+    return (localStorage.getItem(tokenStorageKey) || '').trim()
+  } catch {
+    return ''
+  }
+}
 
-  form.daily_limit = 0
-  form.run_window = ''
+async function apiGet<T>(path: string): Promise<T> {
+  const token = getStoredToken()
+  const res = await axios.get<ApiResponse<T>>(path, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')
+  return res.data.data
+}
+
+async function apiPost<T>(path: string, body: any): Promise<T> {
+  const token = getStoredToken()
+  const res = await axios.post<ApiResponse<T>>(path, body, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')
+  return res.data.data
+}
+
+function accountLabel(a: AccountItem): string {
+  const name = (a.name || '').trim()
+  if (name) return name
+  const u = (a.username || '').trim()
+  if (u) return u.startsWith('@') ? u : '@' + u
+  const p = (a.phone || '').trim()
+  if (p) return p
+  return a.key
+}
+
+function accountFileName(key: string): string {
+  key = (key || '').trim()
+  if (!key) return '-'
+  return `session_${key}.json`
+}
+
+const strategyTip = computed(() => {
+  const id = Number(form.strategy_id || 0)
+  if (!id) return ''
+  const s = strategies.value.find((x) => x.ID === id)
+  if (!s) return ''
+  const remark = (s.remark || '').trim()
+  return remark ? `备注：${remark}` : ''
+})
+
+async function loadOptions() {
+  loading.value = true
+  try {
+    const [acc, stg] = await Promise.all([apiGet<AccountItem[]>('/api/v1/accounts'), apiGet<StrategyItem[]>('/api/v1/strategies')])
+    accounts.value = acc || []
+    strategies.value = stg || []
+
+    const onlyAccount = accounts.value.length === 1 ? accounts.value[0] : undefined
+    if (!form.session_key && onlyAccount) form.session_key = onlyAccount.key
+
+    const onlyStrategy = strategies.value.length === 1 ? strategies.value[0] : undefined
+    if (!form.strategy_id && onlyStrategy) form.strategy_id = onlyStrategy.ID
+  } catch (err: any) {
+    ElMessage.error(err?.message || '初始化失败')
+    accounts.value = []
+    strategies.value = []
+  } finally {
+    loading.value = false
+  }
 }
 
 async function submit() {
@@ -79,45 +150,24 @@ async function submit() {
     return
   }
 
-  if (form.delay_min_ms < 0 || form.delay_max_ms < 0) {
-    ElMessage.error('延时不能为负数')
-    return
+  const payload = {
+    source_url: (form.source_url || '').trim(),
+    target_url: (form.target_url || '').trim(),
+    session_key: (form.session_key || '').trim(),
+    strategy_id: Number(form.strategy_id || 0),
   }
-  if (form.delay_max_ms < form.delay_min_ms) {
-    ElMessage.error('最大延时必须大于等于最小延时')
+
+  if (!payload.source_url || !payload.target_url || !payload.session_key || !payload.strategy_id) {
+    ElMessage.warning('请完整填写 4 个字段')
     return
   }
 
   submitting.value = true
   try {
-    const payload: Partial<Task> = {
-      source_url: form.source_url.trim(),
-      target_url: form.target_url.trim(),
-
-      clone_mode: form.clone_mode,
-      content_types: form.content_types,
-
-      scope_type: form.scope_type,
-      scope_value: form.scope_value.trim(),
-      history_order: form.history_order,
-
-      keep_reply: form.keep_reply,
-      realtime: form.realtime,
-      clone_comment: form.clone_comment,
-      gpu_accel: form.gpu_accel,
-      change_md5: form.change_md5,
-
-      delay_min_ms: form.delay_min_ms,
-      delay_max_ms: form.delay_max_ms,
-
-      daily_limit: form.daily_limit,
-      run_window: form.run_window.trim(),
-    }
-
-    const created = await createTask(payload)
-    ElMessage.success(`任务已创建 #${created.ID}`)
-    emit('created', created)
+    const created: any = await apiPost('/api/v1/tasks', payload)
+    ElMessage.success(`任务已创建 #${created?.ID ?? ''}`.trim())
     open.value = false
+    emit('refresh')
   } catch (err: any) {
     ElMessage.error(err?.message || '创建失败')
   } finally {
@@ -131,105 +181,56 @@ watch(open, (v) => {
     resetForm()
   }
 })
+
+onMounted(() => {
+  void loadOptions()
+})
 </script>
 
 <template>
   <el-button type="primary" @click="open = true">新建任务</el-button>
 
-  <el-dialog v-model="open" title="新建搬运任务" width="720px">
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
-      <el-form-item label="源频道/群组" prop="source_url">
-        <el-input v-model="form.source_url" placeholder="例如：https://t.me/source 或 @source" />
-      </el-form-item>
+  <el-dialog v-model="open" title="新建搬运任务" width="560px" class="bt-dialog">
+    <div v-loading="loading" class="body">
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
+        <el-form-item label="源频道 (Source)" prop="source_url">
+          <el-input v-model="form.source_url" placeholder="[可疑链接已删除]..." />
+        </el-form-item>
 
-      <el-form-item label="目标频道/群组" prop="target_url">
-        <el-input v-model="form.target_url" placeholder="例如：https://t.me/target 或 @target" />
-      </el-form-item>
+        <el-form-item label="目标频道 (Target)" prop="target_url">
+          <el-input v-model="form.target_url" placeholder="@channel_id" />
+        </el-form-item>
 
-      <el-divider />
+        <el-form-item label="执行账号 (Account)" prop="session_key">
+          <el-select v-model="form.session_key" placeholder="请选择执行账号" style="width: 100%" filterable>
+            <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
+              <div class="opt">
+                <div class="opt-left">
+                  <div class="opt-title">{{ accountLabel(a) }}</div>
+                  <div class="opt-sub">{{ accountFileName(a.key) }}</div>
+                </div>
+                <div class="opt-right muted">{{ a.username ? '@' + a.username : '' }}</div>
+              </div>
+            </el-option>
+          </el-select>
+          <div class="hint">值为 session_key（对应 sessions/session_*.json）</div>
+        </el-form-item>
 
-      <el-form-item label="克隆模式" prop="clone_mode">
-        <el-radio-group v-model="form.clone_mode">
-          <el-radio :label="1">转发</el-radio>
-          <el-radio :label="2">发送</el-radio>
-          <el-radio :label="3">下载上传</el-radio>
-        </el-radio-group>
-      </el-form-item>
-
-      <el-form-item label="内容类型">
-        <el-checkbox-group v-model="form.content_types">
-          <el-checkbox label="text">文本</el-checkbox>
-          <el-checkbox label="image">图片</el-checkbox>
-          <el-checkbox label="video">视频</el-checkbox>
-          <el-checkbox label="audio">语音/音频</el-checkbox>
-          <el-checkbox label="file">文件/贴纸</el-checkbox>
-        </el-checkbox-group>
-        <div class="hint">不选=全类型</div>
-      </el-form-item>
-
-      <el-form-item label="消息范围" prop="scope_type">
-        <el-select v-model="form.scope_type" style="width: 260px">
-          <el-option :value="1" label="全部" />
-          <el-option :value="2" label="最近 N 条" />
-          <el-option :value="3" label="时间范围" />
-          <el-option :value="4" label="ID 范围" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="范围参数" prop="scope_value">
-        <el-input
-          v-model="form.scope_value"
-          :placeholder="
-            form.scope_type === 2
-              ? '例如：100'
-              : form.scope_type === 3
-                ? '例如：2025-01-01~2025-01-31'
-                : form.scope_type === 4
-                  ? '例如：1000-2000'
-                  : '可留空'
-          "
-        />
-      </el-form-item>
-
-      <el-form-item label="历史方向">
-        <el-radio-group v-model="form.history_order">
-          <el-radio :label="1">从旧到新</el-radio>
-          <el-radio :label="2">从新到旧</el-radio>
-        </el-radio-group>
-      </el-form-item>
-
-      <el-divider />
-
-      <el-form-item label="随机延时 (ms)">
-        <div class="inline">
-          <el-input-number v-model="form.delay_min_ms" :min="0" :step="100" controls-position="right" />
-          <span class="sep">~</span>
-          <el-input-number v-model="form.delay_max_ms" :min="0" :step="100" controls-position="right" />
-        </div>
-        <div class="hint">每处理完一条消息后随机 sleep</div>
-      </el-form-item>
-
-      <el-form-item label="每日配额">
-        <el-input-number v-model="form.daily_limit" :min="0" :step="10" controls-position="right" />
-        <div class="hint">0 = 不限制</div>
-      </el-form-item>
-
-      <el-form-item label="运行窗口">
-        <el-input v-model="form.run_window" placeholder='例如：09:00-18:00（留空=全天）' style="max-width: 320px" />
-      </el-form-item>
-
-      <el-divider />
-
-      <el-form-item label="处理开关">
-        <el-space wrap>
-          <el-switch v-model="form.keep_reply" active-text="保留回复" />
-          <el-switch v-model="form.realtime" active-text="实时监控" />
-          <el-switch v-model="form.clone_comment" active-text="克隆评论" />
-          <el-switch v-model="form.gpu_accel" active-text="GPU 加速" />
-          <el-switch v-model="form.change_md5" active-text="修改 MD5" />
-        </el-space>
-      </el-form-item>
-    </el-form>
+        <el-form-item label="策略模版 (Strategy)" prop="strategy_id">
+          <el-select v-model="form.strategy_id" placeholder="请选择策略模版" style="width: 100%" filterable>
+            <el-option v-for="s in strategies" :key="s.ID" :label="s.name" :value="s.ID">
+              <div class="opt">
+                <div class="opt-left">
+                  <div class="opt-title">{{ s.name }}</div>
+                  <div v-if="s.remark" class="opt-sub">{{ s.remark }}</div>
+                </div>
+              </div>
+            </el-option>
+          </el-select>
+          <div v-if="strategyTip" class="hint">{{ strategyTip }}</div>
+        </el-form-item>
+      </el-form>
+    </div>
 
     <template #footer>
       <el-space>
@@ -240,20 +241,74 @@ watch(open, (v) => {
   </el-dialog>
 </template>
 
-<style scoped>
-.inline {
-  display: flex;
-  align-items: center;
+<style scoped lang="scss">
+.body {
+  padding: 4px 2px 0;
 }
 
-.sep {
-  padding: 0 8px;
-  color: #909399;
+.form :deep(.el-form-item) {
+  margin-bottom: 14px;
 }
 
 .hint {
-  margin-left: 12px;
+  margin-top: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
+}
+
+.muted {
+  color: var(--el-text-color-secondary);
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.opt-left {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.opt-title {
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.opt-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.opt-right {
+  flex: none;
+  font-size: 12px;
+}
+
+.bt-dialog {
+  :deep(.el-dialog) {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  :deep(.el-dialog__header) {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-right: 0;
+  }
+
+  :deep(.el-dialog__footer) {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
 }
 </style>

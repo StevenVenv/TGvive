@@ -18,6 +18,7 @@ func SetupRouter() *gin.Engine {
 	r.GET("/ping", v1.Ping)
 
 	taskApi := v1.TaskApi{}
+	strategyApi := v1.StrategyApi{}
 	authApi := v1.AuthApi{}
 	tgAuthApi := v1.TGAuthApi{}
 	dashboardApi := v1.DashboardApi{}
@@ -33,6 +34,9 @@ func SetupRouter() *gin.Engine {
 		apiV1.GET("/tg/qr", tgAuthApi.GetQRCode)
 		apiV1.GET("/tg/qr/status", tgAuthApi.CheckQRStatus)
 		apiV1.GET("/tg/qr/ws", tgAuthApi.QRWebSocket)
+
+		// Convenience alias for frontend: /accounts mirrors /tg/accounts.
+		apiV1.GET("/accounts", tgAuthApi.ListAccounts)
 
 		tgV1 := apiV1.Group("/tg")
 		// tgV1.Use(middleware.JWTAuth())
@@ -55,6 +59,15 @@ func SetupRouter() *gin.Engine {
 			taskV1.GET("", taskApi.GetTaskList)
 			taskV1.POST("/action", taskApi.UpdateTaskStatus)
 			taskV1.GET("/:id/progress", taskApi.GetTaskProgress)
+		}
+
+		strategyV1 := apiV1.Group("/strategies")
+		// strategyV1.Use(middleware.JWTAuth())
+		{
+			strategyV1.POST("", strategyApi.CreateStrategy)
+			strategyV1.GET("", strategyApi.GetStrategyList)
+			strategyV1.PUT("/:id", strategyApi.UpdateStrategy)
+			strategyV1.DELETE("/:id", strategyApi.DeleteStrategy)
 		}
 
 		dashV1 := apiV1.Group("/dashboard")

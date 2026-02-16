@@ -461,6 +461,10 @@ func (rt *telegramRuntime) shutdown() {
 }
 
 func (m *TaskManager) ensureTelegram(ctx context.Context) (*telegramRuntime, error) {
+	return m.ensureTelegramForTask(ctx, model.Task{})
+}
+
+func (m *TaskManager) ensureTelegramForTask(ctx context.Context, t model.Task) (*telegramRuntime, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -476,7 +480,7 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*telegramRuntime, err
 		return nil, err
 	}
 
-	sessionPath, err := pickSessionPath()
+	sessionPath, err := pickSessionPathForTask(t)
 	if err != nil {
 		return nil, err
 	}
@@ -490,6 +494,26 @@ func (m *TaskManager) ensureTelegram(ctx context.Context) (*telegramRuntime, err
 		return nil, err
 	}
 	return rt, nil
+}
+
+func pickSessionPathForTask(t model.Task) (string, error) {
+	key := strings.TrimSpace(t.ExecuteBy)
+	if key == "" {
+		return pickSessionPath()
+	}
+
+	path := GetSessionPathForKey(key)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("指定账号 session 不存在: %s", key)
+		}
+		return "", fmt.Errorf("检查账号 session 失败: %w", err)
+	}
+	if info == nil || info.IsDir() {
+		return "", fmt.Errorf("指定账号 session 无效: %s", path)
+	}
+	return path, nil
 }
 
 func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, apiID int, apiHash, sessionPath string) error {

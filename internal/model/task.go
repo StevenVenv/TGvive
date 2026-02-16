@@ -22,6 +22,12 @@ type Task struct {
 	SourceURL string `gorm:"type:varchar(255);not null" json:"source_url"` // 对方频道/群组
 	TargetURL string `gorm:"type:varchar(255);not null" json:"target_url"` // 自己频道/群组
 
+	// ExecuteBy 指定执行账号（session key，对应 sessions/session_{key}.json）。
+	ExecuteBy string `gorm:"type:varchar(64);default:'';index" json:"session_key"`
+
+	// StrategyID 关联策略模板（Strategy）。
+	StrategyID uint `gorm:"index;default:0" json:"strategy_id"`
+
 	// SourceChannelID 用于实时监听时的路由（SourceURL 解析后的数值 ID）
 	SourceChannelID int64 `gorm:"type:bigint;default:0;index" json:"source_channel_id"`
 

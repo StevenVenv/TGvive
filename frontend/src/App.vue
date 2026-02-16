@@ -7,24 +7,26 @@ import CreateTask from './components/CreateTask.vue'
 import TaskList from './components/TaskList.vue'
 import AccountManager from './components/AccountManager.vue'
 import Dashboard from './views/Dashboard.vue'
+import StrategyManager from './views/StrategyManager.vue'
 import Settings from './views/Settings.vue'
-import type { Task } from './api'
 
 const taskListRef = ref<InstanceType<typeof TaskList> | null>(null)
 const accountRef = ref<InstanceType<typeof AccountManager> | null>(null)
 const dashboardRef = ref<InstanceType<typeof Dashboard> | null>(null)
+const strategyRef = ref<InstanceType<typeof StrategyManager> | null>(null)
 const settingsRef = ref<InstanceType<typeof Settings> | null>(null)
 
 const storageViewKey = 'tgvive_ui_active_view'
 const storageCollapseKey = 'tgvive_ui_sidebar_collapse'
 const storageThemeKey = 'tgvive_ui_theme'
 
-type ActiveView = 'dashboard' | 'tasks' | 'accounts' | 'settings_proxy'
+type ActiveView = 'dashboard' | 'tasks' | 'strategies' | 'accounts' | 'settings_proxy'
 
 function getInitialView(): ActiveView {
   try {
     const saved = (localStorage.getItem(storageViewKey) || '').trim()
-    if (saved === 'dashboard' || saved === 'tasks' || saved === 'accounts' || saved === 'settings_proxy') return saved
+    if (saved === 'dashboard' || saved === 'tasks' || saved === 'strategies' || saved === 'accounts' || saved === 'settings_proxy')
+      return saved as ActiveView
   } catch {
     // ignore
   }
@@ -82,6 +84,8 @@ const pageTitle = computed(() => {
       return '系统仪表盘'
     case 'tasks':
       return '任务管理'
+    case 'strategies':
+      return '策略管理'
     case 'accounts':
       return '账号管理'
     case 'settings_proxy':
@@ -89,7 +93,7 @@ const pageTitle = computed(() => {
   }
 })
 
-function onCreated(_: Task) {
+function onRefreshTasks() {
   void taskListRef.value?.reloadTasks()
 }
 
@@ -104,6 +108,7 @@ async function refreshCurrent() {
     } else {
       if (activeView.value === 'accounts') await accountRef.value?.reloadAccounts()
       if (activeView.value === 'dashboard') dashboardRef.value?.refresh?.()
+      if (activeView.value === 'strategies') await strategyRef.value?.reload?.()
       if (activeView.value === 'settings_proxy') settingsRef.value?.reload?.()
     }
     ElMessage.success('已刷新')
@@ -117,7 +122,8 @@ function toggleTheme() {
 }
 
 function onMenuSelect(idx: string) {
-  if (idx === 'dashboard' || idx === 'tasks' || idx === 'accounts' || idx === 'settings_proxy') activeView.value = idx
+  if (idx === 'dashboard' || idx === 'tasks' || idx === 'strategies' || idx === 'accounts' || idx === 'settings_proxy')
+    activeView.value = idx as ActiveView
 }
 </script>
 
@@ -146,6 +152,10 @@ function onMenuSelect(idx: string) {
           <el-menu-item index="tasks">
             <el-icon><i class="ri-todo-line" /></el-icon>
             <span>任务管理</span>
+          </el-menu-item>
+          <el-menu-item index="strategies">
+            <el-icon><i class="ri-flow-chart-line" /></el-icon>
+            <span>策略管理</span>
           </el-menu-item>
           <el-menu-item index="accounts">
             <el-icon><i class="ri-user-3-line" /></el-icon>
@@ -187,7 +197,7 @@ function onMenuSelect(idx: string) {
         </div>
 
         <div class="header-right">
-          <CreateTask v-if="activeView === 'tasks'" @created="onCreated" />
+          <CreateTask v-if="activeView === 'tasks'" @refresh="onRefreshTasks" />
           <el-button class="icon-btn" @click="toggleTheme">
             <el-icon>
               <Moon v-if="theme === 'light'" />
@@ -206,6 +216,7 @@ function onMenuSelect(idx: string) {
         <div class="content" :class="{ wide: activeView === 'dashboard' }">
           <Dashboard v-if="activeView === 'dashboard'" ref="dashboardRef" />
           <TaskList v-if="activeView === 'tasks'" ref="taskListRef" :active="true" />
+          <StrategyManager v-if="activeView === 'strategies'" ref="strategyRef" />
           <AccountManager v-if="activeView === 'accounts'" ref="accountRef" />
           <Settings v-if="activeView === 'settings_proxy'" ref="settingsRef" />
         </div>

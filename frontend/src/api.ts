@@ -10,6 +10,8 @@ export type Task = {
   user_id?: number
   source_url: string
   target_url: string
+  session_key?: string
+  strategy_id?: number
   source_channel_id?: number
 
   clone_mode: number
@@ -35,6 +37,33 @@ export type Task = {
   status: number
   history_cursor?: number
   history_order?: number
+}
+
+export type Strategy = {
+  ID: number
+
+  user_id?: number
+  name: string
+  remark?: string
+
+  clone_mode: number
+  content_types: string[]
+
+  scope_type: number
+  scope_value: string
+  history_order?: number
+
+  keep_reply?: boolean
+  realtime?: boolean
+  clone_comment?: boolean
+  gpu_accel?: boolean
+  change_md5?: boolean
+
+  delay_min_ms?: number
+  delay_max_ms?: number
+
+  daily_limit?: number
+  run_window?: string
 }
 
 export type TaskProgress = {
@@ -120,6 +149,28 @@ export function createTask(payload: Partial<Task>): Promise<Task> {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function getStrategies(): Promise<Strategy[]> {
+  return apiFetch<Strategy[]>('/api/v1/strategies', { method: 'GET' })
+}
+
+export function createStrategy(payload: Partial<Strategy>): Promise<Strategy> {
+  return apiFetch<Strategy>('/api/v1/strategies', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateStrategy(id: number, payload: Partial<Strategy>): Promise<Strategy> {
+  return apiFetch<Strategy>(`/api/v1/strategies/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteStrategy(id: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/v1/strategies/${id}`, { method: 'DELETE' })
 }
 
 export function taskAction(id: number, action: 'start' | 'pause' | 'stop'): Promise<{ status: number; msg: string }> {

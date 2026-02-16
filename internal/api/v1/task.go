@@ -2,6 +2,7 @@ package v1
 
 import (
 	"strconv"
+	"strings"
 
 	"my-go-server/internal/engine"
 	"my-go-server/internal/model"
@@ -9,7 +10,6 @@ import (
 	"my-go-server/pkg/app"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 type TaskApi struct{}
@@ -20,19 +20,89 @@ type TaskActionReq struct {
 	Action string `json:"action" binding:"required,oneof=start stop pause"`
 }
 
+type CreateTaskReq struct {
+	SourceURL  string `json:"source_url" binding:"required"`
+	TargetURL  string `json:"target_url" binding:"required"`
+	SessionKey string `json:"session_key" binding:"required"`
+	StrategyID uint   `json:"strategy_id" binding:"required"`
+}
+
 // CreateTask 创建搬运任务
 func (a *TaskApi) CreateTask(c *gin.Context) {
-	var task model.Task
-	if err := c.ShouldBindJSON(&task); err != nil {
+	var req CreateTaskReq
+	if err := c.ShouldBindJSON(&req); err != nil {
 		app.FailWithMsg("配置参数格式错误: "+err.Error(), c)
 		return
 	}
 
-	task.Model = gorm.Model{}
-	task.UserID = getCurrentUserID(c)
-	if task.UserID == 0 {
+	userID := getCurrentUserID(c)
+	if userID == 0 {
 		app.FailWithMsg("未获取到用户信息", c)
 		return
+	}
+
+	req.SourceURL = strings.TrimSpace(req.SourceURL)
+	req.TargetURL = strings.TrimSpace(req.TargetURL)
+	req.SessionKey = strings.TrimSpace(req.SessionKey)
+
+	if req.SourceURL == "" || req.TargetURL == "" || req.SessionKey == "" || req.StrategyID == 0 {
+		app.FailWithMsg("创建参数不完整", c)
+		return
+	}
+
+	strategy, err := service.GetStrategyByID(userID, req.StrategyID)
+	if err != nil {
+		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
+		return
+	}
+
+	task := model.Task{
+		UserID:     userID,
+		SourceURL:  req.SourceURL,
+		TargetURL:  req.TargetURL,
+		ExecuteBy:  req.SessionKey,
+		StrategyID: req.StrategyID,
+
+		CloneMode:    strategy.CloneMode,
+		ContentTypes: strategy.ContentTypes,
+
+		ScopeType:  strategy.ScopeType,
+		ScopeValue: strings.TrimSpace(strategy.ScopeValue),
+
+		KeepReply:    strategy.KeepReply,
+		Realtime:     strategy.Realtime,
+		CloneComment: strategy.CloneComment,
+		GpuAccel:     strategy.GpuAccel,
+		ChangeMD5:    strategy.ChangeMD5,
+
+		DelayMinMs: strategy.DelayMinMs,
+		DelayMaxMs: strategy.DelayMaxMs,
+
+		DailyLimit: strategy.DailyLimit,
+		RunWindow:  strings.TrimSpace(strategy.RunWindow),
+
+		Status: model.TaskStatusStopped,
+
+		HistoryOrder: strategy.HistoryOrder,
+	}
+
+	if task.CloneMode == 0 {
+		task.CloneMode = 3
+	}
+	if task.ScopeType == 0 {
+		task.ScopeType = 1
+	}
+	if task.HistoryOrder == 0 {
+		task.HistoryOrder = 1
+	}
+	if task.DelayMinMs < 0 {
+		task.DelayMinMs = 0
+	}
+	if task.DelayMaxMs < task.DelayMinMs {
+		task.DelayMaxMs = task.DelayMinMs
+	}
+	if task.DailyLimit < 0 {
+		task.DailyLimit = 0
 	}
 
 	if err := service.CreateTask(&task); err != nil {
