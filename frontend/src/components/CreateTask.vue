@@ -44,6 +44,8 @@ const form = reactive({
   strategy_id: 0,
 })
 
+const selectedAccount = computed(() => accounts.value.find((a) => a.key === form.session_key) || null)
+
 const rules: FormRules = {
   source_url: [{ required: true, message: '请输入源频道/群组', trigger: 'blur' }],
   target_url: [{ required: true, message: '请输入目标频道/群组', trigger: 'blur' }],
@@ -192,7 +194,7 @@ onMounted(() => {
 <template>
   <el-button type="primary" @click="open = true">新建任务</el-button>
 
-  <el-dialog v-model="open" title="新建搬运任务" width="560px" class="bt-dialog">
+  <el-dialog v-model="open" title="新建转发任务" width="560px" class="bt-dialog">
     <div v-loading="loading" class="body">
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-form-item label="源频道 (Source)" prop="source_url">
@@ -211,6 +213,11 @@ onMounted(() => {
             filterable
             popper-class="tgvive-dark-popper"
           >
+            <template #prefix>
+              <div class="select-prefix">
+                <el-avatar class="select-avatar" :size="20" :src="selectedAccount?.avatar || ''" :icon="UserFilled" />
+              </div>
+            </template>
             <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
               <div class="opt">
                 <div class="opt-left">
@@ -283,6 +290,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
+  width: 100%;
 }
 
 .opt-left {
@@ -293,7 +301,11 @@ onMounted(() => {
 }
 
 .opt-avatar {
-  flex: none;
+  flex-shrink: 0;
+}
+
+.opt-avatar :deep(img) {
+  object-fit: cover;
 }
 
 .opt-meta {
@@ -324,6 +336,20 @@ onMounted(() => {
 .opt-right {
   flex: none;
   font-size: 12px;
+}
+
+.select-prefix {
+  display: flex;
+  align-items: center;
+}
+
+.select-avatar {
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
+:deep(.select-avatar img) {
+  object-fit: cover;
 }
 
 .bt-dialog {
@@ -381,6 +407,14 @@ onMounted(() => {
   color: rgba(191, 203, 217, 0.75);
 }
 
+:global(.tgvive-dark-popper .el-select-dropdown__item) {
+  height: auto;
+  line-height: normal;
+  padding: 8px 32px 8px 20px;
+  display: flex;
+  align-items: center;
+}
+
 :global(html.dark) .tgvive-dark-popper.el-select-dropdown {
   background: rgba(20, 20, 20, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -388,12 +422,6 @@ onMounted(() => {
 
 :global(html.dark) .tgvive-dark-popper .el-select-dropdown__item {
   color: rgba(191, 203, 217, 0.92);
-  height: auto;
-  line-height: normal;
-  padding-top: 8px;
-  padding-bottom: 8px;
-  display: flex;
-  align-items: center;
 }
 
 :global(html.dark) .tgvive-dark-popper .el-select-dropdown__item.is-hovering {

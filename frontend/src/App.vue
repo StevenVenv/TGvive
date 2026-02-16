@@ -189,31 +189,33 @@ function onMenuSelect(idx: string) {
 
     <el-container>
       <el-header class="header">
-        <div class="header-left">
-          <el-button text class="icon-btn" @click="toggleSidebar">
-            <el-icon><IconMenu /></el-icon>
-          </el-button>
-          <el-text class="title" tag="b">{{ pageTitle }}</el-text>
-        </div>
+        <div class="header-inner">
+          <div class="header-left">
+            <el-button text class="icon-btn" @click="toggleSidebar">
+              <el-icon><IconMenu /></el-icon>
+            </el-button>
+            <el-text class="title" tag="b">{{ pageTitle }}</el-text>
+          </div>
 
-        <div class="header-right">
-          <CreateTask v-if="activeView === 'tasks'" @refresh="onRefreshTasks" />
-          <el-button class="icon-btn" @click="toggleTheme">
-            <el-icon>
-              <Moon v-if="theme === 'light'" />
-              <Sunny v-else />
-            </el-icon>
-            {{ theme === 'dark' ? '日间' : '夜间' }}
-          </el-button>
-          <el-button class="icon-btn" @click="refreshCurrent">
-            <el-icon><RefreshRight /></el-icon>
-            刷新
-          </el-button>
+          <div class="header-right">
+            <CreateTask v-if="activeView === 'tasks'" @refresh="onRefreshTasks" />
+            <el-button class="icon-btn" @click="toggleTheme">
+              <el-icon>
+                <Moon v-if="theme === 'light'" />
+                <Sunny v-else />
+              </el-icon>
+              {{ theme === 'dark' ? '日间' : '夜间' }}
+            </el-button>
+            <el-button class="icon-btn" @click="refreshCurrent">
+              <el-icon><RefreshRight /></el-icon>
+              刷新
+            </el-button>
+          </div>
         </div>
       </el-header>
 
       <el-main class="main">
-        <div class="content" :class="{ wide: activeView === 'dashboard' }">
+        <div class="content">
           <Dashboard v-if="activeView === 'dashboard'" ref="dashboardRef" />
           <TaskList v-if="activeView === 'tasks'" ref="taskListRef" :active="true" />
           <StrategyManager v-if="activeView === 'strategies'" ref="strategyRef" />
@@ -287,12 +289,21 @@ function onMenuSelect(idx: string) {
 }
 
 .header {
+  padding: 0;
+  border-bottom: 1px solid var(--el-border-color);
+  background: var(--el-bg-color);
+}
+
+.header-inner {
+  height: 100%;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--el-border-color);
-  background: var(--el-bg-color);
 }
 
 .header-left {
@@ -323,11 +334,7 @@ function onMenuSelect(idx: string) {
 }
 
 .content {
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.content.wide {
   max-width: 1440px;
+  margin: 0 auto;
 }
 </style>

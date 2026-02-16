@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { getTaskProgress, getTasks, taskAction, type Task, type TaskProgress } from '../api'
@@ -13,9 +13,11 @@ const loading = ref(false)
 const progressMap = ref<Record<number, TaskProgress>>({})
 const autoRefresh = ref(true)
 
-const logDrawerOpen = ref(false)
-const logTask = ref<Task | null>(null)
-const logProgress = computed(() => (logTask.value ? progressMap.value[logTask.value.ID] : undefined))
+const selectedTaskId = ref<number>(0)
+const selectedTask = computed(() => tasks.value.find((t) => t.ID === selectedTaskId.value) || null)
+const logProgress = computed(() => (selectedTaskId.value ? progressMap.value[selectedTaskId.value] : undefined))
+const autoScroll = ref(true)
+const logBoxRef = ref<HTMLElement | null>(null)
 
 let pollTimer: number | undefined
 let logTimer: number | undefined
@@ -57,6 +59,9 @@ async function reloadTasks() {
   loading.value = true
   try {
     tasks.value = await getTasks()
+    if (selectedTaskId.value > 0 && !tasks.value.some((t) => t.ID === selectedTaskId.value)) {
+      selectedTaskId.value = 0
+    }
     await refreshProgress()
   } catch (err: any) {
     ElMessage.error(err?.message || '加载任务失败')
@@ -129,24 +134,34 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop') {
   }
 }
 
-function openLogs(task: Task) {
-  logTask.value = task
-  logDrawerOpen.value = true
+function selectTask(task: Task) {
+  if (!task?.ID) return
+  selectedTaskId.value = task.ID
   void refreshOne(task.ID)
-
-  if (logTimer) window.clearInterval(logTimer)
-  logTimer = window.setInterval(() => {
-    if (!logDrawerOpen.value || !logTask.value) return
-    void refreshOne(logTask.value.ID)
-  }, 1000)
 }
 
-function closeLogs() {
-  logDrawerOpen.value = false
+function stopLogPolling() {
   if (logTimer) {
     window.clearInterval(logTimer)
     logTimer = undefined
   }
+}
+
+function startLogPolling() {
+  stopLogPolling()
+  const id = selectedTaskId.value
+  if (id <= 0) return
+  logTimer = window.setInterval(() => {
+    if (props.active === false) return
+    if (selectedTaskId.value !== id) return
+    void refreshOne(id)
+  }, 1000)
+}
+
+function scrollLogsToBottom() {
+  const el = logBoxRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
 }
 
 function startPolling() {
@@ -172,7 +187,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopPolling()
-  closeLogs()
+  stopLogPolling()
 })
 
 watch(
@@ -180,12 +195,34 @@ watch(
   (v) => {
     if (v === false) {
       stopPolling()
-      closeLogs()
+      stopLogPolling()
       return
     }
     startPolling()
+    if (selectedTaskId.value > 0) startLogPolling()
   },
 )
+
+watch(selectedTaskId, (id) => {
+  if (props.active === false) return
+  if (id > 0) startLogPolling()
+  else stopLogPolling()
+})
+
+watch(
+  () => (logProgress.value?.logs?.length ?? 0),
+  async () => {
+    if (!autoScroll.value) return
+    await nextTick()
+    scrollLogsToBottom()
+  },
+)
+
+watch(autoScroll, async (v) => {
+  if (!v) return
+  await nextTick()
+  scrollLogsToBottom()
+})
 
 defineExpose({
   reloadTasks,
@@ -194,107 +231,231 @@ defineExpose({
 
 <template>
   <div class="task-list">
-    <div class="toolbar">
-      <div class="toolbar-left">
-        <el-button type="primary" @click="reloadTasks" :loading="loading">刷新</el-button>
-        <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动" />
-      </div>
-      <div class="toolbar-right">
-        <el-text type="info">共 {{ tasks.length }} 个任务</el-text>
-      </div>
-    </div>
-
-    <el-table :data="tasks" v-loading="loading" stripe style="width: 100%">
-      <el-table-column prop="ID" label="ID" width="80" />
-
-      <el-table-column label="源 / 目标" min-width="340">
-        <template #default="{ row }">
-          <div class="peers">
-            <div class="peer">
-              <el-text type="info">源：</el-text>
-              <el-text>{{ row.source_url }}</el-text>
+    <el-row :gutter="12">
+      <el-col :xs="24" :lg="16">
+        <el-card class="bt-card pane-card" shadow="never">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <i class="ri-todo-line" />
+                <span>任务管理</span>
+              </div>
+              <div class="card-sub">共 {{ tasks.length }} 个任务</div>
             </div>
-            <div class="peer">
-              <el-text type="info">目标：</el-text>
-              <el-text>{{ row.target_url }}</el-text>
+          </template>
+
+          <div class="pane">
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <el-button type="primary" @click="reloadTasks" :loading="loading">
+                  <i class="ri-refresh-line" />
+                  刷新
+                </el-button>
+                <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动" />
+              </div>
+              <div class="toolbar-right">
+                <el-text type="info">点击任务行查看右侧日志</el-text>
+              </div>
+            </div>
+
+            <div class="table-body">
+              <el-table
+                :data="tasks"
+                v-loading="loading"
+                stripe
+                highlight-current-row
+                row-key="ID"
+                :current-row-key="selectedTaskId || undefined"
+                height="100%"
+                style="width: 100%"
+                @row-click="selectTask"
+              >
+                <el-table-column prop="ID" label="ID" width="80" />
+
+                <el-table-column label="源 / 目标" min-width="320">
+                  <template #default="{ row }">
+                    <div class="peers">
+                      <div class="peer">
+                        <el-text type="info">源：</el-text>
+                        <el-text>{{ row.source_url }}</el-text>
+                      </div>
+                      <div class="peer">
+                        <el-text type="info">目标：</el-text>
+                        <el-text>{{ row.target_url }}</el-text>
+                      </div>
+                    </div>
+                  </template>
+                </el-table-column>
+
+                <el-table-column label="状态" width="120">
+                  <template #default="{ row }">
+                    <el-tag :type="statusTagType(row)">{{ statusText(row) }}</el-tag>
+                  </template>
+                </el-table-column>
+
+                <el-table-column label="进度" min-width="220">
+                  <template #default="{ row }">
+                    <el-progress :percentage="progressMap[row.ID]?.progress_pct ?? 0" :stroke-width="10" />
+                    <div class="sub">
+                      <el-text type="info">{{ progressMap[row.ID]?.speed ?? '0 消息/秒' }}</el-text>
+                      <el-text type="info">
+                        成功 {{ progressMap[row.ID]?.success_cnt ?? 0 }} / 失败 {{ progressMap[row.ID]?.fail_cnt ?? 0 }}
+                      </el-text>
+                    </div>
+                  </template>
+                </el-table-column>
+
+                <el-table-column label="配额" width="160">
+                  <template #default="{ row }">
+                    <div class="quota">
+                      <el-text>
+                        今日 {{ row.today_count ?? 0 }} / {{ row.daily_limit && row.daily_limit > 0 ? row.daily_limit : '∞' }}
+                      </el-text>
+                      <el-text type="info">{{ row.run_window || '全天' }}</el-text>
+                    </div>
+                  </template>
+                </el-table-column>
+
+                <el-table-column label="操作" width="260" fixed="right">
+                  <template #default="{ row }">
+                    <el-space>
+                      <el-button size="small" type="success" @click.stop="doAction(row, 'start')">启动</el-button>
+                      <el-button size="small" type="warning" @click.stop="doAction(row, 'pause')">暂停</el-button>
+                      <el-button size="small" type="danger" @click.stop="doAction(row, 'stop')">停止</el-button>
+                      <el-button size="small" @click.stop="selectTask(row)">日志</el-button>
+                    </el-space>
+                  </template>
+                </el-table-column>
+              </el-table>
             </div>
           </div>
-        </template>
-      </el-table-column>
+        </el-card>
+      </el-col>
 
-      <el-table-column label="状态" width="120">
-        <template #default="{ row }">
-          <el-tag :type="statusTagType(row)">{{ statusText(row) }}</el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="进度" min-width="220">
-        <template #default="{ row }">
-          <el-progress :percentage="progressMap[row.ID]?.progress_pct ?? 0" :stroke-width="10" />
-          <div class="sub">
-            <el-text type="info">{{ progressMap[row.ID]?.speed ?? '0 消息/秒' }}</el-text>
-            <el-text type="info">
-              成功 {{ progressMap[row.ID]?.success_cnt ?? 0 }} / 失败 {{ progressMap[row.ID]?.fail_cnt ?? 0 }}
-            </el-text>
-          </div>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="配额" width="160">
-        <template #default="{ row }">
-          <div class="quota">
-            <el-text>
-              今日 {{ row.today_count ?? 0 }} / {{ row.daily_limit && row.daily_limit > 0 ? row.daily_limit : '∞' }}
-            </el-text>
-            <el-text type="info">{{ row.run_window || '全天' }}</el-text>
-          </div>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="操作" width="260" fixed="right">
-        <template #default="{ row }">
-          <el-space>
-            <el-button size="small" type="success" @click="doAction(row, 'start')">启动</el-button>
-            <el-button size="small" type="warning" @click="doAction(row, 'pause')">暂停</el-button>
-            <el-button size="small" type="danger" @click="doAction(row, 'stop')">停止</el-button>
-            <el-button size="small" @click="openLogs(row)">日志</el-button>
-          </el-space>
-        </template>
-      </el-table-column>
-    </el-table>
-
-    <el-drawer v-model="logDrawerOpen" title="实时日志" size="40%" @close="closeLogs">
-      <template #default>
-        <div v-if="!logTask" class="empty">请选择一个任务</div>
-        <div v-else>
-          <div class="drawer-head">
-            <div class="drawer-title">
-              <el-text>#{{ logTask.ID }}</el-text>
-              <el-tag class="ml8" :type="statusTagType(logTask)">{{ statusText(logTask) }}</el-tag>
+      <el-col :xs="24" :lg="8">
+        <el-card class="bt-card pane-card" shadow="never">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <i class="ri-terminal-box-line" />
+                <span>实时日志</span>
+              </div>
+              <div class="card-sub">
+                <span v-if="selectedTask">#{{ selectedTask.ID }}</span>
+                <span v-else>—</span>
+              </div>
             </div>
-            <el-button size="small" @click="refreshOne(logTask.ID)">刷新</el-button>
-          </div>
+          </template>
 
-          <div class="drawer-meta">
-            <el-text type="info">源：{{ logTask.source_url }}</el-text>
-            <el-text type="info">目标：{{ logTask.target_url }}</el-text>
-          </div>
+          <div class="pane">
+            <div v-if="!selectedTask" class="empty-wrap">
+              <el-empty description="请选择任务查看日志" />
+            </div>
 
-          <el-divider />
+            <div v-else class="log-pane">
+              <div class="log-head">
+                <div class="log-title">
+                  <el-text>#{{ selectedTask.ID }}</el-text>
+                  <el-tag class="ml8" :type="statusTagType(selectedTask)">{{ statusText(selectedTask) }}</el-tag>
+                </div>
+                <el-space size="small">
+                  <el-button size="small" @click="refreshOne(selectedTask.ID)">
+                    <i class="ri-refresh-line" />
+                    刷新
+                  </el-button>
+                  <el-switch v-model="autoScroll" active-text="自动滚动" />
+                </el-space>
+              </div>
 
-          <div class="logs">
-            <div v-if="(logProgress?.logs?.length ?? 0) === 0" class="empty">暂无日志</div>
-            <pre v-else class="log-pre"><code>{{ logProgress?.logs?.join('\n') }}</code></pre>
+              <div class="log-meta">
+                <el-text type="info">源：{{ selectedTask.source_url }}</el-text>
+                <el-text type="info">目标：{{ selectedTask.target_url }}</el-text>
+              </div>
+
+              <el-divider />
+
+              <div ref="logBoxRef" class="log-console">
+                <div v-if="(logProgress?.logs?.length ?? 0) === 0" class="log-empty">暂无日志</div>
+                <pre v-else class="log-pre"><code>{{ logProgress?.logs?.join('\n') }}</code></pre>
+              </div>
+            </div>
           </div>
-        </div>
-      </template>
-    </el-drawer>
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <style scoped>
 .task-list {
   width: 100%;
+}
+
+.bt-card {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.bt-card :deep(.el-card__header) {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.bt-card :deep(.el-card__body) {
+  padding: 14px;
+}
+
+.pane-card {
+  height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-card :deep(.el-card__body) {
+  flex: 1;
+  overflow: hidden;
+}
+
+.pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.table-body {
+  flex: 1;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.card-title i {
+  font-size: 16px;
+  color: #409eff;
+}
+
+.card-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .toolbar {
@@ -335,48 +496,67 @@ defineExpose({
   gap: 6px;
 }
 
-.drawer-head {
+.empty-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.log-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
-.drawer-title {
+.log-title {
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .ml8 {
   margin-left: 8px;
 }
 
-.drawer-meta {
+.log-meta {
   margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.logs {
-  height: calc(100vh - 260px);
+.log-console {
+  flex: 1;
   overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #000;
+  padding: 12px;
 }
 
 .log-pre {
   margin: 0;
-  padding: 12px;
-  background: #0b1020;
-  color: #d4d7dd;
-  border-radius: 8px;
+  color: #67c23a;
   font-size: 12px;
   line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.empty {
-  padding: 12px;
-  color: #909399;
+.log-empty {
+  font-size: 12px;
+  color: rgba(191, 203, 217, 0.6);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 </style>
