@@ -80,6 +80,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			Task:       task,
 			RunID:      runID,
 			Ctx:        ctx,
+			SourcePeer: sourcePeer,
 			TargetPeer: targetPeer,
 		}, sourceChannelID)
 		<-ctx.Done()

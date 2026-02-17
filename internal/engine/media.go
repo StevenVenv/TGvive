@@ -16,6 +16,7 @@ import (
 	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
 )
 
@@ -250,7 +251,7 @@ func (m *TaskManager) SendAlbum(ctx context.Context, api *tg.Client, msgs []*tg.
 }
 
 // SendUploadedMedia sends a single media message by downloading to local disk and uploading back (CloneMode=3).
-func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) error {
+func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, task model.Task, peer tg.InputPeerClass) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -264,7 +265,7 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, msg
 		return nil
 	}
 
-	localPath, meta, cleanup, err := m.DownloadFile(ctx, api, msg, task.ID)
+	localPath, meta, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
 		return err
 	}
@@ -388,7 +389,7 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, msg
 
 // SendUploadedAlbum sends grouped media by downloading and re-uploading (CloneMode=3).
 // Only the first item keeps caption/entities.
-func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) error {
+func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -414,7 +415,7 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 	case 0:
 		return nil
 	case 1:
-		return m.SendUploadedMedia(ctx, api, mediaMsgs[0], task, peer)
+		return m.SendUploadedMedia(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
 	}
 
 	ups := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
@@ -432,7 +433,7 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 	procs := m.processors()
 
 	for _, msg := range mediaMsgs {
-		localPath, meta, cleanup, err := m.DownloadFile(ctx, api, msg, task.ID)
+		localPath, meta, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
 			return err
 		}
@@ -550,7 +551,7 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, msg
 		return nil
 	}
 	if len(ups) == 1 {
-		return m.SendUploadedMedia(ctx, api, mediaMsgs[0], task, peer)
+		return m.SendUploadedMedia(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
 	}
 
 	// Caption/entities only on the first item.
@@ -613,6 +614,132 @@ func convertMessageMediaToInput(m tg.MessageMediaClass) (tg.InputMediaClass, err
 }
 
 func downloadMessageMedia(ctx context.Context, api *tg.Client, msg *tg.Message, taskID uint) (localPath string, meta mediaMeta, cleanup func() error, err error) {
+	return downloadMessageMediaWithPeer(ctx, api, nil, msg, taskID)
+}
+
+type mediaDownloadSpec struct {
+	loc      tg.InputFileLocationClass
+	baseName string
+	meta     mediaMeta
+}
+
+func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
+	if msg == nil || msg.Media == nil {
+		return mediaDownloadSpec{}, ErrUnsupportedMedia
+	}
+
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		if media.Photo == nil {
+			return mediaDownloadSpec{}, ErrUnsupportedMedia
+		}
+		photo, ok := media.Photo.AsNotEmpty()
+		if !ok {
+			return mediaDownloadSpec{}, ErrUnsupportedMedia
+		}
+
+		thumb, ok := bestPhotoThumbType(photo)
+		if !ok {
+			return mediaDownloadSpec{}, ErrUnsupportedMedia
+		}
+		loc := &tg.InputPhotoFileLocation{
+			ID:            photo.ID,
+			AccessHash:    photo.AccessHash,
+			FileReference: photo.FileReference,
+			ThumbSize:     thumb,
+		}
+
+		return mediaDownloadSpec{
+			loc:      loc,
+			baseName: fmt.Sprintf("photo_%d.jpg", photo.ID),
+			meta: mediaMeta{
+				Kind:       mediaKindPhoto,
+				Spoiler:    media.Spoiler,
+				TTLSeconds: media.TTLSeconds,
+			},
+		}, nil
+
+	case *tg.MessageMediaDocument:
+		if media.Document == nil {
+			return mediaDownloadSpec{}, ErrUnsupportedMedia
+		}
+		doc, ok := media.Document.AsNotEmpty()
+		if !ok {
+			return mediaDownloadSpec{}, ErrUnsupportedMedia
+		}
+
+		baseName := ""
+		if name, ok := findDocumentFilename(doc.Attributes); ok {
+			baseName = sanitizeFilename(name)
+		}
+		if baseName == "" {
+			baseName = fmt.Sprintf("doc_%d.bin", doc.ID)
+		}
+
+		attrs := make([]tg.DocumentAttributeClass, len(doc.Attributes))
+		copy(attrs, doc.Attributes)
+
+		return mediaDownloadSpec{
+			loc:      doc.AsInputDocumentFileLocation(),
+			baseName: baseName,
+			meta: mediaMeta{
+				Kind:       mediaKindDocument,
+				Spoiler:    media.Spoiler,
+				TTLSeconds: media.TTLSeconds,
+				MimeType:   strings.TrimSpace(doc.MimeType),
+				Attributes: attrs,
+				Filename:   baseName,
+			},
+		}, nil
+	default:
+		return mediaDownloadSpec{}, ErrUnsupportedMedia
+	}
+}
+
+func isFileLocationRefreshable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return tgerr.Is(err, "LOCATION_INVALID") ||
+		tgerr.Is(err, "FILE_REFERENCE_EXPIRED") ||
+		tgerr.Is(err, "FILE_REFERENCE_EMPTY") ||
+		tgerr.Is(err, "FILE_REFERENCE_INVALID")
+}
+
+func refreshMessageForDownload(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if api == nil {
+		return nil, errors.New("tg api is nil")
+	}
+	if msgID <= 0 {
+		return nil, errors.New("message id is required")
+	}
+
+	var r tg.MessagesMessagesClass
+	var err error
+
+	if ch, ok := sourcePeer.(*tg.InputPeerChannel); ok && ch != nil {
+		r, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}},
+		})
+	} else {
+		r, err = api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}})
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	msgs := extractTGMessages(r)
+	if len(msgs) == 0 || msgs[0] == nil {
+		return nil, errors.New("refresh message returned empty result")
+	}
+	return msgs[0], nil
+}
+
+func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, taskID uint) (localPath string, meta mediaMeta, cleanup func() error, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", mediaMeta{}, nil, err
 	}
@@ -628,99 +755,63 @@ func downloadMessageMedia(ctx context.Context, api *tg.Client, msg *tg.Message, 
 		return "", mediaMeta{}, nil, err
 	}
 
-	var (
-		loc      tg.InputFileLocationClass
-		baseName string
-	)
-
-	switch media := msg.Media.(type) {
-	case *tg.MessageMediaPhoto:
-		if media.Photo == nil {
-			return "", mediaMeta{}, nil, ErrUnsupportedMedia
-		}
-		photo, ok := media.Photo.AsNotEmpty()
-		if !ok {
-			return "", mediaMeta{}, nil, ErrUnsupportedMedia
+	downloadOnce := func(cur *tg.Message, afterRefresh bool) (string, mediaMeta, func() error, error) {
+		spec, err := buildMediaDownloadSpec(cur)
+		if err != nil {
+			return "", mediaMeta{}, nil, err
 		}
 
-		thumb, ok := bestPhotoThumbType(photo)
-		if !ok {
-			return "", mediaMeta{}, nil, ErrUnsupportedMedia
+		f, path, err := createUniqueFile(dir, sanitizeFilename(spec.baseName))
+		if err != nil {
+			return "", mediaMeta{}, nil, err
 		}
-		loc = &tg.InputPhotoFileLocation{
-			ID:            photo.ID,
-			AccessHash:    photo.AccessHash,
-			FileReference: photo.FileReference,
-			ThumbSize:     thumb,
+		defer func() { _ = f.Close() }()
+
+		d := downloader.NewDownloader()
+		if _, err := d.Download(api, spec.loc).
+			WithThreads(4).
+			WithVerify(true).
+			Parallel(ctx, countingWriterAt{
+				dst: f,
+				onWrite: func(n int) {
+					global.AddDownloadBytes(uint64(n))
+				},
+			}); err != nil {
+			_ = os.Remove(path)
+			if afterRefresh {
+				return "", mediaMeta{}, nil, fmt.Errorf("download media to %q after refresh: %w", path, err)
+			}
+			return "", mediaMeta{}, nil, fmt.Errorf("download media to %q: %w", path, err)
 		}
 
-		baseName = fmt.Sprintf("photo_%d.jpg", photo.ID)
-		meta = mediaMeta{
-			Kind:       mediaKindPhoto,
-			Spoiler:    media.Spoiler,
-			TTLSeconds: media.TTLSeconds,
-		}
-	case *tg.MessageMediaDocument:
-		if media.Document == nil {
-			return "", mediaMeta{}, nil, ErrUnsupportedMedia
-		}
-		doc, ok := media.Document.AsNotEmpty()
-		if !ok {
-			return "", mediaMeta{}, nil, ErrUnsupportedMedia
-		}
-		loc = doc.AsInputDocumentFileLocation()
-
-		if name, ok := findDocumentFilename(doc.Attributes); ok {
-			baseName = sanitizeFilename(name)
-		}
-		if baseName == "" {
-			baseName = fmt.Sprintf("doc_%d.bin", doc.ID)
+		if fi, err := f.Stat(); err == nil && fi != nil {
+			if sz := fi.Size(); sz > 0 {
+				global.BroadcastLog(fmt.Sprintf("Downloaded %s (%.1fMB)", filepath.Base(path), float64(sz)/1024.0/1024.0))
+			}
 		}
 
-		attrs := make([]tg.DocumentAttributeClass, len(doc.Attributes))
-		copy(attrs, doc.Attributes)
-
-		meta = mediaMeta{
-			Kind:       mediaKindDocument,
-			Spoiler:    media.Spoiler,
-			TTLSeconds: media.TTLSeconds,
-			MimeType:   strings.TrimSpace(doc.MimeType),
-			Attributes: attrs,
-			Filename:   baseName,
-		}
-	default:
-		return "", mediaMeta{}, nil, ErrUnsupportedMedia
+		return path, spec.meta, func() error { return os.Remove(path) }, nil
 	}
 
-	f, path, err := createUniqueFile(dir, sanitizeFilename(baseName))
-	if err != nil {
+	path, meta, cleanup, err := downloadOnce(msg, false)
+	if err == nil {
+		return path, meta, cleanup, nil
+	}
+
+	if sourcePeer == nil || !isFileLocationRefreshable(err) || msg == nil || msg.ID <= 0 {
 		return "", mediaMeta{}, nil, err
 	}
-	defer func() {
-		_ = f.Close()
-	}()
 
-	d := downloader.NewDownloader()
-	if _, err := d.Download(api, loc).
-		WithThreads(4).
-		WithVerify(true).
-		Parallel(ctx, countingWriterAt{
-			dst: f,
-			onWrite: func(n int) {
-				global.AddDownloadBytes(uint64(n))
-			},
-		}); err != nil {
-		_ = os.Remove(path)
-		return "", mediaMeta{}, nil, fmt.Errorf("download media to %q: %w", path, err)
+	global.BroadcastLog(fmt.Sprintf("[WARN] Media LOCATION_INVALID, refreshing file reference then retry (msg_id=%d)", msg.ID))
+	refreshed, rerr := refreshMessageForDownload(ctx, api, sourcePeer, msg.ID)
+	if rerr != nil || refreshed == nil {
+		return "", mediaMeta{}, nil, err
+	}
+	if refreshed.Media == nil {
+		return "", mediaMeta{}, nil, err
 	}
 
-	if fi, err := f.Stat(); err == nil && fi != nil {
-		if sz := fi.Size(); sz > 0 {
-			global.BroadcastLog(fmt.Sprintf("Downloaded %s (%.1fMB)", filepath.Base(path), float64(sz)/1024.0/1024.0))
-		}
-	}
-
-	return path, meta, func() error { return os.Remove(path) }, nil
+	return downloadOnce(refreshed, true)
 }
 
 func uploadAsInputMediaUploaded(meta mediaMeta, inputFile tg.InputFileClass) tg.InputMediaClass {

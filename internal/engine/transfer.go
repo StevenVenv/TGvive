@@ -48,6 +48,13 @@ func (m *TaskManager) DownloadFile(ctx context.Context, api *tg.Client, msg *tg.
 	return downloadMessageMedia(ctx, api, msg, taskID)
 }
 
+// DownloadFileWithPeer downloads Photo/Document media from msg into a local file and returns (path, meta, cleanup).
+// It uses sourcePeer for channel file-reference refresh on transient LOCATION_INVALID / FILE_REFERENCE_EXPIRED errors.
+func (m *TaskManager) DownloadFileWithPeer(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, taskID uint) (localPath string, meta mediaMeta, cleanup func() error, err error) {
+	_ = m
+	return downloadMessageMediaWithPeer(ctx, api, sourcePeer, msg, taskID)
+}
+
 // UploadFile uploads localPath to Telegram and returns the InputFile.
 func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath string) (tg.InputFileClass, error) {
 	_ = m

@@ -30,7 +30,8 @@ function emptyModel(): StrategyFormModel {
     remark: '',
 
     clone_mode: 3,
-    content_types: ['text', 'image', 'video', 'audio', 'file'],
+    // empty = 全类型（不做过滤）
+    content_types: [],
 
     scope_type: 1,
     scope_value: '',
@@ -327,56 +328,36 @@ onMounted(() => {
       </el-tab-pane>
 
       <el-tab-pane label="新建策略" name="create">
-        <el-row :gutter="12">
-          <el-col :xs="24" :lg="14">
-            <el-card class="bt-card pane-card" shadow="never">
-              <template #header>
-                <div class="card-header">
-                  <div class="card-title">
-                    <i class="ri-add-circle-line" />
-                    <span>创建新策略模版</span>
-                  </div>
-                  <div class="card-sub">Create New</div>
+        <div class="create-wrap">
+          <el-card class="bt-card pane-card" shadow="never">
+            <template #header>
+              <div class="card-header">
+                <div class="card-title">
+                  <i class="ri-add-circle-line" />
+                  <span>创建新策略模版</span>
                 </div>
-              </template>
-
-              <div class="pane form-host">
-                <StrategyForm ref="createFormRef" v-model="createModel" :loading="createSaving">
-                  <template #actions>
-                    <el-space>
-                      <el-button @click="resetCreate">
-                        <i class="ri-refresh-line" />
-                        重置
-                      </el-button>
-                      <el-button type="primary" :loading="createSaving" @click="submitCreate">
-                        <i class="ri-add-line" />
-                        创建
-                      </el-button>
-                    </el-space>
-                  </template>
-                </StrategyForm>
+                <div class="card-sub">Create New</div>
               </div>
-            </el-card>
-          </el-col>
+            </template>
 
-          <el-col :xs="24" :lg="10">
-            <el-card class="bt-card pane-card" shadow="never">
-              <template #header>
-                <div class="card-header">
-                  <div class="card-title">
-                    <i class="ri-bug-line" />
-                    <span>调试 / 预览</span>
-                  </div>
-                  <div class="card-sub">Reserved</div>
-                </div>
-              </template>
-
-              <div class="pane preview">
-                <el-empty description="预留区域（未来接入调试面板 / 预览）" />
-              </div>
-            </el-card>
-          </el-col>
-        </el-row>
+            <div class="pane form-host">
+              <StrategyForm ref="createFormRef" v-model="createModel" :loading="createSaving">
+                <template #actions>
+                  <el-space>
+                    <el-button @click="resetCreate">
+                      <i class="ri-refresh-line" />
+                      重置
+                    </el-button>
+                    <el-button type="primary" :loading="createSaving" @click="submitCreate">
+                      <i class="ri-add-line" />
+                      创建
+                    </el-button>
+                  </el-space>
+                </template>
+              </StrategyForm>
+            </div>
+          </el-card>
+        </div>
       </el-tab-pane>
     </el-tabs>
 
@@ -407,6 +388,14 @@ onMounted(() => {
 <style scoped lang="scss">
 .strategy-manager {
   width: 100%;
+  --tgvive-green: #20a53a;
+  --el-color-primary: var(--tgvive-green);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--tgvive-green) 80%, #000);
+  --el-color-primary-light-3: color-mix(in srgb, var(--tgvive-green) 70%, #fff);
+  --el-color-primary-light-5: color-mix(in srgb, var(--tgvive-green) 50%, #fff);
+  --el-color-primary-light-7: color-mix(in srgb, var(--tgvive-green) 30%, #fff);
+  --el-color-primary-light-8: color-mix(in srgb, var(--tgvive-green) 20%, #fff);
+  --el-color-primary-light-9: color-mix(in srgb, var(--tgvive-green) 10%, #fff);
 }
 
 .bt-tabs :deep(.el-tabs__header) {
@@ -414,13 +403,14 @@ onMounted(() => {
 }
 
 .bt-card {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid #363637;
+  border-radius: 4px;
+  background: #252525;
 
   :deep(.el-card__header) {
     padding: 12px 14px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    background: rgba(0, 0, 0, 0.18);
+    border-bottom: 1px solid #363637;
+    background: #252525;
   }
 
   :deep(.el-card__body) {
@@ -451,16 +441,14 @@ onMounted(() => {
   gap: 12px;
 }
 
+.create-wrap {
+  width: 100%;
+  max-width: none;
+}
+
 .form-host {
   flex: 1;
   overflow: hidden;
-}
-
-.preview {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .table-body {
@@ -484,7 +472,7 @@ onMounted(() => {
 
   i {
     font-size: 16px;
-    color: #409eff;
+    color: var(--el-color-primary);
   }
 }
 

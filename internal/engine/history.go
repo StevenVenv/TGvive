@@ -280,35 +280,35 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					j++
 				}
 
-					// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
-					if len(group) > 0 {
-						need := quotaSendableAlbumCount(m, group, allowedTypes)
-						if skipped := len(group) - need; skipped > 0 {
-							global.AddFiltered(uint64(skipped))
-						}
-						if need > 0 {
-							if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
-								return err
-							}
-						}
-						if err := processWithRetry(ctx, func() error {
-							return m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes)
-						}); err != nil {
-							if need > 0 {
-								global.AddFail(uint64(need))
-							} else {
-								global.IncFail()
-							}
+				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
+				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if skipped := len(group) - need; skipped > 0 {
+						global.AddFiltered(uint64(skipped))
+					}
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
 							return err
 						}
+					}
+					if err := processWithRetry(ctx, func() error {
+						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
+					}); err != nil {
 						if need > 0 {
-							global.AddSuccess(uint64(need))
+							global.AddFail(uint64(need))
+						} else {
+							global.IncFail()
 						}
-						if need > 0 {
-							if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
-								return err
-							}
+						return err
+					}
+					if need > 0 {
+						global.AddSuccess(uint64(need))
+					}
+					if need > 0 {
+						if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+							return err
 						}
+					}
 					cursor = maxInGroup
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
@@ -322,14 +322,14 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				continue
 			}
 
-				if allowedTypes != nil {
-					ct := m.DetectContentType(msg)
-					if _, ok := allowedTypes[ct]; !ok {
-						global.IncFiltered()
-						cursor = msg.ID
-						if err := persistHistoryCursor(task.ID, cursor); err != nil {
-							return err
-						}
+			if allowedTypes != nil {
+				ct := m.DetectContentType(msg)
+				if _, ok := allowedTypes[ct]; !ok {
+					global.IncFiltered()
+					cursor = msg.ID
+					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+						return err
+					}
 					processed++
 					advanced = true
 					i++
@@ -343,24 +343,24 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					return err
 				}
 			}
-				if err := processWithRetry(ctx, func() error {
-					return m.processSingleMessage(ctx, api, targetPeer, task, msg)
-				}); err != nil {
-					if need > 0 {
-						global.AddFail(uint64(need))
-					} else {
-						global.IncFail()
-					}
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msg)
+			}); err != nil {
+				if need > 0 {
+					global.AddFail(uint64(need))
+				} else {
+					global.IncFail()
+				}
+				return err
+			}
+			if need > 0 {
+				global.AddSuccess(uint64(need))
+			}
+			if need > 0 {
+				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
 					return err
 				}
-				if need > 0 {
-					global.AddSuccess(uint64(need))
-				}
-				if need > 0 {
-					if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
-						return err
-					}
-				}
+			}
 			cursor = msg.ID
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {
 				return err
@@ -511,33 +511,33 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					j++
 				}
 
-					if len(group) > 0 {
-						need := quotaSendableAlbumCount(m, group, allowedTypes)
-						if skipped := len(group) - need; skipped > 0 {
-							global.AddFiltered(uint64(skipped))
-						}
-						if need > 0 {
-							if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
-								return err
-							}
+				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if skipped := len(group) - need; skipped > 0 {
+						global.AddFiltered(uint64(skipped))
 					}
-						if err := processWithRetry(ctx, func() error {
-							return m.processAlbumBatch(ctx, api, targetPeer, task, group, allowedTypes)
-						}); err != nil {
-							if need > 0 {
-								global.AddFail(uint64(need))
-							} else {
-								global.IncFail()
-							}
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
 							return err
 						}
+					}
+					if err := processWithRetry(ctx, func() error {
+						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
+					}); err != nil {
 						if need > 0 {
-							global.AddSuccess(uint64(need))
+							global.AddFail(uint64(need))
+						} else {
+							global.IncFail()
 						}
-						if need > 0 {
-							if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
-								return err
-							}
+						return err
+					}
+					if need > 0 {
+						global.AddSuccess(uint64(need))
+					}
+					if need > 0 {
+						if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+							return err
+						}
 					}
 					cursor = minInGroup
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
@@ -551,14 +551,14 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				continue
 			}
 
-				if allowedTypes != nil {
-					ct := m.DetectContentType(msg)
-					if _, ok := allowedTypes[ct]; !ok {
-						global.IncFiltered()
-						cursor = msg.ID
-						if err := persistHistoryCursor(task.ID, cursor); err != nil {
-							return err
-						}
+			if allowedTypes != nil {
+				ct := m.DetectContentType(msg)
+				if _, ok := allowedTypes[ct]; !ok {
+					global.IncFiltered()
+					cursor = msg.ID
+					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+						return err
+					}
 					processed++
 					advanced = true
 					i++
@@ -572,24 +572,24 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					return err
 				}
 			}
-				if err := processWithRetry(ctx, func() error {
-					return m.processSingleMessage(ctx, api, targetPeer, task, msg)
-				}); err != nil {
-					if need > 0 {
-						global.AddFail(uint64(need))
-					} else {
-						global.IncFail()
-					}
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msg)
+			}); err != nil {
+				if need > 0 {
+					global.AddFail(uint64(need))
+				} else {
+					global.IncFail()
+				}
+				return err
+			}
+			if need > 0 {
+				global.AddSuccess(uint64(need))
+			}
+			if need > 0 {
+				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
 					return err
 				}
-				if need > 0 {
-					global.AddSuccess(uint64(need))
-				}
-				if need > 0 {
-					if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
-						return err
-					}
-				}
+			}
 			cursor = msg.ID
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {
 				return err

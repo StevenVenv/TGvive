@@ -19,7 +19,7 @@ var ErrUnsupportedCloneMode = errors.New("unsupported clone mode")
 
 // ProcessMessage is the engine pipeline entry for a single incoming Telegram message.
 // It aggregates album messages (same GroupedID) to avoid album fragmentation.
-func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, task model.Task, msg *tg.Message) error {
+func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, task model.Task, msg *tg.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, peer t
 		taskID := task.ID
 		groupedID := msg.GroupedID
 		m.grouper.Add(taskID, groupedID, msg, func(batch []*tg.Message) {
-			if err := m.processAlbumBatch(ctx, api, peer, task, batch, allowedTypes); err != nil && global.Logger != nil {
+			if err := m.processAlbumBatch(ctx, api, sourcePeer, peer, task, batch, allowedTypes); err != nil && global.Logger != nil {
 				global.Logger.Error(
 					"process album batch failed",
 					zap.Uint("task_id", taskID),
@@ -58,10 +58,10 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, peer t
 		return nil
 	}
 
-	return m.processSingleMessage(ctx, api, peer, task, msg)
+	return m.processSingleMessage(ctx, api, sourcePeer, peer, task, msg)
 }
 
-func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, task model.Task, msg *tg.Message) error {
+func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, task model.Task, msg *tg.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 	case 2:
 		return m.SendMedia(ctx, api, msgToSend, task, peer)
 	case 3:
-		localPath, _, cleanup, err := m.DownloadFile(ctx, api, msgToSend, task.ID)
+		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msgToSend, task.ID)
 		if err != nil {
 			return err
 		}
@@ -215,7 +215,7 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 	}
 }
 
-func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, task model.Task, msgs []*tg.Message, allowedTypes map[string]struct{}) error {
+func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, task model.Task, msgs []*tg.Message, allowedTypes map[string]struct{}) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, pee
 	case 0:
 		return nil
 	case 1:
-		return m.processSingleMessage(ctx, api, peer, task, filtered[0])
+		return m.processSingleMessage(ctx, api, sourcePeer, peer, task, filtered[0])
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
@@ -266,7 +266,7 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, pee
 	case 2:
 		return m.SendAlbum(ctx, api, filtered, task, peer)
 	case 3:
-		return m.SendUploadedAlbum(ctx, api, filtered, task, peer)
+		return m.SendUploadedAlbum(ctx, api, sourcePeer, filtered, task, peer)
 	default:
 		return ErrUnsupportedCloneMode
 	}

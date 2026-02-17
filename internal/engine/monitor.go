@@ -99,6 +99,7 @@ type runtimeTaskConfig struct {
 	Task       model.Task
 	RunID      uint64
 	Ctx        context.Context
+	SourcePeer tg.InputPeerClass
 	TargetPeer tg.InputPeerClass
 }
 
@@ -106,6 +107,7 @@ type runtimeTask struct {
 	Task       model.Task
 	RunID      uint64
 	Ctx        context.Context
+	SourcePeer tg.InputPeerClass
 	TargetPeer tg.InputPeerClass
 
 	allowedTypes map[string]struct{}
@@ -125,6 +127,7 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		Task:       cfg.Task,
 		RunID:      cfg.RunID,
 		Ctx:        cfg.Ctx,
+		SourcePeer: cfg.SourcePeer,
 		TargetPeer: cfg.TargetPeer,
 
 		allowedTypes: normalizeTypeSet(cfg.Task.ContentTypes.Strings()),
@@ -303,7 +306,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				err := processWithRetry(t.Ctx, func() error {
-					return m.processAlbumBatch(t.Ctx, api, t.TargetPeer, t.Task, batch, t.allowedTypes)
+					return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, batch, t.allowedTypes)
 				})
 				if err != nil {
 					if need > 0 {
@@ -367,7 +370,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				err := processWithRetry(t.Ctx, func() error {
-					return m.processSingleMessage(t.Ctx, api, t.TargetPeer, t.Task, msg)
+					return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, msg)
 				})
 				if err != nil {
 					if need > 0 {
