@@ -28,6 +28,14 @@ type CreateTaskReq struct {
 	KeywordProfileID uint   `json:"keyword_profile_id"`
 }
 
+type UpdateTaskReq struct {
+	SourceURL        string `json:"source_url" binding:"required"`
+	TargetURL        string `json:"target_url" binding:"required"`
+	SessionKey       string `json:"session_key" binding:"required"`
+	StrategyID       uint   `json:"strategy_id" binding:"required"`
+	KeywordProfileID uint   `json:"keyword_profile_id"`
+}
+
 // CreateTask 创建转发任务
 func (a *TaskApi) CreateTask(c *gin.Context) {
 	var req CreateTaskReq
@@ -184,6 +192,128 @@ func (a *TaskApi) GetTaskProgress(c *gin.Context) {
 
 	progress := engine.Manager.GetTaskProgress(task)
 	app.OkWithData(progress, c)
+}
+
+// UpdateTask 更新任务基础信息与策略引用（更新后状态重置为停止）
+func (a *TaskApi) UpdateTask(c *gin.Context) {
+	userID := getCurrentUserID(c)
+	if userID == 0 {
+		app.FailWithMsg("未获取到用户信息", c)
+		return
+	}
+
+	idStr := c.Param("id")
+	idU64, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || idU64 == 0 {
+		app.FailWithMsg("任务ID不合法", c)
+		return
+	}
+
+	var req UpdateTaskReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		app.FailWithMsg("配置参数格式错误: "+err.Error(), c)
+		return
+	}
+
+	req.SourceURL = strings.TrimSpace(req.SourceURL)
+	req.TargetURL = strings.TrimSpace(req.TargetURL)
+	req.SessionKey = strings.TrimSpace(req.SessionKey)
+
+	if req.SourceURL == "" || req.TargetURL == "" || req.SessionKey == "" || req.StrategyID == 0 {
+		app.FailWithMsg("更新参数不完整", c)
+		return
+	}
+
+	strategy, err := service.GetStrategyByID(userID, req.StrategyID)
+	if err != nil {
+		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
+		return
+	}
+
+	if req.KeywordProfileID != 0 {
+		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
+			app.FailWithMsg("关键词策略不存在或无权操作: "+err.Error(), c)
+			return
+		}
+	}
+
+	payload := model.Task{
+		SourceURL:        req.SourceURL,
+		TargetURL:        req.TargetURL,
+		ExecuteBy:        req.SessionKey,
+		StrategyID:       req.StrategyID,
+		KeywordProfileID: req.KeywordProfileID,
+
+		CloneMode:    strategy.CloneMode,
+		ContentTypes: strategy.ContentTypes,
+
+		ScopeType:  strategy.ScopeType,
+		ScopeValue: strings.TrimSpace(strategy.ScopeValue),
+
+		KeepReply:    strategy.KeepReply,
+		Realtime:     strategy.Realtime,
+		CloneComment: strategy.CloneComment,
+		GpuAccel:     strategy.GpuAccel,
+		ChangeMD5:    strategy.ChangeMD5,
+
+		DelayMinMs: strategy.DelayMinMs,
+		DelayMaxMs: strategy.DelayMaxMs,
+
+		DailyLimit: strategy.DailyLimit,
+		RunWindow:  strings.TrimSpace(strategy.RunWindow),
+
+		Status: model.TaskStatusStopped,
+
+		HistoryOrder: strategy.HistoryOrder,
+	}
+
+	if payload.CloneMode == 0 {
+		payload.CloneMode = 3
+	}
+	if payload.ScopeType == 0 {
+		payload.ScopeType = 1
+	}
+	if payload.HistoryOrder == 0 {
+		payload.HistoryOrder = 1
+	}
+	if payload.DelayMinMs < 0 {
+		payload.DelayMinMs = 0
+	}
+	if payload.DelayMaxMs < payload.DelayMinMs {
+		payload.DelayMaxMs = payload.DelayMinMs
+	}
+	if payload.DailyLimit < 0 {
+		payload.DailyLimit = 0
+	}
+
+	updated, err := service.UpdateTask(userID, uint(idU64), &payload)
+	if err != nil {
+		app.FailWithMsg("任务更新失败: "+err.Error(), c)
+		return
+	}
+	app.OkWithData(updated, c)
+}
+
+// DeleteTask 删除任务（删除前确保后台 Worker 已停止）
+func (a *TaskApi) DeleteTask(c *gin.Context) {
+	userID := getCurrentUserID(c)
+	if userID == 0 {
+		app.FailWithMsg("未获取到用户信息", c)
+		return
+	}
+
+	idStr := c.Param("id")
+	idU64, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || idU64 == 0 {
+		app.FailWithMsg("任务ID不合法", c)
+		return
+	}
+
+	if err := service.DeleteTask(userID, uint(idU64)); err != nil {
+		app.FailWithMsg("任务删除失败: "+err.Error(), c)
+		return
+	}
+	app.OkWithData(gin.H{"ok": true}, c)
 }
 
 func getCurrentUserID(c *gin.Context) uint {

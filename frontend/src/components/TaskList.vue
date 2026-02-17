@@ -1,8 +1,23 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
+import { UserFilled } from '@element-plus/icons-vue'
 
-import { getTaskProgress, getTasks, taskAction, type Task, type TaskProgress } from '../api'
+import {
+  getKeywordProfiles,
+  getStrategies,
+  getTaskProgress,
+  getTasks,
+  listTGAccounts,
+  taskAction,
+  type KeywordProfile,
+  type Strategy,
+  type Task,
+  type TaskProgress,
+  type TGAccount,
+} from '../api'
+import { deleteTask, updateTask } from '../api/task'
 
 const props = defineProps<{
   active?: boolean
@@ -19,8 +34,60 @@ const logProgress = computed(() => (selectedTaskId.value ? progressMap.value[sel
 const autoScroll = ref(true)
 const logBoxRef = ref<HTMLElement | null>(null)
 
+const editVisible = ref(false)
+const editLoading = ref(false)
+const editSubmitting = ref(false)
+const editFormRef = ref<FormInstance>()
+
+const accounts = ref<TGAccount[]>([])
+const strategies = ref<Strategy[]>([])
+const keywordProfiles = ref<KeywordProfile[]>([])
+
+const editForm = reactive({
+  id: 0,
+  source_url: '',
+  target_url: '',
+  session_key: '',
+  strategy_id: 0,
+  keyword_profile_id: 0,
+})
+
 let pollTimer: number | undefined
 let logTimer: number | undefined
+
+const selectedAccount = computed(() => accounts.value.find((a) => a.key === editForm.session_key) || null)
+
+const editRules: FormRules = {
+  source_url: [{ required: true, message: '请输入源频道/群组', trigger: 'blur' }],
+  target_url: [{ required: true, message: '请输入目标频道/群组', trigger: 'blur' }],
+  session_key: [{ required: true, message: '请选择执行账号', trigger: 'change' }],
+  strategy_id: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        const n = Number(v || 0)
+        if (n > 0) cb()
+        else cb(new Error('请选择策略模版'))
+      },
+      trigger: 'change',
+    },
+  ],
+}
+
+function accountLabel(a: TGAccount): string {
+  const name = (a.name || '').trim()
+  if (name) return name
+  const u = (a.username || '').trim()
+  if (u) return u.startsWith('@') ? u : '@' + u
+  const p = (a.phone || '').trim()
+  if (p) return p
+  return a.key
+}
+
+function accountFileName(key: string): string {
+  key = (key || '').trim()
+  if (!key) return '-'
+  return `session_${key}.json`
+}
 
 function statusTagType(task: Task): 'success' | 'warning' | 'danger' | 'info' {
   const p = progressMap.value[task.ID]
@@ -131,6 +198,96 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop') {
     ElMessage.success('指令已发送')
   } catch (err: any) {
     ElMessage.error(err?.message || '操作失败')
+  }
+}
+
+async function loadEditOptions() {
+  editLoading.value = true
+  try {
+    const [acc, stg, kw] = await Promise.all([listTGAccounts(), getStrategies(), getKeywordProfiles()])
+    accounts.value = acc || []
+    strategies.value = stg || []
+    keywordProfiles.value = kw || []
+  } catch (err: any) {
+    ElMessage.error(err?.message || '加载选项失败')
+    accounts.value = []
+    strategies.value = []
+    keywordProfiles.value = []
+  } finally {
+    editLoading.value = false
+  }
+}
+
+function openEdit(task: Task) {
+  Object.assign(editForm, {
+    id: Number(task.ID || 0),
+    source_url: String(task.source_url || '').trim(),
+    target_url: String(task.target_url || '').trim(),
+    session_key: String(task.session_key || '').trim(),
+    strategy_id: Number(task.strategy_id || 0),
+    keyword_profile_id: Number(task.keyword_profile_id || 0),
+  })
+  editVisible.value = true
+  void loadEditOptions()
+  void nextTick(() => editFormRef.value?.clearValidate?.())
+}
+
+async function submitEdit() {
+  const inst = editFormRef.value
+  if (!inst) return
+
+  try {
+    const ok = await inst.validate()
+    if (!ok) return
+  } catch {
+    return
+  }
+
+  const id = Number(editForm.id || 0)
+  if (id <= 0) return
+
+  const payload = {
+    source_url: String(editForm.source_url || '').trim(),
+    target_url: String(editForm.target_url || '').trim(),
+    session_key: String(editForm.session_key || '').trim(),
+    strategy_id: Number(editForm.strategy_id || 0),
+    keyword_profile_id: Number(editForm.keyword_profile_id || 0),
+  }
+
+  editSubmitting.value = true
+  try {
+    await updateTask(id, payload)
+    ElMessage.success(`任务已更新 #${id}`)
+    editVisible.value = false
+    await reloadTasks()
+    if (selectedTaskId.value === id) await refreshOne(id)
+  } catch (err: any) {
+    ElMessage.error(err?.message || '更新失败')
+  } finally {
+    editSubmitting.value = false
+  }
+}
+
+async function removeTask(task: Task) {
+  const id = Number(task?.ID || 0)
+  if (id <= 0) return
+  try {
+    await ElMessageBox.confirm(`确定删除任务 #${id} 吗？`, '确认', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  try {
+    await deleteTask(id)
+    ElMessage.success('已删除')
+    if (selectedTaskId.value === id) selectedTaskId.value = 0
+    await reloadTasks()
+  } catch (err: any) {
+    ElMessage.error(err?.message || '删除失败')
   }
 }
 
@@ -316,13 +473,21 @@ defineExpose({
                   </template>
                 </el-table-column>
 
-                <el-table-column label="操作" width="260" fixed="right">
+                <el-table-column label="操作" width="340" fixed="right">
                   <template #default="{ row }">
-                    <el-space>
+                    <el-space size="small" wrap>
                       <el-button size="small" type="success" @click.stop="doAction(row, 'start')">启动</el-button>
                       <el-button size="small" type="warning" @click.stop="doAction(row, 'pause')">暂停</el-button>
                       <el-button size="small" type="danger" @click.stop="doAction(row, 'stop')">停止</el-button>
-                      <el-button size="small" @click.stop="selectTask(row)">日志</el-button>
+                      <el-button link type="primary" @click.stop="openEdit(row)">
+                        <i class="ri-edit-line" />
+                        编辑
+                      </el-button>
+                      <el-button link type="primary" @click.stop="selectTask(row)">日志</el-button>
+                      <el-button link type="danger" @click.stop="removeTask(row)">
+                        <i class="ri-delete-bin-line" />
+                        删除
+                      </el-button>
                     </el-space>
                   </template>
                 </el-table-column>
@@ -383,6 +548,100 @@ defineExpose({
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog v-model="editVisible" title="编辑任务" width="640px" class="bt-dialog" destroy-on-close>
+      <div v-loading="editLoading" class="edit-body">
+        <el-form ref="editFormRef" :model="editForm" :rules="editRules" label-position="top" class="edit-form">
+          <el-form-item label="源频道 (Source)" prop="source_url">
+            <el-input v-model="editForm.source_url" placeholder="例如：https://t.me/source 或 @source" />
+          </el-form-item>
+
+          <el-form-item label="目标频道 (Target)" prop="target_url">
+            <el-input v-model="editForm.target_url" placeholder="@channel_id" />
+          </el-form-item>
+
+          <el-form-item label="执行账号 (Account)" prop="session_key">
+            <el-select
+              v-model="editForm.session_key"
+              placeholder="请选择执行账号"
+              style="width: 100%"
+              filterable
+              popper-class="tgvive-dark-popper"
+            >
+              <template #prefix>
+                <div class="select-prefix">
+                  <el-avatar class="select-avatar" :size="20" :src="selectedAccount?.avatar || ''" :icon="UserFilled" />
+                </div>
+              </template>
+              <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
+                <div class="opt">
+                  <div class="opt-left">
+                    <el-avatar class="opt-avatar" :size="26" :src="a.avatar" :icon="UserFilled" />
+                    <div class="opt-meta">
+                      <div class="opt-title">{{ accountLabel(a) }}</div>
+                      <div class="opt-sub">{{ accountFileName(a.key) }}</div>
+                    </div>
+                  </div>
+                  <div class="opt-right muted">{{ a.username ? '@' + a.username : '' }}</div>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="hint">值为 session_key（对应 sessions/session_*.json）</div>
+          </el-form-item>
+
+          <el-form-item label="策略模版 (Strategy)" prop="strategy_id">
+            <el-select
+              v-model="editForm.strategy_id"
+              placeholder="请选择策略模版"
+              style="width: 100%"
+              filterable
+              popper-class="tgvive-dark-popper"
+            >
+              <el-option v-for="s in strategies" :key="s.ID" :label="s.name" :value="s.ID">
+                <div class="opt">
+                  <div class="opt-left">
+                    <div class="opt-title">{{ s.name }}</div>
+                    <div v-if="s.remark" class="opt-sub">{{ s.remark }}</div>
+                  </div>
+                </div>
+              </el-option>
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="关键词方案 (Keywords)" prop="keyword_profile_id">
+            <el-select
+              v-model="editForm.keyword_profile_id"
+              placeholder="可选：关键词过滤/替换"
+              style="width: 100%"
+              filterable
+              clearable
+              popper-class="tgvive-dark-popper"
+            >
+              <el-option v-for="k in keywordProfiles" :key="k.ID" :label="k.name" :value="k.ID">
+                <div class="opt">
+                  <div class="opt-left">
+                    <div class="opt-title">{{ k.name }}</div>
+                    <div class="opt-sub">
+                      <span v-if="k.remark">{{ k.remark }} · </span>
+                      屏蔽 {{ k.block_words?.length || 0 }} | 白名单 {{ k.allow_words?.length || 0 }} | 替换
+                      {{ k.replace_rules?.length || 0 }}
+                    </div>
+                  </div>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="hint">可留空：仅使用行为策略；选择后将启用关键词过滤/替换</div>
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <template #footer>
+        <el-space>
+          <el-button :disabled="editSubmitting" @click="editVisible = false">取消</el-button>
+          <el-button type="primary" :loading="editSubmitting" @click="submitEdit">保存修改</el-button>
+        </el-space>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -558,5 +817,91 @@ defineExpose({
   font-size: 12px;
   color: rgba(191, 203, 217, 0.6);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.edit-body {
+  padding: 4px 2px 0;
+}
+
+.edit-form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.muted {
+  color: var(--el-text-color-secondary);
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.opt-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.opt-avatar {
+  flex-shrink: 0;
+}
+
+.opt-avatar :deep(img) {
+  object-fit: cover;
+}
+
+.opt-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.opt-title {
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.opt-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.opt-right {
+  flex: none;
+  font-size: 12px;
+}
+
+.select-prefix {
+  display: flex;
+  align-items: center;
+}
+
+.select-avatar {
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
+:deep(.select-avatar img) {
+  object-fit: cover;
 }
 </style>

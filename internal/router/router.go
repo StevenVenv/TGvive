@@ -58,6 +58,8 @@ func SetupRouter() *gin.Engine {
 		{
 			taskV1.POST("", taskApi.CreateTask)
 			taskV1.GET("", taskApi.GetTaskList)
+			taskV1.PUT("/:id", taskApi.UpdateTask)
+			taskV1.DELETE("/:id", taskApi.DeleteTask)
 			taskV1.POST("/action", taskApi.UpdateTaskStatus)
 			taskV1.GET("/:id/progress", taskApi.GetTaskProgress)
 		}
