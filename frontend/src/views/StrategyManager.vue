@@ -80,6 +80,7 @@ function emptyKeywordModel(): KeywordFormModel {
   return {
     ID: 0,
     name: '',
+    remark: '',
     block_words: [],
     allow_words: [],
     replace_rules: [],
@@ -333,6 +334,7 @@ function buildKeywordPayload(m: KeywordFormModel): Partial<KeywordProfile> {
 
   return {
     name: (m.name || '').trim(),
+    remark: (m.remark || '').trim(),
     block_words: clean(m.block_words),
     allow_words: clean(m.allow_words),
     replace_rules,
@@ -351,6 +353,7 @@ function openKwEdit(row: KeywordProfile) {
   Object.assign(kwModel, emptyKeywordModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
+    remark: (row.remark || '').trim(),
     block_words: Array.isArray(row.block_words) ? [...row.block_words] : [],
     allow_words: Array.isArray(row.allow_words) ? [...row.allow_words] : [],
     replace_rules: Array.isArray(row.replace_rules) ? row.replace_rules.map((r) => ({ from: r.from, to: r.to })) : [],
@@ -567,7 +570,8 @@ onMounted(() => {
                 <el-table-column label="方案" min-width="260">
                   <template #default="{ row }">
                     <div class="st-name">{{ row.name }}</div>
-                    <div class="st-remark">
+                    <div v-if="row.remark" class="st-remark">{{ row.remark }}</div>
+                    <div class="st-meta">
                       屏蔽 {{ row.block_words?.length || 0 }} | 白名单 {{ row.allow_words?.length || 0 }} | 替换
                       {{ row.replace_rules?.length || 0 }}
                       <span v-if="row.use_regex"> | Regex</span>
@@ -772,6 +776,12 @@ onMounted(() => {
 }
 
 .st-remark {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.st-meta {
   margin-top: 4px;
   font-size: 12px;
   color: var(--el-text-color-secondary);

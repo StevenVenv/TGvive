@@ -37,6 +37,7 @@ type StrategyItem = {
 type KeywordProfileItem = {
   ID: number
   name: string
+  remark?: string
   use_regex?: boolean
   block_words?: string[]
   allow_words?: string[]
@@ -290,6 +291,7 @@ onMounted(() => {
                 <div class="opt-left">
                   <div class="opt-title">{{ k.name }}</div>
                   <div class="opt-sub">
+                    <span v-if="k.remark">{{ k.remark }} · </span>
                     屏蔽 {{ k.block_words?.length || 0 }} | 白名单 {{ k.allow_words?.length || 0 }} | 替换 {{ k.replace_rules?.length || 0 }}
                     <span v-if="k.use_regex"> | Regex</span>
                   </div>

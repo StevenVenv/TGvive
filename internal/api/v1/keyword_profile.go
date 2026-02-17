@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -9,14 +10,24 @@ import (
 	"my-go-server/pkg/app"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
 type KeywordProfileApi struct{}
 
+type KeywordProfilePayload struct {
+	Name         string              `json:"name" binding:"required"`
+	Remark       string              `json:"remark"`
+	BlockWords   []string            `json:"block_words"`
+	AllowWords   []string            `json:"allow_words"`
+	ReplaceRules []model.ReplaceRule `json:"replace_rules"`
+	UseRegex     bool                `json:"use_regex"`
+}
+
 func normalizeStringSlice(in []string) []string {
 	if len(in) == 0 {
-		return nil
+		return []string{}
 	}
 	out := make([]string, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
@@ -36,7 +47,7 @@ func normalizeStringSlice(in []string) []string {
 
 func normalizeReplaceRules(in []model.ReplaceRule) []model.ReplaceRule {
 	if len(in) == 0 {
-		return nil
+		return []model.ReplaceRule{}
 	}
 	out := make([]model.ReplaceRule, 0, len(in))
 	for _, r := range in {
@@ -50,30 +61,58 @@ func normalizeReplaceRules(in []model.ReplaceRule) []model.ReplaceRule {
 	return out
 }
 
+func marshalJSON(v any) (datatypes.JSON, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return datatypes.JSON(b), nil
+}
+
 // CreateKeywordProfile 创建关键词策略
 func (a *KeywordProfileApi) CreateKeywordProfile(c *gin.Context) {
-	var p model.KeywordProfile
-	if err := c.ShouldBindJSON(&p); err != nil {
+	var payload KeywordProfilePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		app.FailWithMsg("关键词策略参数格式错误: "+err.Error(), c)
 		return
 	}
 
-	p.Model = gorm.Model{}
-	p.UserID = getCurrentUserID(c)
-	if p.UserID == 0 {
+	userID := getCurrentUserID(c)
+	if userID == 0 {
 		app.FailWithMsg("未获取到用户信息", c)
 		return
 	}
 
-	p.Name = strings.TrimSpace(p.Name)
-	if p.Name == "" {
+	payload.Name = strings.TrimSpace(payload.Name)
+	if payload.Name == "" {
 		app.FailWithMsg("策略名称不能为空", c)
 		return
 	}
 
-	p.BlockWords = normalizeStringSlice(p.BlockWords)
-	p.AllowWords = normalizeStringSlice(p.AllowWords)
-	p.ReplaceRules = normalizeReplaceRules(p.ReplaceRules)
+	p := model.KeywordProfile{
+		Model:    gorm.Model{},
+		UserID:   userID,
+		Name:     payload.Name,
+		Remark:   strings.TrimSpace(payload.Remark),
+		UseRegex: payload.UseRegex,
+	}
+
+	var err error
+	p.BlockWords, err = marshalJSON(normalizeStringSlice(payload.BlockWords))
+	if err != nil {
+		app.FailWithMsg("屏蔽词序列化失败: "+err.Error(), c)
+		return
+	}
+	p.AllowWords, err = marshalJSON(normalizeStringSlice(payload.AllowWords))
+	if err != nil {
+		app.FailWithMsg("白名单序列化失败: "+err.Error(), c)
+		return
+	}
+	p.ReplaceRules, err = marshalJSON(normalizeReplaceRules(payload.ReplaceRules))
+	if err != nil {
+		app.FailWithMsg("替换规则序列化失败: "+err.Error(), c)
+		return
+	}
 
 	if err := service.CreateKeywordProfile(&p); err != nil {
 		app.FailWithMsg("关键词策略保存失败: "+err.Error(), c)
@@ -114,7 +153,7 @@ func (a *KeywordProfileApi) UpdateKeywordProfile(c *gin.Context) {
 		return
 	}
 
-	var payload model.KeywordProfile
+	var payload KeywordProfilePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		app.FailWithMsg("关键词策略参数格式错误: "+err.Error(), c)
 		return
@@ -125,11 +164,29 @@ func (a *KeywordProfileApi) UpdateKeywordProfile(c *gin.Context) {
 		app.FailWithMsg("策略名称不能为空", c)
 		return
 	}
-	payload.BlockWords = normalizeStringSlice(payload.BlockWords)
-	payload.AllowWords = normalizeStringSlice(payload.AllowWords)
-	payload.ReplaceRules = normalizeReplaceRules(payload.ReplaceRules)
 
-	updated, err := service.UpdateKeywordProfile(userID, uint(idU64), &payload)
+	out := model.KeywordProfile{
+		Name:     payload.Name,
+		Remark:   strings.TrimSpace(payload.Remark),
+		UseRegex: payload.UseRegex,
+	}
+	out.BlockWords, err = marshalJSON(normalizeStringSlice(payload.BlockWords))
+	if err != nil {
+		app.FailWithMsg("屏蔽词序列化失败: "+err.Error(), c)
+		return
+	}
+	out.AllowWords, err = marshalJSON(normalizeStringSlice(payload.AllowWords))
+	if err != nil {
+		app.FailWithMsg("白名单序列化失败: "+err.Error(), c)
+		return
+	}
+	out.ReplaceRules, err = marshalJSON(normalizeReplaceRules(payload.ReplaceRules))
+	if err != nil {
+		app.FailWithMsg("替换规则序列化失败: "+err.Error(), c)
+		return
+	}
+
+	updated, err := service.UpdateKeywordProfile(userID, uint(idU64), &out)
 	if err != nil {
 		app.FailWithMsg("关键词策略更新失败: "+err.Error(), c)
 		return

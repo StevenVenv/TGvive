@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -31,6 +33,30 @@ type replaceRule struct {
 	from string
 	to   string
 	re   *regexp.Regexp
+}
+
+func parseJSONStringSlice(raw []byte) ([]string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func parseJSONReplaceRules(raw []byte) ([]model.ReplaceRule, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, nil
+	}
+	var out []model.ReplaceRule
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func loadKeywordPolicy(ctx context.Context, task model.Task) (*keywordPolicy, error) {
@@ -64,25 +90,41 @@ func newKeywordPolicy(p *model.KeywordProfile) (*keywordPolicy, error) {
 	}
 
 	var compileErr error
+	blockWords, err := parseJSONStringSlice([]byte(p.BlockWords))
+	if err != nil {
+		compileErr = err
+	}
+	allowWords, err := parseJSONStringSlice([]byte(p.AllowWords))
+	if err != nil && compileErr == nil {
+		compileErr = err
+	}
+	replaceRules, err := parseJSONReplaceRules([]byte(p.ReplaceRules))
+	if err != nil && compileErr == nil {
+		compileErr = err
+	}
+
 	if p.UseRegex {
-		k.block, compileErr = compileMatchRegex(p.BlockWords)
+		k.block, err = compileMatchRegex(blockWords)
+		if err != nil && compileErr == nil {
+			compileErr = err
+		}
 		if compileErr != nil {
 			// keep going best-effort
 		}
-		allow, err := compileMatchRegex(p.AllowWords)
+		allow, err := compileMatchRegex(allowWords)
 		if err != nil && compileErr == nil {
 			compileErr = err
 		}
 		k.allow = allow
-		repl, err := compileReplaceRegex(p.ReplaceRules)
+		repl, err := compileReplaceRegex(replaceRules)
 		if err != nil && compileErr == nil {
 			compileErr = err
 		}
 		k.replace = repl
 	} else {
-		k.block = compileMatchPlain(p.BlockWords)
-		k.allow = compileMatchPlain(p.AllowWords)
-		k.replace = compileReplacePlain(p.ReplaceRules)
+		k.block = compileMatchPlain(blockWords)
+		k.allow = compileMatchPlain(allowWords)
+		k.replace = compileReplacePlain(replaceRules)
 	}
 
 	return k, compileErr
@@ -259,4 +301,3 @@ func (k *keywordPolicy) replaceText(text string) (string, bool) {
 	}
 	return out, changed
 }
-

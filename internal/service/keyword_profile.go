@@ -28,6 +28,7 @@ func UpdateKeywordProfile(userID uint, profileID uint, payload *model.KeywordPro
 	}
 
 	p.Name = payload.Name
+	p.Remark = payload.Remark
 	p.BlockWords = payload.BlockWords
 	p.AllowWords = payload.AllowWords
 	p.ReplaceRules = payload.ReplaceRules

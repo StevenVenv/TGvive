@@ -77,6 +77,7 @@ export type KeywordProfile = {
 
   user_id?: number
   name: string
+  remark?: string
 
   block_words: string[]
   allow_words: string[]

@@ -10,6 +10,7 @@ export type ReplaceRule = {
 export type KeywordFormModel = {
   ID: number
   name: string
+  remark: string
   block_words: string[]
   allow_words: string[]
   replace_rules: ReplaceRule[]
@@ -45,6 +46,7 @@ const emit = defineEmits<{
 
 const formRef = ref<FormInstance>()
 const form = computed(() => props.modelValue)
+const activePane = ref<'block' | 'allow' | 'replace'>('block')
 
 const rules: FormRules = {
   name: [{ required: true, message: '请填写方案名称', trigger: 'blur' }],
@@ -95,34 +97,34 @@ defineExpose<KeywordFormExpose>({
   <div class="keyword-form">
     <div class="form-scroll" v-loading="loading">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="small" class="form">
-        <el-row :gutter="12">
-          <el-col :xs="24" :sm="12">
+        <el-row :gutter="12" class="top-row">
+          <el-col :xs="24" :sm="12" :md="8">
             <el-form-item label="方案名称" prop="name">
               <el-input v-model="form.name" placeholder="例如：广告过滤 / 招聘白名单" />
             </el-form-item>
           </el-col>
-          <el-col :xs="24" :sm="12">
+
+          <el-col :xs="24" :sm="12" :md="12">
+            <el-form-item label="备注 (Remark)" prop="remark">
+              <el-input v-model="form.remark" placeholder="可选：说明用途/范围" />
+            </el-form-item>
+          </el-col>
+
+          <el-col :xs="24" :sm="12" :md="4">
             <el-form-item label="匹配模式" prop="use_regex">
-              <el-switch v-model="form.use_regex" active-text="启用正则匹配" />
-              <div class="hint compact">开启后：屏蔽词/白名单将按正则表达式匹配</div>
+              <el-switch v-model="form.use_regex" active-text="Regex" inactive-text="Plain" />
+              <div class="hint compact">开启后：屏蔽/白名单/替换按正则执行</div>
             </el-form-item>
           </el-col>
         </el-row>
 
-        <el-card class="panel-card" shadow="never">
-          <template #header>
-            <div class="panel-head">
-              <div class="panel-title">
-                <i class="ri-filter-3-line" />
-                <span>关键词过滤</span>
-              </div>
-              <div class="panel-sub">Keyword Filters</div>
-            </div>
-          </template>
-
-          <el-row :gutter="12">
-            <el-col :xs="24" :sm="12">
-              <el-form-item label="屏蔽词 (Blacklist)" prop="block_words">
+        <el-tabs v-model="activePane" class="rule-tabs">
+          <el-tab-pane name="block" label="⛔️ 屏蔽词">
+            <div class="tab-pane">
+              <el-form-item prop="block_words">
+                <template #label>
+                  <span class="label-with-tip">⛔️ 屏蔽词 (不转发)</span>
+                </template>
                 <el-select
                   v-model="form.block_words"
                   multiple
@@ -137,10 +139,24 @@ defineExpose<KeywordFormExpose>({
                 />
                 <div class="hint">命中任意屏蔽词：该消息将被跳过</div>
               </el-form-item>
-            </el-col>
+            </div>
+          </el-tab-pane>
 
-            <el-col :xs="24" :sm="12">
-              <el-form-item label="白名单 (Whitelist)" prop="allow_words">
+          <el-tab-pane name="allow" label="✅ 白名单">
+            <div class="tab-pane">
+              <el-form-item prop="allow_words">
+                <template #label>
+                  <span class="label-with-tip">
+                    ✅ 白名单 (只转发)
+                    <el-tooltip
+                      content="设置后，只有包含这些词的消息才会被搬运"
+                      placement="top"
+                      :show-after="200"
+                    >
+                      <i class="ri-question-line tip-icon" />
+                    </el-tooltip>
+                  </span>
+                </template>
                 <el-select
                   v-model="form.allow_words"
                   multiple
@@ -150,62 +166,54 @@ defineExpose<KeywordFormExpose>({
                   collapse-tags
                   collapse-tags-tooltip
                   class="ctrl"
-                  placeholder="可选：必须包含这些词才搬运"
+                  placeholder="可选：输入回车生成标签"
                   popper-class="tgvive-dark-popper"
                 />
-                <div class="hint">若白名单非空：消息必须命中至少一个白名单词</div>
+                <div class="hint">若白名单非空：消息必须命中至少一个词才会搬运</div>
               </el-form-item>
-            </el-col>
-          </el-row>
-        </el-card>
-
-        <el-card class="panel-card" shadow="never">
-          <template #header>
-            <div class="panel-head">
-              <div class="panel-title">
-                <i class="ri-exchange-2-line" />
-                <span>替换规则</span>
-              </div>
-              <div class="panel-sub">Replace Rules</div>
             </div>
-          </template>
+          </el-tab-pane>
 
-          <div class="rules">
-            <div class="rules-head">
-              <div class="rules-title">from → to</div>
-              <el-button type="primary" plain size="small" @click="addRule">
-                <i class="ri-add-line" />
-                添加规则
-              </el-button>
-            </div>
-
-            <div v-if="(form.replace_rules?.length || 0) === 0" class="rules-empty">
-              <el-text type="info">暂无替换规则（可选）</el-text>
-            </div>
-
-            <div v-else class="rules-grid">
-              <div class="rules-row rules-row--head">
-                <div class="cell muted">原文本 (from)</div>
-                <div class="cell muted">新文本 (to)</div>
-                <div class="cell muted">操作</div>
-              </div>
-
-              <div v-for="(r, idx) in form.replace_rules" :key="idx" class="rules-row">
-                <div class="cell">
-                  <el-input v-model="r.from" placeholder="例如：加微信" />
+          <el-tab-pane name="replace" label="🔄 替换规则">
+            <div class="tab-pane">
+              <div class="rules">
+                <div class="rules-head">
+                  <div class="rules-title">from → to</div>
+                  <el-button type="primary" plain size="small" @click="addRule">
+                    <i class="ri-add-line" />
+                    添加规则
+                  </el-button>
                 </div>
-                <div class="cell">
-                  <el-input v-model="r.to" placeholder="例如：**" />
+
+                <div v-if="(form.replace_rules?.length || 0) === 0" class="rules-empty">
+                  <el-text type="info">暂无替换规则（可选）</el-text>
                 </div>
-                <div class="cell action">
-                  <el-button link type="danger" @click="removeRule(idx)">删除</el-button>
+
+                <div v-else class="rules-grid">
+                  <div class="rules-row rules-row--head">
+                    <div class="cell muted">原文本 (from)</div>
+                    <div class="cell muted">新文本 (to)</div>
+                    <div class="cell muted">操作</div>
+                  </div>
+
+                  <div v-for="(r, idx) in form.replace_rules" :key="idx" class="rules-row">
+                    <div class="cell">
+                      <el-input v-model="r.from" placeholder="例如：加微信" />
+                    </div>
+                    <div class="cell">
+                      <el-input v-model="r.to" placeholder="例如：**" />
+                    </div>
+                    <div class="cell action">
+                      <el-button link type="danger" @click="removeRule(idx)">删除</el-button>
+                    </div>
+                  </div>
                 </div>
+
+                <div class="hint compact">提示：仅对文字内容（含媒体标题）生效；不会修改图片/视频文件本身</div>
               </div>
             </div>
-
-            <div class="hint compact">提示：仅对文字内容（含媒体标题）生效；不会修改图片/视频文件本身</div>
-          </div>
-        </el-card>
+          </el-tab-pane>
+        </el-tabs>
       </el-form>
     </div>
 
@@ -269,47 +277,37 @@ defineExpose<KeywordFormExpose>({
   justify-content: flex-end;
 }
 
-.panel-card {
+.top-row {
+  margin-bottom: 4px;
+}
+
+.rule-tabs :deep(.el-tabs__header) {
+  margin: 0 0 10px;
+}
+
+.rule-tabs :deep(.el-tabs__item) {
+  height: 34px;
+  line-height: 34px;
+  padding: 0 12px;
+}
+
+.tab-pane {
   border: 1px solid #363637;
   border-radius: 4px;
   background: #1e1e1e;
-  margin-bottom: 12px;
-
-  :deep(.el-card__header) {
-    padding: 10px 12px;
-    border-bottom: 1px solid #363637;
-    background: #252525;
-  }
-
-  :deep(.el-card__body) {
-    padding: 12px;
-  }
+  padding: 12px;
 }
 
-.panel-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.panel-title {
-  display: flex;
+.label-with-tip {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-weight: 800;
-  color: var(--el-text-color-primary);
-
-  i {
-    font-size: 16px;
-    color: var(--el-color-primary);
-  }
 }
 
-.panel-sub {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
+.tip-icon {
+  font-size: 14px;
+  color: rgba(191, 203, 217, 0.75);
+  cursor: help;
 }
 
 .ctrl {
