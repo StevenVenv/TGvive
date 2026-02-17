@@ -73,9 +73,10 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	if task.Realtime {
 		if global.DB != nil {
 			var latest model.Task
-			if err := global.DB.Select("history_cursor", "history_order").Where("id = ?", taskID).First(&latest).Error; err == nil {
+			if err := global.DB.Select("history_cursor", "history_order", "history_max_id").Where("id = ?", taskID).First(&latest).Error; err == nil {
 				task.HistoryCursor = latest.HistoryCursor
 				task.HistoryOrder = latest.HistoryOrder
+				task.HistoryMaxID = latest.HistoryMaxID
 			}
 		}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
+	"gorm.io/gorm"
 )
 
 const (
@@ -34,6 +35,10 @@ const (
 
 	// Safety valve if caller chooses to keep going on failures (unused for now).
 	maxConsecutiveFails = 10
+
+	// When history_max_id is missing (existing tasks before schema upgrade), we can only do best-effort 追更.
+	// We'll scan a recent window to avoid re-sending the entire history.
+	defaultCatchUpFallbackWindow = 500
 )
 
 // CloneHistory iterates source peer history and sends to target peer using current media pipeline.
@@ -101,6 +106,14 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 
 	quota := newTaskQuota(task)
 
+	// 追更: when using new->old mode, a completed task typically ends with history_cursor=1 and would not
+	// fetch new messages on restart. We use history_max_id as the boundary and catch up newest messages first.
+	if order == model.HistoryOrderNewToOld && (task.HistoryMaxID > 0 || task.HistoryCursor > 0) {
+		if err := m.catchUpNewMessagesNewToOld(ctx, api, sourcePeer, targetPeer, task, task.HistoryMaxID, bounds, allowedTypes, pageSize, kw, runID, quota); err != nil {
+			return err
+		}
+	}
+
 	cursor := task.HistoryCursor
 	if order == model.HistoryOrderOldToNew {
 		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota)
@@ -134,6 +147,371 @@ func parseHistoryBounds(task model.Task) historyBounds {
 		}
 	}
 	return b
+}
+
+func getLatestRemoteMessageID(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if api == nil {
+		return 0, errors.New("tg api is nil")
+	}
+	if sourcePeer == nil {
+		return 0, errors.New("source peer is nil")
+	}
+
+	r, err := getHistoryWithFloodWait(ctx, api, &tg.MessagesGetHistoryRequest{
+		Peer:  sourcePeer,
+		Limit: 1,
+	})
+	if err != nil {
+		return 0, err
+	}
+	msgs := extractTGMessages(r)
+	maxID := 0
+	for _, m := range msgs {
+		if m != nil && m.ID > maxID {
+			maxID = m.ID
+		}
+	}
+	return maxID, nil
+}
+
+func (m *TaskManager) catchUpNewMessagesNewToOld(
+	ctx context.Context,
+	api *tg.Client,
+	sourcePeer tg.InputPeerClass,
+	targetPeer tg.InputPeerClass,
+	task model.Task,
+	baselineMaxID int,
+	bounds historyBounds,
+	allowedTypes map[string]struct{},
+	pageSize int,
+	kw *keywordPolicy,
+	runID uint64,
+	quota *taskQuota,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m == nil || api == nil || sourcePeer == nil || targetPeer == nil || task.ID == 0 {
+		return nil
+	}
+
+	latestRemoteID, err := getLatestRemoteMessageID(ctx, api, sourcePeer)
+	if err != nil || latestRemoteID <= 0 {
+		return err
+	}
+
+	sinceID := baselineMaxID
+	fallback := false
+	if sinceID <= 0 {
+		fallback = true
+		sinceID = latestRemoteID - defaultCatchUpFallbackWindow
+		if sinceID < 0 {
+			sinceID = 0
+		}
+	}
+
+	// Keep legacy bounds.MaxID from limiting 追更: we want to continue to newest remote message.
+	_ = bounds
+
+	if latestRemoteID <= sinceID {
+		return nil
+	}
+
+	if runID != 0 {
+		if fallback {
+			m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("追更: 历史最大ID缺失，按最近窗口回补 (from>%d to=%d)", sinceID, latestRemoteID))
+		} else {
+			m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("追更: 检测到新消息 (from>%d to=%d)", sinceID, latestRemoteID))
+		}
+	}
+
+	msgDelayMin, msgDelayMax := normalizeDelayRange(task.DelayMinMs, task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
+
+	cursor := sinceID
+	includeCursorOnce := false
+	if cursor <= 0 {
+		cursor = 1
+		includeCursorOnce = true
+	}
+
+	processed := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if cursor >= latestRemoteID {
+			return nil
+		}
+
+		limit := pageSize
+		if limit <= 0 {
+			limit = defaultHistoryPageSize
+		}
+		if limit > defaultHistoryPageSize {
+			limit = defaultHistoryPageSize
+		}
+
+		// Gate by quota to avoid flood / daily limit violations (追更 is still "history clone").
+		if err := m.waitForQuota(ctx, task.ID, runID, quota, 1); err != nil {
+			return err
+		}
+
+		req := &tg.MessagesGetHistoryRequest{
+			Peer:     sourcePeer,
+			OffsetID: cursor,
+			AddOffset: func() int {
+				if includeCursorOnce {
+					return -limit + 1
+				}
+				return -limit
+			}(),
+			Limit: limit,
+			MinID: cursor,
+			MaxID: latestRemoteID + 1,
+		}
+		allowEqual := includeCursorOnce
+		includeCursorOnce = false
+
+		r, err := getHistoryWithFloodWait(ctx, api, req)
+		if err != nil {
+			return err
+		}
+		msgs := extractTGMessages(r)
+		if len(msgs) == 0 {
+			return nil
+		}
+
+		sort.Slice(msgs, func(i, j int) bool {
+			return msgs[i].ID < msgs[j].ID
+		})
+
+		advanced := false
+		i := 0
+		for i < len(msgs) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			msg := msgs[i]
+			if msg == nil || msg.ID <= 0 {
+				i++
+				continue
+			}
+			if msg.ID > latestRemoteID {
+				i++
+				continue
+			}
+			if msg.ID < cursor || (!allowEqual && msg.ID == cursor) {
+				i++
+				continue
+			}
+			if msg.ID <= sinceID {
+				i++
+				continue
+			}
+
+			// Album grouping (by contiguous GroupedID).
+			if msg.GroupedID != 0 && msg.Media != nil {
+				gid := msg.GroupedID
+				j := i
+				var group []*tg.Message
+				var maxInGroup int
+				for j < len(msgs) {
+					next := msgs[j]
+					if next == nil || next.GroupedID != gid || next.Media == nil {
+						break
+					}
+					if next.ID > latestRemoteID {
+						j++
+						continue
+					}
+					if next.ID < cursor || (!allowEqual && next.ID == cursor) {
+						j++
+						continue
+					}
+					if next.ID <= sinceID {
+						j++
+						continue
+					}
+					group = append(group, next)
+					if next.ID > maxInGroup {
+						maxInGroup = next.ID
+					}
+					j++
+				}
+
+				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if skipped := len(group) - need; skipped > 0 {
+						global.AddFiltered(uint64(skipped))
+					}
+					if need > 0 && kw != nil {
+						if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
+							global.AddFiltered(uint64(need))
+							cursor = maxInGroup
+							if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+								return err
+							}
+							processed += len(group)
+							advanced = true
+							sleepRandom(ctx, msgDelayMin, msgDelayMax)
+							i = j
+							continue
+						} else if out != nil {
+							group = out
+						}
+					}
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
+					}
+
+					if err := processWithRetry(ctx, func() error {
+						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
+					}); err != nil {
+						if need > 0 {
+							global.AddFail(uint64(need))
+						} else {
+							global.IncFail()
+						}
+						if errors.Is(err, ErrMediaDownload) {
+							if runID != 0 {
+								m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("[Error] 追更 Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
+							} else {
+								global.BroadcastLog(fmt.Sprintf("[Error] 追更 Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
+							}
+							cursor = maxInGroup
+							if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+								return err
+							}
+							processed += len(group)
+							advanced = true
+							sleepRandom(ctx, msgDelayMin, msgDelayMax)
+							i = j
+							continue
+						}
+						return err
+					}
+					if need > 0 {
+						global.AddSuccess(uint64(need))
+					}
+					if need > 0 {
+						if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+							return err
+						}
+					}
+					cursor = maxInGroup
+					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+						return err
+					}
+					processed += len(group)
+					advanced = true
+					sleepRandom(ctx, msgDelayMin, msgDelayMax)
+				}
+
+				i = j
+				continue
+			}
+
+			if allowedTypes != nil {
+				ct := m.DetectContentType(msg)
+				if _, ok := allowedTypes[ct]; !ok {
+					global.IncFiltered()
+					cursor = msg.ID
+					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+						return err
+					}
+					processed++
+					advanced = true
+					i++
+					continue
+				}
+			}
+
+			msgToSend := msg
+			if kw != nil {
+				if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
+					if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
+						global.IncFiltered()
+					}
+					cursor = msg.ID
+					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+						return err
+					}
+					processed++
+					advanced = true
+					i++
+					continue
+				} else if out != nil {
+					msgToSend = out
+				}
+			}
+
+			need := quotaSendableCount(m, msgToSend, allowedTypes)
+			if need > 0 {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
+			}
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
+			}); err != nil {
+				if need > 0 {
+					global.AddFail(uint64(need))
+				} else {
+					global.IncFail()
+				}
+				if errors.Is(err, ErrMediaDownload) {
+					if runID != 0 {
+						m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("[Error] 追更 MsgID %d download failed: %v (skipping)", msg.ID, err))
+					} else {
+						global.BroadcastLog(fmt.Sprintf("[Error] 追更 MsgID %d download failed: %v (skipping)", msg.ID, err))
+					}
+					cursor = msg.ID
+					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+						return err
+					}
+					processed++
+					advanced = true
+					i++
+					sleepRandom(ctx, msgDelayMin, msgDelayMax)
+					continue
+				}
+				return err
+			}
+			if need > 0 {
+				global.AddSuccess(uint64(need))
+			}
+			if need > 0 {
+				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+					return err
+				}
+			}
+			cursor = msg.ID
+			if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+				return err
+			}
+			processed++
+			advanced = true
+			i++
+			sleepRandom(ctx, msgDelayMin, msgDelayMax)
+		}
+
+		if !advanced {
+			return nil
+		}
+		sleepRandom(ctx, reqDelayMin, reqDelayMax)
+
+		// Extra safety: avoid infinite loops when Telegram returns overlapping windows.
+		if processed > 10_000 {
+			return nil
+		}
+	}
 }
 
 func (m *TaskManager) cloneHistoryOldToNew(
@@ -281,33 +659,33 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					j++
 				}
 
-					// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
-					if len(group) > 0 {
-						need := quotaSendableAlbumCount(m, group, allowedTypes)
-						if skipped := len(group) - need; skipped > 0 {
-							global.AddFiltered(uint64(skipped))
-						}
-						if need > 0 && kw != nil {
-							if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
-								global.AddFiltered(uint64(need))
-								cursor = maxInGroup
-								if err := persistHistoryCursor(task.ID, cursor); err != nil {
-									return err
-								}
-								processed += len(group)
-								advanced = true
-								sleepRandom(ctx, msgDelayMin, msgDelayMax)
-								i = j
-								continue
-							} else if out != nil {
-								group = out
-							}
-						}
-						if need > 0 {
-							if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
+				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if skipped := len(group) - need; skipped > 0 {
+						global.AddFiltered(uint64(skipped))
+					}
+					if need > 0 && kw != nil {
+						if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
+							global.AddFiltered(uint64(need))
+							cursor = maxInGroup
+							if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 								return err
 							}
+							processed += len(group)
+							advanced = true
+							sleepRandom(ctx, msgDelayMin, msgDelayMax)
+							i = j
+							continue
+						} else if out != nil {
+							group = out
 						}
+					}
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
+					}
 					if err := processWithRetry(ctx, func() error {
 						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
 					}); err != nil {
@@ -323,7 +701,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 								global.BroadcastLog(fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
 							}
 							cursor = maxInGroup
-							if err := persistHistoryCursor(task.ID, cursor); err != nil {
+							if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 								return err
 							}
 							processed += len(group)
@@ -343,7 +721,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						}
 					}
 					cursor = maxInGroup
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
 					processed += len(group)
@@ -360,47 +738,47 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				if _, ok := allowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
 					processed++
 					advanced = true
 					i++
 					continue
-					}
 				}
+			}
 
-				msgToSend := msg
-				if kw != nil {
-					if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
-						if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
-							global.IncFiltered()
-						}
-						cursor = msg.ID
-						if err := persistHistoryCursor(task.ID, cursor); err != nil {
-							return err
-						}
-						processed++
-						advanced = true
-						i++
-						continue
-					} else if out != nil {
-						msgToSend = out
+			msgToSend := msg
+			if kw != nil {
+				if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
+					if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
+						global.IncFiltered()
 					}
-				}
-
-				need := quotaSendableCount(m, msgToSend, allowedTypes)
-				if need > 0 {
-					if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					cursor = msg.ID
+					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
+					processed++
+					advanced = true
+					i++
+					continue
+				} else if out != nil {
+					msgToSend = out
 				}
-				if err := processWithRetry(ctx, func() error {
-					return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
-				}); err != nil {
-					if need > 0 {
-						global.AddFail(uint64(need))
-					} else {
+			}
+
+			need := quotaSendableCount(m, msgToSend, allowedTypes)
+			if need > 0 {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
+			}
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
+			}); err != nil {
+				if need > 0 {
+					global.AddFail(uint64(need))
+				} else {
 					global.IncFail()
 				}
 				if errors.Is(err, ErrMediaDownload) {
@@ -410,7 +788,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						global.BroadcastLog(fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
 					}
 					cursor = msg.ID
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
 					processed++
@@ -430,7 +808,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				}
 			}
 			cursor = msg.ID
-			if err := persistHistoryCursor(task.ID, cursor); err != nil {
+			if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 				return err
 			}
 			processed++
@@ -472,6 +850,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 		}
 	}
 
+	maxSeen := task.HistoryMaxID
+	persistedMaxSeen := maxSeen
 	processed := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -519,6 +899,23 @@ func (m *TaskManager) cloneHistoryNewToOld(
 		msgs := extractTGMessages(r)
 		if len(msgs) == 0 {
 			return nil
+		}
+
+		// Track max message ID ever seen for 追更 (new->old completion would otherwise leave history_cursor at 1).
+		pageMax := 0
+		for _, m2 := range msgs {
+			if m2 != nil && m2.ID > pageMax {
+				pageMax = m2.ID
+			}
+		}
+		if pageMax > maxSeen {
+			maxSeen = pageMax
+		}
+		if maxSeen > persistedMaxSeen {
+			if err := persistHistoryMaxID(task.ID, maxSeen); err != nil {
+				return err
+			}
+			persistedMaxSeen = maxSeen
 		}
 
 		// Ensure descending order.
@@ -580,32 +977,32 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					j++
 				}
 
-					if len(group) > 0 {
-						need := quotaSendableAlbumCount(m, group, allowedTypes)
-						if skipped := len(group) - need; skipped > 0 {
-							global.AddFiltered(uint64(skipped))
-						}
-						if need > 0 && kw != nil {
-							if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
-								global.AddFiltered(uint64(need))
-								cursor = minInGroup
-								if err := persistHistoryCursor(task.ID, cursor); err != nil {
-									return err
-								}
-								processed += len(group)
-								advanced = true
-								sleepRandom(ctx, msgDelayMin, msgDelayMax)
-								i = j
-								continue
-							} else if out != nil {
-								group = out
-							}
-						}
-						if need > 0 {
-							if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+				if len(group) > 0 {
+					need := quotaSendableAlbumCount(m, group, allowedTypes)
+					if skipped := len(group) - need; skipped > 0 {
+						global.AddFiltered(uint64(skipped))
+					}
+					if need > 0 && kw != nil {
+						if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
+							global.AddFiltered(uint64(need))
+							cursor = minInGroup
+							if err := persistHistoryCursor(task.ID, cursor); err != nil {
 								return err
 							}
+							processed += len(group)
+							advanced = true
+							sleepRandom(ctx, msgDelayMin, msgDelayMax)
+							i = j
+							continue
+						} else if out != nil {
+							group = out
 						}
+					}
+					if need > 0 {
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+							return err
+						}
+					}
 					if err := processWithRetry(ctx, func() error {
 						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
 					}); err != nil {
@@ -665,39 +1062,39 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					i++
 					continue
 				}
-				}
+			}
 
-				msgToSend := msg
-				if kw != nil {
-					if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
-						if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
-							global.IncFiltered()
-						}
-						cursor = msg.ID
-						if err := persistHistoryCursor(task.ID, cursor); err != nil {
-							return err
-						}
-						processed++
-						advanced = true
-						i++
-						continue
-					} else if out != nil {
-						msgToSend = out
+			msgToSend := msg
+			if kw != nil {
+				if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
+					if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
+						global.IncFiltered()
 					}
-				}
-
-				need := quotaSendableCount(m, msgToSend, allowedTypes)
-				if need > 0 {
-					if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					cursor = msg.ID
+					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
+					processed++
+					advanced = true
+					i++
+					continue
+				} else if out != nil {
+					msgToSend = out
 				}
-				if err := processWithRetry(ctx, func() error {
-					return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
-				}); err != nil {
-					if need > 0 {
-						global.AddFail(uint64(need))
-					} else {
+			}
+
+			need := quotaSendableCount(m, msgToSend, allowedTypes)
+			if need > 0 {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+					return err
+				}
+			}
+			if err := processWithRetry(ctx, func() error {
+				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
+			}); err != nil {
+				if need > 0 {
+					global.AddFail(uint64(need))
+				} else {
 					global.IncFail()
 				}
 				if errors.Is(err, ErrMediaDownload) {
@@ -828,6 +1225,31 @@ func resolveInputPeer(ctx context.Context, api *tg.Client, raw string) (tg.Input
 
 	s := message.NewSender(api)
 	return s.Resolve(raw).AsInputPeer(ctx)
+}
+
+func persistHistoryMaxID(taskID uint, maxID int) error {
+	if taskID == 0 {
+		return errors.New("task id is required")
+	}
+	if maxID <= 0 || global.DB == nil {
+		return nil
+	}
+	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+		Update("history_max_id", gorm.Expr("GREATEST(history_max_id, ?)", maxID)).Error
+}
+
+func persistHistoryCursorAndMax(taskID uint, cursor int) error {
+	if taskID == 0 {
+		return errors.New("task id is required")
+	}
+	if global.DB == nil {
+		return nil
+	}
+	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+		Updates(map[string]any{
+			"history_cursor": cursor,
+			"history_max_id": gorm.Expr("GREATEST(history_max_id, ?)", cursor),
+		}).Error
 }
 
 func persistHistoryCursor(taskID uint, cursor int) error {

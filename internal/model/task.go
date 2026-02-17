@@ -66,6 +66,8 @@ type Task struct {
 
 	// 历史克隆进度（断点续传）
 	HistoryCursor int `gorm:"type:int;default:0" json:"history_cursor"` // 最近一次成功转发的消息 ID
+	// HistoryMaxID tracks the max message id ever successfully processed (used for 追更 in new->old mode).
+	HistoryMaxID int `gorm:"type:int;default:0" json:"history_max_id"`
 	// 历史克隆方向：1-从旧到新，2-从新到旧
 	HistoryOrder int `gorm:"type:tinyint;default:1" json:"history_order"`
 }
