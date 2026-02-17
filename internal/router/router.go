@@ -19,6 +19,7 @@ func SetupRouter() *gin.Engine {
 
 	taskApi := v1.TaskApi{}
 	strategyApi := v1.StrategyApi{}
+	keywordApi := v1.KeywordProfileApi{}
 	authApi := v1.AuthApi{}
 	tgAuthApi := v1.TGAuthApi{}
 	dashboardApi := v1.DashboardApi{}
@@ -68,6 +69,14 @@ func SetupRouter() *gin.Engine {
 			strategyV1.GET("", strategyApi.GetStrategyList)
 			strategyV1.PUT("/:id", strategyApi.UpdateStrategy)
 			strategyV1.DELETE("/:id", strategyApi.DeleteStrategy)
+		}
+
+		keywordV1 := apiV1.Group("/keyword-profiles")
+		{
+			keywordV1.POST("", keywordApi.CreateKeywordProfile)
+			keywordV1.GET("", keywordApi.GetKeywordProfileList)
+			keywordV1.PUT("/:id", keywordApi.UpdateKeywordProfile)
+			keywordV1.DELETE("/:id", keywordApi.DeleteKeywordProfile)
 		}
 
 		dashV1 := apiV1.Group("/dashboard")

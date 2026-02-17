@@ -12,6 +12,7 @@ export type Task = {
   target_url: string
   session_key?: string
   strategy_id?: number
+  keyword_profile_id?: number
   source_channel_id?: number
 
   clone_mode: number
@@ -64,6 +65,23 @@ export type Strategy = {
 
   daily_limit?: number
   run_window?: string
+}
+
+export type ReplaceRule = {
+  from: string
+  to: string
+}
+
+export type KeywordProfile = {
+  ID: number
+
+  user_id?: number
+  name: string
+
+  block_words: string[]
+  allow_words: string[]
+  replace_rules: ReplaceRule[]
+  use_regex: boolean
 }
 
 export type TaskProgress = {
@@ -171,6 +189,28 @@ export function updateStrategy(id: number, payload: Partial<Strategy>): Promise<
 
 export function deleteStrategy(id: number): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/v1/strategies/${id}`, { method: 'DELETE' })
+}
+
+export function getKeywordProfiles(): Promise<KeywordProfile[]> {
+  return apiFetch<KeywordProfile[]>('/api/v1/keyword-profiles', { method: 'GET' })
+}
+
+export function createKeywordProfile(payload: Partial<KeywordProfile>): Promise<KeywordProfile> {
+  return apiFetch<KeywordProfile>('/api/v1/keyword-profiles', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateKeywordProfile(id: number, payload: Partial<KeywordProfile>): Promise<KeywordProfile> {
+  return apiFetch<KeywordProfile>(`/api/v1/keyword-profiles/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteKeywordProfile(id: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/v1/keyword-profiles/${id}`, { method: 'DELETE' })
 }
 
 export function taskAction(id: number, action: 'start' | 'pause' | 'stop'): Promise<{ status: number; msg: string }> {

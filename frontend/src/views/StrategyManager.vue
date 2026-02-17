@@ -2,11 +2,24 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { createStrategy, deleteStrategy, getStrategies, updateStrategy, type Strategy } from '../api'
+import {
+  createKeywordProfile,
+  createStrategy,
+  deleteKeywordProfile,
+  deleteStrategy,
+  getKeywordProfiles,
+  getStrategies,
+  updateKeywordProfile,
+  updateStrategy,
+  type KeywordProfile,
+  type Strategy,
+} from '../api'
+import KeywordForm, { type KeywordFormExpose, type KeywordFormModel } from '../components/strategy/KeywordForm.vue'
 import StrategyForm, { type StrategyFormExpose, type StrategyFormModel } from '../components/strategy/StrategyForm.vue'
 
-type TabKey = 'library' | 'create'
+type TabKey = 'library' | 'create' | 'keywords'
 type DialogMode = 'edit' | 'debug'
+type KeywordDialogMode = 'create' | 'edit'
 
 const activeTab = ref<TabKey>('library')
 
@@ -22,6 +35,15 @@ const dialogMode = ref<DialogMode>('edit')
 
 const createFormRef = ref<StrategyFormExpose | null>(null)
 const editFormRef = ref<StrategyFormExpose | null>(null)
+
+const kwLoading = ref(false)
+const kwProfiles = ref<KeywordProfile[]>([])
+const kwSearch = ref('')
+
+const kwDialogVisible = ref(false)
+const kwDialogMode = ref<KeywordDialogMode>('create')
+const kwSaving = ref(false)
+const kwFormRef = ref<KeywordFormExpose | null>(null)
 
 function emptyModel(): StrategyFormModel {
   return {
@@ -53,6 +75,19 @@ function emptyModel(): StrategyFormModel {
 
 const createModel = reactive<StrategyFormModel>(emptyModel())
 const editModel = reactive<StrategyFormModel>(emptyModel())
+
+function emptyKeywordModel(): KeywordFormModel {
+  return {
+    ID: 0,
+    name: '',
+    block_words: [],
+    allow_words: [],
+    replace_rules: [],
+    use_regex: false,
+  }
+}
+
+const kwModel = reactive<KeywordFormModel>(emptyKeywordModel())
 
 function cloneModeLabel(v: number): string {
   if (v === 1) return '转发'
@@ -94,6 +129,12 @@ const filteredStrategies = computed(() => {
     const remark = (s.remark || '').toLowerCase()
     return name.includes(q) || remark.includes(q)
   })
+})
+
+const filteredKwProfiles = computed(() => {
+  const q = (kwSearch.value || '').trim().toLowerCase()
+  if (!q) return kwProfiles.value
+  return kwProfiles.value.filter((p) => (p.name || '').toLowerCase().includes(q))
 })
 
 function buildPayload(m: StrategyFormModel): Partial<Strategy> {
@@ -155,7 +196,7 @@ function startCreate() {
   void nextTick(() => createFormRef.value?.clearValidate?.())
 }
 
-async function reload() {
+async function reloadStrategies() {
   loading.value = true
   try {
     strategies.value = await getStrategies()
@@ -165,6 +206,22 @@ async function reload() {
   } finally {
     loading.value = false
   }
+}
+
+async function reloadKeywords() {
+  kwLoading.value = true
+  try {
+    kwProfiles.value = await getKeywordProfiles()
+  } catch (err: any) {
+    ElMessage.error(err?.message || '加载关键词策略失败')
+    kwProfiles.value = []
+  } finally {
+    kwLoading.value = false
+  }
+}
+
+async function reload() {
+  await Promise.all([reloadStrategies(), reloadKeywords()])
 }
 
 defineExpose({ reload })
@@ -178,7 +235,7 @@ async function submitCreate() {
     const created = await createStrategy(buildPayload(createModel))
     ElMessage.success(`策略已创建 #${created.ID}`)
     activeTab.value = 'library'
-    await reload()
+    await reloadStrategies()
     Object.assign(createModel, emptyModel())
     void nextTick(() => createFormRef.value?.clearValidate?.())
   } catch (e: any) {
@@ -221,7 +278,7 @@ async function submitEdit() {
     const updated = await updateStrategy(id, buildPayload(editModel))
     ElMessage.success(`策略已保存 #${updated.ID}`)
     dialogVisible.value = false
-    await reload()
+    await reloadStrategies()
   } catch (e: any) {
     ElMessage.error(e?.message || '保存失败')
   } finally {
@@ -248,7 +305,121 @@ async function remove(row?: Strategy) {
     await deleteStrategy(id)
     ElMessage.success('已删除')
     if (dialogVisible.value) dialogVisible.value = false
-    await reload()
+    await reloadStrategies()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  }
+}
+
+function buildKeywordPayload(m: KeywordFormModel): Partial<KeywordProfile> {
+  const clean = (arr: any): string[] => {
+    if (!Array.isArray(arr)) return []
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const v of arr) {
+      const s = String(v || '').trim()
+      if (!s) continue
+      if (seen.has(s)) continue
+      seen.add(s)
+      out.push(s)
+    }
+    return out
+  }
+
+  const rules = Array.isArray(m.replace_rules) ? m.replace_rules : []
+  const replace_rules = rules
+    .map((r) => ({ from: String(r?.from || '').trim(), to: String(r?.to || '').trim() }))
+    .filter((r) => r.from)
+
+  return {
+    name: (m.name || '').trim(),
+    block_words: clean(m.block_words),
+    allow_words: clean(m.allow_words),
+    replace_rules,
+    use_regex: Boolean(m.use_regex),
+  }
+}
+
+function openKwCreate() {
+  kwDialogMode.value = 'create'
+  Object.assign(kwModel, emptyKeywordModel())
+  kwDialogVisible.value = true
+}
+
+function openKwEdit(row: KeywordProfile) {
+  kwDialogMode.value = 'edit'
+  Object.assign(kwModel, emptyKeywordModel(), {
+    ID: Number(row.ID || 0),
+    name: (row.name || '').trim(),
+    block_words: Array.isArray(row.block_words) ? [...row.block_words] : [],
+    allow_words: Array.isArray(row.allow_words) ? [...row.allow_words] : [],
+    replace_rules: Array.isArray(row.replace_rules) ? row.replace_rules.map((r) => ({ from: r.from, to: r.to })) : [],
+    use_regex: Boolean(row.use_regex),
+  })
+  kwDialogVisible.value = true
+}
+
+const kwDialogTitle = computed(() => {
+  const name = (kwModel.name || '').trim()
+  if (kwDialogMode.value === 'create') return '新建关键词策略'
+  return `编辑关键词策略: ${name || '#' + kwModel.ID}`
+})
+
+watch(kwDialogVisible, (v) => {
+  if (!v) return
+  void nextTick(() => kwFormRef.value?.clearValidate?.())
+})
+
+async function submitKw() {
+  const ok = await kwFormRef.value?.validate?.()
+  if (!ok) return
+
+  const payload = buildKeywordPayload(kwModel)
+  if (!payload.name) {
+    ElMessage.warning('请填写方案名称')
+    return
+  }
+
+  kwSaving.value = true
+  try {
+    if (kwDialogMode.value === 'create') {
+      const created = await createKeywordProfile(payload)
+      ElMessage.success(`关键词策略已创建 #${created.ID}`)
+    } else {
+      const id = Number(kwModel.ID || 0)
+      if (!id) return
+      const updated = await updateKeywordProfile(id, payload)
+      ElMessage.success(`关键词策略已保存 #${updated.ID}`)
+    }
+    kwDialogVisible.value = false
+    await reloadKeywords()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    kwSaving.value = false
+  }
+}
+
+async function removeKw(row?: KeywordProfile) {
+  const id = Number(row?.ID || kwModel.ID || 0)
+  if (!id) return
+  const name = (row?.name || kwModel.name || '').trim()
+
+  try {
+    await ElMessageBox.confirm(`确定删除关键词策略「${name || '#' + id}」吗？`, '确认', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  try {
+    await deleteKeywordProfile(id)
+    ElMessage.success('已删除')
+    if (kwDialogVisible.value) kwDialogVisible.value = false
+    await reloadKeywords()
   } catch (e: any) {
     ElMessage.error(e?.message || '删除失败')
   }
@@ -262,13 +433,13 @@ onMounted(() => {
 <template>
   <div class="strategy-manager">
     <el-tabs v-model="activeTab" class="bt-tabs">
-      <el-tab-pane label="策略库" name="library">
+      <el-tab-pane label="行为策略库" name="library">
         <el-card class="bt-card pane-card" shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
                 <i class="ri-flow-chart-line" />
-                <span>策略库</span>
+                <span>行为策略库</span>
               </div>
               <div class="card-sub">共 {{ strategies.length }} 条</div>
             </div>
@@ -281,7 +452,7 @@ onMounted(() => {
                   <i class="ri-add-line" />
                   新建策略
                 </el-button>
-                <el-button @click="reload" :loading="loading">
+                <el-button @click="reloadStrategies" :loading="loading">
                   <i class="ri-refresh-line" />
                   刷新
                 </el-button>
@@ -327,14 +498,14 @@ onMounted(() => {
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="新建策略" name="create">
+      <el-tab-pane label="新建行为策略" name="create">
         <div class="create-wrap">
           <el-card class="bt-card pane-card" shadow="never">
             <template #header>
               <div class="card-header">
                 <div class="card-title">
                   <i class="ri-add-circle-line" />
-                  <span>创建新策略模版</span>
+                  <span>创建新行为策略</span>
                 </div>
                 <div class="card-sub">Create New</div>
               </div>
@@ -359,6 +530,75 @@ onMounted(() => {
           </el-card>
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="关键词策略" name="keywords">
+        <el-card class="bt-card pane-card" shadow="never">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <i class="ri-filter-3-line" />
+                <span>关键词策略</span>
+              </div>
+              <div class="card-sub">共 {{ kwProfiles.length }} 条</div>
+            </div>
+          </template>
+
+          <div class="pane">
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <el-button type="primary" @click="openKwCreate">
+                  <i class="ri-add-line" />
+                  新建关键词策略
+                </el-button>
+                <el-button @click="reloadKeywords" :loading="kwLoading">
+                  <i class="ri-refresh-line" />
+                  刷新
+                </el-button>
+              </div>
+              <div class="toolbar-right">
+                <el-input v-model="kwSearch" placeholder="搜索关键词策略名称" clearable class="search" />
+              </div>
+            </div>
+
+            <div class="table-body">
+              <el-table :data="filteredKwProfiles" v-loading="kwLoading" stripe height="100%" style="width: 100%">
+                <el-table-column prop="ID" label="ID" width="90" />
+
+                <el-table-column label="方案" min-width="260">
+                  <template #default="{ row }">
+                    <div class="st-name">{{ row.name }}</div>
+                    <div class="st-remark">
+                      屏蔽 {{ row.block_words?.length || 0 }} | 白名单 {{ row.allow_words?.length || 0 }} | 替换
+                      {{ row.replace_rules?.length || 0 }}
+                      <span v-if="row.use_regex"> | Regex</span>
+                    </div>
+                  </template>
+                </el-table-column>
+
+                <el-table-column label="标签" min-width="360">
+                  <template #default="{ row }">
+                    <el-space wrap>
+                      <el-tag size="small" type="info" effect="plain">屏蔽: {{ row.block_words?.length || 0 }}</el-tag>
+                      <el-tag size="small" type="info" effect="plain">白名单: {{ row.allow_words?.length || 0 }}</el-tag>
+                      <el-tag size="small" type="info" effect="plain">替换: {{ row.replace_rules?.length || 0 }}</el-tag>
+                      <el-tag v-if="row.use_regex" size="small" type="success" effect="plain">Regex</el-tag>
+                    </el-space>
+                  </template>
+                </el-table-column>
+
+                <el-table-column label="操作" width="160" fixed="right">
+                  <template #default="{ row }">
+                    <el-space size="small">
+                      <el-button link type="primary" @click="openKwEdit(row)">编辑</el-button>
+                      <el-button link type="danger" @click="removeKw(row)">删除</el-button>
+                    </el-space>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="860px" class="bt-dialog" destroy-on-close>
@@ -376,6 +616,24 @@ onMounted(() => {
             删除
           </el-button>
           <el-button type="primary" :loading="editSaving" @click="submitEdit">
+            <i class="ri-save-3-line" />
+            保存
+          </el-button>
+        </el-space>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="kwDialogVisible" :title="kwDialogTitle" width="820px" class="bt-dialog" destroy-on-close>
+      <KeywordForm ref="kwFormRef" v-model="kwModel" :loading="kwSaving" :show-actions="false" />
+
+      <template #footer>
+        <el-space>
+          <el-button @click="kwDialogVisible = false">取消</el-button>
+          <el-button v-if="kwDialogMode === 'edit'" type="danger" :disabled="kwSaving" @click="removeKw()">
+            <i class="ri-delete-bin-6-line" />
+            删除
+          </el-button>
+          <el-button type="primary" :loading="kwSaving" @click="submitKw">
             <i class="ri-save-3-line" />
             保存
           </el-button>

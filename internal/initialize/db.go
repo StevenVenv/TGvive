@@ -33,7 +33,7 @@ func InitDB() {
 
 	global.DB = db
 
-	if err := global.DB.AutoMigrate(&model.User{}, &model.Task{}, &model.Strategy{}); err != nil {
+	if err := global.DB.AutoMigrate(&model.User{}, &model.Task{}, &model.Strategy{}, &model.KeywordProfile{}); err != nil {
 		panic("auto migrate failed: " + err.Error())
 	}
 }

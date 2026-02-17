@@ -63,10 +63,10 @@ func (m *TaskManager) CloneHistory(ctx context.Context, api *tg.Client, task mod
 		return fmt.Errorf("resolve target peer %q: %w", task.TargetURL, err)
 	}
 
-	return m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, 0)
+	return m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, nil, 0)
 }
 
-func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, task model.Task, runID uint64) error {
+func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, task model.Task, kw *keywordPolicy, runID uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -103,9 +103,9 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 
 	cursor := task.HistoryCursor
 	if order == model.HistoryOrderOldToNew {
-		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, runID, quota)
+		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota)
 	}
-	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, runID, quota)
+	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota)
 }
 
 type historyBounds struct {
@@ -146,6 +146,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 	bounds historyBounds,
 	allowedTypes map[string]struct{},
 	pageSize int,
+	kw *keywordPolicy,
 	runID uint64,
 	quota *taskQuota,
 ) error {
@@ -280,17 +281,33 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					j++
 				}
 
-				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
-				if len(group) > 0 {
-					need := quotaSendableAlbumCount(m, group, allowedTypes)
-					if skipped := len(group) - need; skipped > 0 {
-						global.AddFiltered(uint64(skipped))
-					}
-					if need > 0 {
-						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
-							return err
+					// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
+					if len(group) > 0 {
+						need := quotaSendableAlbumCount(m, group, allowedTypes)
+						if skipped := len(group) - need; skipped > 0 {
+							global.AddFiltered(uint64(skipped))
 						}
-					}
+						if need > 0 && kw != nil {
+							if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
+								global.AddFiltered(uint64(need))
+								cursor = maxInGroup
+								if err := persistHistoryCursor(task.ID, cursor); err != nil {
+									return err
+								}
+								processed += len(group)
+								advanced = true
+								sleepRandom(ctx, msgDelayMin, msgDelayMax)
+								i = j
+								continue
+							} else if out != nil {
+								group = out
+							}
+						}
+						if need > 0 {
+							if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+								return err
+							}
+						}
 					if err := processWithRetry(ctx, func() error {
 						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
 					}); err != nil {
@@ -350,21 +367,40 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					advanced = true
 					i++
 					continue
+					}
 				}
-			}
 
-			need := quotaSendableCount(m, msg, allowedTypes)
-			if need > 0 {
-				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
-					return err
+				msgToSend := msg
+				if kw != nil {
+					if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
+						if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
+							global.IncFiltered()
+						}
+						cursor = msg.ID
+						if err := persistHistoryCursor(task.ID, cursor); err != nil {
+							return err
+						}
+						processed++
+						advanced = true
+						i++
+						continue
+					} else if out != nil {
+						msgToSend = out
+					}
 				}
-			}
-			if err := processWithRetry(ctx, func() error {
-				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msg)
-			}); err != nil {
+
+				need := quotaSendableCount(m, msgToSend, allowedTypes)
 				if need > 0 {
-					global.AddFail(uint64(need))
-				} else {
+					if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+						return err
+					}
+				}
+				if err := processWithRetry(ctx, func() error {
+					return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
+				}); err != nil {
+					if need > 0 {
+						global.AddFail(uint64(need))
+					} else {
 					global.IncFail()
 				}
 				if errors.Is(err, ErrMediaDownload) {
@@ -420,6 +456,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 	bounds historyBounds,
 	allowedTypes map[string]struct{},
 	pageSize int,
+	kw *keywordPolicy,
 	runID uint64,
 	quota *taskQuota,
 ) error {
@@ -543,16 +580,32 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					j++
 				}
 
-				if len(group) > 0 {
-					need := quotaSendableAlbumCount(m, group, allowedTypes)
-					if skipped := len(group) - need; skipped > 0 {
-						global.AddFiltered(uint64(skipped))
-					}
-					if need > 0 {
-						if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
-							return err
+					if len(group) > 0 {
+						need := quotaSendableAlbumCount(m, group, allowedTypes)
+						if skipped := len(group) - need; skipped > 0 {
+							global.AddFiltered(uint64(skipped))
 						}
-					}
+						if need > 0 && kw != nil {
+							if out, skip := applyKeywordPolicyToAlbum(m, group, allowedTypes, kw); skip {
+								global.AddFiltered(uint64(need))
+								cursor = minInGroup
+								if err := persistHistoryCursor(task.ID, cursor); err != nil {
+									return err
+								}
+								processed += len(group)
+								advanced = true
+								sleepRandom(ctx, msgDelayMin, msgDelayMax)
+								i = j
+								continue
+							} else if out != nil {
+								group = out
+							}
+						}
+						if need > 0 {
+							if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+								return err
+							}
+						}
 					if err := processWithRetry(ctx, func() error {
 						return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, task, group, allowedTypes)
 					}); err != nil {
@@ -612,20 +665,39 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					i++
 					continue
 				}
-			}
-
-			need := quotaSendableCount(m, msg, allowedTypes)
-			if need > 0 {
-				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
-					return err
 				}
-			}
-			if err := processWithRetry(ctx, func() error {
-				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msg)
-			}); err != nil {
+
+				msgToSend := msg
+				if kw != nil {
+					if out, skip := applyKeywordPolicyToMessage(msg, kw); skip {
+						if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
+							global.IncFiltered()
+						}
+						cursor = msg.ID
+						if err := persistHistoryCursor(task.ID, cursor); err != nil {
+							return err
+						}
+						processed++
+						advanced = true
+						i++
+						continue
+					} else if out != nil {
+						msgToSend = out
+					}
+				}
+
+				need := quotaSendableCount(m, msgToSend, allowedTypes)
 				if need > 0 {
-					global.AddFail(uint64(need))
-				} else {
+					if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+						return err
+					}
+				}
+				if err := processWithRetry(ctx, func() error {
+					return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, task, msgToSend)
+				}); err != nil {
+					if need > 0 {
+						global.AddFail(uint64(need))
+					} else {
 					global.IncFail()
 				}
 				if errors.Is(err, ErrMediaDownload) {

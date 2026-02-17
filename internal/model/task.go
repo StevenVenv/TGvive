@@ -28,6 +28,9 @@ type Task struct {
 	// StrategyID 关联策略模板（Strategy）。
 	StrategyID uint `gorm:"index;default:0" json:"strategy_id"`
 
+	// KeywordProfileID 关联关键词/过滤策略（KeywordProfile），允许为空（0 表示未配置）。
+	KeywordProfileID uint `gorm:"index;default:0" json:"keyword_profile_id,omitempty"`
+
 	// SourceChannelID 用于实时监听时的路由（SourceURL 解析后的数值 ID）
 	SourceChannelID int64 `gorm:"type:bigint;default:0;index" json:"source_channel_id"`
 

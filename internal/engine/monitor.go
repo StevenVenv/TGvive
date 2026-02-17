@@ -101,6 +101,7 @@ type runtimeTaskConfig struct {
 	Ctx        context.Context
 	SourcePeer tg.InputPeerClass
 	TargetPeer tg.InputPeerClass
+	Keyword    *keywordPolicy
 }
 
 type runtimeTask struct {
@@ -114,6 +115,7 @@ type runtimeTask struct {
 	delayMin     time.Duration
 	delayMax     time.Duration
 	quota        *taskQuota
+	keyword      *keywordPolicy
 
 	queue    chan realtimeJob
 	stopOnce sync.Once
@@ -134,6 +136,7 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		delayMin:     defaultMsgDelayMin,
 		delayMax:     defaultMsgDelayMax,
 		quota:        newTaskQuota(cfg.Task),
+		keyword:      cfg.Keyword,
 
 		queue:     make(chan realtimeJob, 512),
 		albumWait: make(map[int64]chan []*tg.Message),
@@ -282,32 +285,45 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					continue
 				}
 
-				need := quotaSendableAlbumCount(m, batch, t.allowedTypes)
-				if skipped := len(batch) - need; skipped > 0 {
-					global.AddFiltered(uint64(skipped))
-				}
-				if need > 0 {
-					if err := m.waitForQuota(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
-						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-							return
+					need := quotaSendableAlbumCount(m, batch, t.allowedTypes)
+					if skipped := len(batch) - need; skipped > 0 {
+						global.AddFiltered(uint64(skipped))
+					}
+
+					maxID := 0
+					for _, msg := range batch {
+						if msg != nil && msg.ID > maxID {
+							maxID = msg.ID
+						}
+					}
+
+					if need > 0 && t.keyword != nil {
+						if out, skip := applyKeywordPolicyToAlbum(m, batch, t.allowedTypes, t.keyword); skip {
+							global.AddFiltered(uint64(need))
+							if maxID > 0 {
+								t.advanceCursor(maxID)
+							}
+							sleepRandom(t.Ctx, t.delayMin, t.delayMax)
+							continue
+						} else if out != nil {
+							batch = out
+						}
+					}
+					if need > 0 {
+						if err := m.waitForQuota(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
+							if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+								return
 						}
 						if global.Logger != nil {
 							global.Logger.Error("realtime quota gate failed", zap.Uint("task_id", t.Task.ID), zap.Error(err))
 						}
-						return
+							return
+						}
 					}
-				}
 
-				maxID := 0
-				for _, msg := range batch {
-					if msg != nil && msg.ID > maxID {
-						maxID = msg.ID
-					}
-				}
-
-				err := processWithRetry(t.Ctx, func() error {
-					return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, batch, t.allowedTypes)
-				})
+					err := processWithRetry(t.Ctx, func() error {
+						return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, batch, t.allowedTypes)
+					})
 				if err != nil {
 					if need > 0 {
 						global.AddFail(uint64(need))
@@ -347,31 +363,44 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					continue
 				}
 
-				if t.allowedTypes != nil {
-					ct := m.DetectContentType(msg)
-					if _, ok := t.allowedTypes[ct]; !ok {
-						global.IncFiltered()
-						t.advanceCursor(msg.ID)
-						continue
+					if t.allowedTypes != nil {
+						ct := m.DetectContentType(msg)
+						if _, ok := t.allowedTypes[ct]; !ok {
+							global.IncFiltered()
+							t.advanceCursor(msg.ID)
+							continue
+						}
 					}
-				}
 
-				need := quotaSendableCount(m, msg, nil)
-				if need > 0 {
-					if err := m.waitForQuota(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
-						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-							return
+					msgToSend := msg
+					if t.keyword != nil {
+						if out, skip := applyKeywordPolicyToMessage(msg, t.keyword); skip {
+							if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
+								global.IncFiltered()
+							}
+							t.advanceCursor(msg.ID)
+							continue
+						} else if out != nil {
+							msgToSend = out
+						}
+					}
+
+					need := quotaSendableCount(m, msgToSend, nil)
+					if need > 0 {
+						if err := m.waitForQuota(t.Ctx, t.Task.ID, t.RunID, t.quota, need); err != nil {
+							if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+								return
 						}
 						if global.Logger != nil {
 							global.Logger.Error("realtime quota gate failed", zap.Uint("task_id", t.Task.ID), zap.Error(err))
 						}
 						return
+						}
 					}
-				}
 
-				err := processWithRetry(t.Ctx, func() error {
-					return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, msg)
-				})
+					err := processWithRetry(t.Ctx, func() error {
+						return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, msgToSend)
+					})
 				if err != nil {
 					if need > 0 {
 						global.AddFail(uint64(need))

@@ -50,8 +50,13 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		return
 	}
 
+	kw, kwErr := loadKeywordPolicy(ctx, task)
+	if kwErr != nil {
+		m.record(taskID, runID, 0, 0, 0, 0, "加载关键词策略失败: "+kwErr.Error()+" (已忽略)")
+	}
+
 	m.record(taskID, runID, 0, 0, 0, 0, "开始克隆历史消息")
-	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, runID); err != nil {
+	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, kw, runID); err != nil {
 		if ctx.Err() != nil {
 			return
 		}
@@ -82,6 +87,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			Ctx:        ctx,
 			SourcePeer: sourcePeer,
 			TargetPeer: targetPeer,
+			Keyword:    kw,
 		}, sourceChannelID)
 		<-ctx.Done()
 		m.unregisterTask(taskID, sourceChannelID)

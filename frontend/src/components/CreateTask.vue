@@ -34,14 +34,25 @@ type StrategyItem = {
   remark?: string
 }
 
+type KeywordProfileItem = {
+  ID: number
+  name: string
+  use_regex?: boolean
+  block_words?: string[]
+  allow_words?: string[]
+  replace_rules?: Array<{ from: string; to: string }>
+}
+
 const accounts = ref<AccountItem[]>([])
 const strategies = ref<StrategyItem[]>([])
+const keywordProfiles = ref<KeywordProfileItem[]>([])
 
 const form = reactive({
   source_url: '',
   target_url: '',
   session_key: '',
   strategy_id: 0,
+  keyword_profile_id: 0,
 })
 
 const selectedAccount = computed(() => accounts.value.find((a) => a.key === form.session_key) || null)
@@ -67,6 +78,7 @@ function resetForm() {
   form.target_url = ''
   form.session_key = ''
   form.strategy_id = 0
+  form.keyword_profile_id = 0
 }
 
 const tokenStorageKey = 'tgvive_jwt_token'
@@ -125,19 +137,28 @@ const strategyTip = computed(() => {
 async function loadOptions() {
   loading.value = true
   try {
-    const [acc, stg] = await Promise.all([apiGet<AccountItem[]>('/api/v1/accounts'), apiGet<StrategyItem[]>('/api/v1/strategies')])
+    const [acc, stg, kw] = await Promise.all([
+      apiGet<AccountItem[]>('/api/v1/accounts'),
+      apiGet<StrategyItem[]>('/api/v1/strategies'),
+      apiGet<KeywordProfileItem[]>('/api/v1/keyword-profiles'),
+    ])
     accounts.value = acc || []
     strategies.value = stg || []
+    keywordProfiles.value = kw || []
 
     const onlyAccount = accounts.value.length === 1 ? accounts.value[0] : undefined
     if (!form.session_key && onlyAccount) form.session_key = onlyAccount.key
 
     const onlyStrategy = strategies.value.length === 1 ? strategies.value[0] : undefined
     if (!form.strategy_id && onlyStrategy) form.strategy_id = onlyStrategy.ID
+
+    const onlyKw = keywordProfiles.value.length === 1 ? keywordProfiles.value[0] : undefined
+    if (!form.keyword_profile_id && onlyKw) form.keyword_profile_id = onlyKw.ID
   } catch (err: any) {
     ElMessage.error(err?.message || '初始化失败')
     accounts.value = []
     strategies.value = []
+    keywordProfiles.value = []
   } finally {
     loading.value = false
   }
@@ -159,6 +180,7 @@ async function submit() {
     target_url: (form.target_url || '').trim(),
     session_key: (form.session_key || '').trim(),
     strategy_id: Number(form.strategy_id || 0),
+    keyword_profile_id: Number(form.keyword_profile_id || 0),
   }
 
   if (!payload.source_url || !payload.target_url || !payload.session_key || !payload.strategy_id) {
@@ -252,6 +274,30 @@ onMounted(() => {
             </el-option>
           </el-select>
           <div v-if="strategyTip" class="hint">{{ strategyTip }}</div>
+        </el-form-item>
+
+        <el-form-item label="关键词方案 (Keywords)" prop="keyword_profile_id">
+          <el-select
+            v-model="form.keyword_profile_id"
+            placeholder="可选：关键词过滤/替换"
+            style="width: 100%"
+            filterable
+            clearable
+            popper-class="tgvive-dark-popper"
+          >
+            <el-option v-for="k in keywordProfiles" :key="k.ID" :label="k.name" :value="k.ID">
+              <div class="opt">
+                <div class="opt-left">
+                  <div class="opt-title">{{ k.name }}</div>
+                  <div class="opt-sub">
+                    屏蔽 {{ k.block_words?.length || 0 }} | 白名单 {{ k.allow_words?.length || 0 }} | 替换 {{ k.replace_rules?.length || 0 }}
+                    <span v-if="k.use_regex"> | Regex</span>
+                  </div>
+                </div>
+              </div>
+            </el-option>
+          </el-select>
+          <div class="hint">可留空：仅使用行为策略；选择后将启用关键词过滤/替换</div>
         </el-form-item>
       </el-form>
     </div>

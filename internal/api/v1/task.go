@@ -21,10 +21,11 @@ type TaskActionReq struct {
 }
 
 type CreateTaskReq struct {
-	SourceURL  string `json:"source_url" binding:"required"`
-	TargetURL  string `json:"target_url" binding:"required"`
-	SessionKey string `json:"session_key" binding:"required"`
-	StrategyID uint   `json:"strategy_id" binding:"required"`
+	SourceURL        string `json:"source_url" binding:"required"`
+	TargetURL        string `json:"target_url" binding:"required"`
+	SessionKey       string `json:"session_key" binding:"required"`
+	StrategyID       uint   `json:"strategy_id" binding:"required"`
+	KeywordProfileID uint   `json:"keyword_profile_id"`
 }
 
 // CreateTask 创建转发任务
@@ -56,12 +57,20 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		return
 	}
 
+	if req.KeywordProfileID != 0 {
+		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
+			app.FailWithMsg("关键词策略不存在或无权操作: "+err.Error(), c)
+			return
+		}
+	}
+
 	task := model.Task{
-		UserID:     userID,
-		SourceURL:  req.SourceURL,
-		TargetURL:  req.TargetURL,
-		ExecuteBy:  req.SessionKey,
-		StrategyID: req.StrategyID,
+		UserID:           userID,
+		SourceURL:        req.SourceURL,
+		TargetURL:        req.TargetURL,
+		ExecuteBy:        req.SessionKey,
+		StrategyID:       req.StrategyID,
+		KeywordProfileID: req.KeywordProfileID,
 
 		CloneMode:    strategy.CloneMode,
 		ContentTypes: strategy.ContentTypes,
