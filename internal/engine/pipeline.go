@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -89,6 +90,12 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 	case 3:
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msgToSend, task.ID)
 		if err != nil {
+			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
+				if serr := m.SendMedia(ctx, api, msgToSend, task, peer); serr == nil {
+					global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msgToSend.ID))
+					return nil
+				}
+			}
 			return err
 		}
 		if cleanup != nil {

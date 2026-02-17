@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"my-go-server/internal/engine/processor"
@@ -21,6 +22,7 @@ import (
 )
 
 var ErrUnsupportedMedia = errors.New("unsupported media")
+var ErrMediaDownload = errors.New("media download failed")
 
 const tmpMediaRoot = "./tmp/tgmedia"
 
@@ -267,6 +269,12 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 
 	localPath, meta, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
+		if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
+			if serr := m.SendMedia(ctx, api, msg, task, peer); serr == nil {
+				global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msg.ID))
+				return nil
+			}
+		}
 		return err
 	}
 	if cleanup != nil {
@@ -435,6 +443,12 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 	for _, msg := range mediaMsgs {
 		localPath, meta, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
+			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
+				if serr := m.SendAlbum(ctx, api, mediaMsgs, task, peer); serr == nil {
+					global.BroadcastLog(fmt.Sprintf("[WARN] Album download failed, fallback to send by reference (grouped_id=%d)", msg.GroupedID))
+					return nil
+				}
+			}
 			return err
 		}
 		cleanups = append(cleanups, cleanup)
@@ -618,9 +632,10 @@ func downloadMessageMedia(ctx context.Context, api *tg.Client, msg *tg.Message, 
 }
 
 type mediaDownloadSpec struct {
-	loc      tg.InputFileLocationClass
-	baseName string
-	meta     mediaMeta
+	loc        tg.InputFileLocationClass
+	baseName   string
+	meta       mediaMeta
+	photoThumb []string
 }
 
 func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
@@ -638,10 +653,11 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 			return mediaDownloadSpec{}, ErrUnsupportedMedia
 		}
 
-		thumb, ok := bestPhotoThumbType(photo)
-		if !ok {
+		thumbs := photoThumbCandidates(photo)
+		if len(thumbs) == 0 {
 			return mediaDownloadSpec{}, ErrUnsupportedMedia
 		}
+		thumb := thumbs[0]
 		loc := &tg.InputPhotoFileLocation{
 			ID:            photo.ID,
 			AccessHash:    photo.AccessHash,
@@ -650,8 +666,9 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 		}
 
 		return mediaDownloadSpec{
-			loc:      loc,
-			baseName: fmt.Sprintf("photo_%d.jpg", photo.ID),
+			loc:        loc,
+			baseName:   fmt.Sprintf("photo_%d.jpg", photo.ID),
+			photoThumb: thumbs,
 			meta: mediaMeta{
 				Kind:       mediaKindPhoto,
 				Spoiler:    media.Spoiler,
@@ -706,6 +723,40 @@ func isFileLocationRefreshable(err error) bool {
 		tgerr.Is(err, "FILE_REFERENCE_INVALID")
 }
 
+type messageMediaKey struct {
+	kind mediaKind
+	id   int64
+}
+
+func getMessageMediaKey(msg *tg.Message) (messageMediaKey, bool) {
+	if msg == nil || msg.Media == nil {
+		return messageMediaKey{}, false
+	}
+
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		if media.Photo == nil {
+			return messageMediaKey{}, false
+		}
+		photo, ok := media.Photo.AsNotEmpty()
+		if !ok || photo == nil {
+			return messageMediaKey{}, false
+		}
+		return messageMediaKey{kind: mediaKindPhoto, id: photo.ID}, true
+	case *tg.MessageMediaDocument:
+		if media.Document == nil {
+			return messageMediaKey{}, false
+		}
+		doc, ok := media.Document.AsNotEmpty()
+		if !ok || doc == nil {
+			return messageMediaKey{}, false
+		}
+		return messageMediaKey{kind: mediaKindDocument, id: doc.ID}, true
+	default:
+		return messageMediaKey{}, false
+	}
+}
+
 func refreshMessageForDownload(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -717,26 +768,145 @@ func refreshMessageForDownload(ctx context.Context, api *tg.Client, sourcePeer t
 		return nil, errors.New("message id is required")
 	}
 
-	var r tg.MessagesMessagesClass
-	var err error
+	// First try: direct getMessages (channels.getMessages for channels).
+	{
+		var r tg.MessagesMessagesClass
+		var err error
 
-	if ch, ok := sourcePeer.(*tg.InputPeerChannel); ok && ch != nil {
-		r, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-			Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
-			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}},
-		})
-	} else {
-		r, err = api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}})
+		if ch, ok := sourcePeer.(*tg.InputPeerChannel); ok && ch != nil {
+			r, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+				ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}},
+			})
+		} else {
+			r, err = api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}})
+		}
+		if err == nil {
+			msgs := extractTGMessages(r)
+			if len(msgs) > 0 && msgs[0] != nil {
+				return msgs[0], nil
+			}
+		}
 	}
-	if err != nil {
+
+	// Fallback: refresh via getHistory (offset_id = msgID+1, limit=1 -> likely returns msgID).
+	if sourcePeer != nil {
+		r, err := getHistoryWithFloodWait(ctx, api, &tg.MessagesGetHistoryRequest{
+			Peer:     sourcePeer,
+			OffsetID: msgID + 1,
+			Limit:    1,
+		})
+		if err != nil {
+			return nil, err
+		}
+		msgs := extractTGMessages(r)
+		for _, m := range msgs {
+			if m != nil && m.ID == msgID {
+				return m, nil
+			}
+		}
+	}
+
+	return nil, errors.New("refresh message returned empty result")
+}
+
+func refreshAlbumMessageForDownload(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, groupedID int64, target messageMediaKey, aroundMsgID int) (*tg.Message, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	msgs := extractTGMessages(r)
-	if len(msgs) == 0 || msgs[0] == nil {
-		return nil, errors.New("refresh message returned empty result")
+	if api == nil {
+		return nil, errors.New("tg api is nil")
 	}
-	return msgs[0], nil
+	if sourcePeer == nil {
+		return nil, errors.New("source peer is nil")
+	}
+	if groupedID == 0 {
+		return nil, errors.New("grouped id is required")
+	}
+	if aroundMsgID <= 0 {
+		return nil, errors.New("around message id is required")
+	}
+
+	const window = 48
+	limit := window*2 + 8
+	if limit > 128 {
+		limit = 128
+	}
+	reqs := []*tg.MessagesGetHistoryRequest{
+		{
+			Peer:      sourcePeer,
+			OffsetID:  aroundMsgID,
+			AddOffset: -window,
+			Limit:     limit,
+		},
+		{
+			Peer:      sourcePeer,
+			OffsetID:  aroundMsgID + 1,
+			AddOffset: -window,
+			Limit:     limit,
+		},
+		{
+			Peer:     sourcePeer,
+			OffsetID: aroundMsgID + 1,
+			Limit:    limit,
+		},
+	}
+
+	for _, req := range reqs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r, err := getHistoryWithFloodWait(ctx, api, req)
+		if err != nil {
+			continue
+		}
+		msgs := extractTGMessages(r)
+		var ids []tg.InputMessageClass
+		for _, m := range msgs {
+			if m == nil || m.Media == nil || m.GroupedID != groupedID {
+				continue
+			}
+			ids = append(ids, &tg.InputMessageID{ID: m.ID})
+			key, ok := getMessageMediaKey(m)
+			if !ok {
+				continue
+			}
+			if key.kind == target.kind && key.id == target.id {
+				return m, nil
+			}
+		}
+
+		// Second pass: bulk refresh album messages by IDs via getMessages to ensure newest file_reference.
+		if len(ids) == 0 {
+			continue
+		}
+		if ch, ok := sourcePeer.(*tg.InputPeerChannel); ok && ch != nil {
+			r, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+				ID:      ids,
+			})
+		} else {
+			r, err = api.MessagesGetMessages(ctx, ids)
+		}
+		if err != nil {
+			continue
+		}
+		refreshed := extractTGMessages(r)
+		for _, m := range refreshed {
+			if m == nil || m.Media == nil || m.GroupedID != groupedID {
+				continue
+			}
+			key, ok := getMessageMediaKey(m)
+			if !ok {
+				continue
+			}
+			if key.kind == target.kind && key.id == target.id {
+				return m, nil
+			}
+		}
+	}
+
+	return nil, errors.New("album refresh returned empty result")
 }
 
 func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, taskID uint) (localPath string, meta mediaMeta, cleanup func() error, err error) {
@@ -767,21 +937,76 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		}
 		defer func() { _ = f.Close() }()
 
-		d := downloader.NewDownloader()
-		if _, err := d.Download(api, spec.loc).
-			WithThreads(4).
-			WithVerify(true).
-			Parallel(ctx, countingWriterAt{
-				dst: f,
-				onWrite: func(n int) {
-					global.AddDownloadBytes(uint64(n))
-				},
-			}); err != nil {
+		resetFile := func() error {
+			if err := f.Truncate(0); err != nil {
+				return err
+			}
+			_, err := f.Seek(0, 0)
+			return err
+		}
+
+		doDownload := func(loc tg.InputFileLocationClass, verify bool) error {
+			d := downloader.NewDownloader()
+			_, err := d.Download(api, loc).
+				WithThreads(4).
+				WithVerify(verify).
+				Parallel(ctx, countingWriterAt{
+					dst: f,
+					onWrite: func(n int) {
+						global.AddDownloadBytes(uint64(n))
+					},
+				})
+			return err
+		}
+
+		locs := []tg.InputFileLocationClass{spec.loc}
+		if spec.meta.Kind == mediaKindPhoto && len(spec.photoThumb) > 1 {
+			if photoLoc, ok := spec.loc.(*tg.InputPhotoFileLocation); ok && photoLoc != nil {
+				for _, t := range spec.photoThumb[1:] {
+					cp := *photoLoc
+					cp.ThumbSize = t
+					locs = append(locs, &cp)
+				}
+			}
+		}
+
+		var lastErr error
+		for idx, loc := range locs {
+			if idx > 0 {
+				if err := resetFile(); err != nil {
+					lastErr = err
+					break
+				}
+			}
+
+			err := doDownload(loc, true)
+			if err != nil && strings.Contains(err.Error(), "get hashes") {
+				// Some media locations may fail on upload.getFileHashes (verify path) but still be downloadable.
+				// If that happens, fallback to no-verify download once to improve success rate.
+				if rerr := resetFile(); rerr == nil {
+					if nerr := doDownload(loc, false); nerr == nil {
+						err = nil
+					} else {
+						err = nerr
+					}
+				}
+			}
+
+			if err == nil {
+				lastErr = nil
+				break
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			if spec.meta.Kind == mediaKindPhoto && len(spec.photoThumb) > 1 {
+				lastErr = fmt.Errorf("download photo failed (thumbs=%v): %w", spec.photoThumb, lastErr)
+			}
 			_ = os.Remove(path)
 			if afterRefresh {
-				return "", mediaMeta{}, nil, fmt.Errorf("download media to %q after refresh: %w", path, err)
+				return "", mediaMeta{}, nil, fmt.Errorf("%w: download media to %q after refresh: %w", ErrMediaDownload, path, lastErr)
 			}
-			return "", mediaMeta{}, nil, fmt.Errorf("download media to %q: %w", path, err)
+			return "", mediaMeta{}, nil, fmt.Errorf("%w: download media to %q: %w", ErrMediaDownload, path, lastErr)
 		}
 
 		if fi, err := f.Stat(); err == nil && fi != nil {
@@ -798,7 +1023,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		return path, meta, cleanup, nil
 	}
 
-	if sourcePeer == nil || !isFileLocationRefreshable(err) || msg == nil || msg.ID <= 0 {
+	if sourcePeer == nil || !isFileLocationRefreshable(err) || msg.ID <= 0 {
 		return "", mediaMeta{}, nil, err
 	}
 
@@ -811,7 +1036,22 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		return "", mediaMeta{}, nil, err
 	}
 
-	return downloadOnce(refreshed, true)
+	path, meta, cleanup, err = downloadOnce(refreshed, true)
+	if err == nil {
+		return path, meta, cleanup, nil
+	}
+
+	// Album special-case: refresh the whole grouped media window and match by concrete media ID.
+	if msg.GroupedID != 0 && isFileLocationRefreshable(err) {
+		if key, ok := getMessageMediaKey(msg); ok {
+			global.BroadcastLog(fmt.Sprintf("[WARN] Media LOCATION_INVALID after refresh, refreshing album window then retry (msg_id=%d, grouped_id=%d)", msg.ID, msg.GroupedID))
+			if m2, aerr := refreshAlbumMessageForDownload(ctx, api, sourcePeer, msg.GroupedID, key, msg.ID); aerr == nil && m2 != nil && m2.Media != nil {
+				return downloadOnce(m2, true)
+			}
+		}
+	}
+
+	return "", mediaMeta{}, nil, err
 }
 
 func uploadAsInputMediaUploaded(meta mediaMeta, inputFile tg.InputFileClass) tg.InputMediaClass {
@@ -873,54 +1113,83 @@ func uploadMediaForAlbum(ctx context.Context, api *tg.Client, peer tg.InputPeerC
 }
 
 func bestPhotoThumbType(photo *tg.Photo) (thumb string, ok bool) {
-	if photo == nil || len(photo.Sizes) == 0 {
+	types := photoThumbCandidates(photo)
+	if len(types) == 0 {
 		return "", false
 	}
-
-	bestType := ""
-	bestArea := -1
-	for _, s := range photo.Sizes {
-		switch v := s.(type) {
-		case *tg.PhotoSize:
-			area := v.W * v.H
-			if area > bestArea {
-				bestArea = area
-				bestType = v.Type
-			}
-		case *tg.PhotoCachedSize:
-			area := v.W * v.H
-			if area > bestArea {
-				bestArea = area
-				bestType = v.Type
-			}
-		case *tg.PhotoSizeProgressive:
-			area := v.W * v.H
-			if area > bestArea {
-				bestArea = area
-				bestType = v.Type
-			}
-		}
-	}
-
-	if bestType != "" {
-		return bestType, true
-	}
-
-	for _, s := range photo.Sizes {
-		switch s.(type) {
-		case *tg.PhotoSizeEmpty, *tg.PhotoPathSize:
-			continue
-		default:
-			if t := strings.TrimSpace(s.GetType()); t != "" {
-				return t, true
-			}
-		}
-	}
-	return "", false
+	return types[0], true
 }
 
 func randomID() (int64, error) {
 	return crypto.RandInt64(crypto.DefaultRand())
+}
+
+func photoThumbCandidates(photo *tg.Photo) []string {
+	if photo == nil || len(photo.Sizes) == 0 {
+		return nil
+	}
+
+	// Pick download-able size types, skipping stripped/path-only constructors.
+	bestByType := make(map[string]int)
+	for _, s := range photo.Sizes {
+		if s == nil {
+			continue
+		}
+
+		var (
+			t    string
+			area int
+		)
+		switch v := s.(type) {
+		case *tg.PhotoSize:
+			t = v.Type
+			area = v.W * v.H
+		case *tg.PhotoCachedSize:
+			t = v.Type
+			area = v.W * v.H
+		case *tg.PhotoSizeProgressive:
+			t = v.Type
+			area = v.W * v.H
+		case *tg.PhotoSizeEmpty, *tg.PhotoPathSize, *tg.PhotoStrippedSize:
+			continue
+		default:
+			continue
+		}
+
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+
+		if prev, ok := bestByType[t]; !ok || area > prev {
+			bestByType[t] = area
+		}
+	}
+
+	if len(bestByType) == 0 {
+		return nil
+	}
+
+	type scored struct {
+		t    string
+		area int
+	}
+	scoredTypes := make([]scored, 0, len(bestByType))
+	for t, area := range bestByType {
+		scoredTypes = append(scoredTypes, scored{t: t, area: area})
+	}
+	sort.Slice(scoredTypes, func(i, j int) bool {
+		if scoredTypes[i].area == scoredTypes[j].area {
+			return scoredTypes[i].t < scoredTypes[j].t
+		}
+		return scoredTypes[i].area > scoredTypes[j].area
+	})
+
+	out := make([]string, 0, len(scoredTypes))
+	for _, s := range scoredTypes {
+		out = append(out, s.t)
+	}
+	return out
 }
 
 func sanitizeFilename(name string) string {

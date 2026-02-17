@@ -299,6 +299,22 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						} else {
 							global.IncFail()
 						}
+						if errors.Is(err, ErrMediaDownload) {
+							if runID != 0 {
+								m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
+							} else {
+								global.BroadcastLog(fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
+							}
+							cursor = maxInGroup
+							if err := persistHistoryCursor(task.ID, cursor); err != nil {
+								return err
+							}
+							processed += len(group)
+							advanced = true
+							sleepRandom(ctx, msgDelayMin, msgDelayMax)
+							i = j
+							continue
+						}
 						return err
 					}
 					if need > 0 {
@@ -350,6 +366,22 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					global.AddFail(uint64(need))
 				} else {
 					global.IncFail()
+				}
+				if errors.Is(err, ErrMediaDownload) {
+					if runID != 0 {
+						m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
+					} else {
+						global.BroadcastLog(fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
+					}
+					cursor = msg.ID
+					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+						return err
+					}
+					processed++
+					advanced = true
+					i++
+					sleepRandom(ctx, msgDelayMin, msgDelayMax)
+					continue
 				}
 				return err
 			}
@@ -529,6 +561,22 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						} else {
 							global.IncFail()
 						}
+						if errors.Is(err, ErrMediaDownload) {
+							if runID != 0 {
+								m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
+							} else {
+								global.BroadcastLog(fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
+							}
+							cursor = minInGroup
+							if err := persistHistoryCursor(task.ID, cursor); err != nil {
+								return err
+							}
+							processed += len(group)
+							advanced = true
+							sleepRandom(ctx, msgDelayMin, msgDelayMax)
+							i = j
+							continue
+						}
 						return err
 					}
 					if need > 0 {
@@ -579,6 +627,22 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					global.AddFail(uint64(need))
 				} else {
 					global.IncFail()
+				}
+				if errors.Is(err, ErrMediaDownload) {
+					if runID != 0 {
+						m.record(task.ID, runID, 0, 0, 0, 0, fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
+					} else {
+						global.BroadcastLog(fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
+					}
+					cursor = msg.ID
+					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+						return err
+					}
+					processed++
+					advanced = true
+					i++
+					sleepRandom(ctx, msgDelayMin, msgDelayMax)
+					continue
 				}
 				return err
 			}
