@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -19,28 +20,36 @@ type KeywordProfileApi struct{}
 type KeywordProfilePayload struct {
 	Name         string              `json:"name" binding:"required"`
 	Remark       string              `json:"remark"`
-	BlockWords   []string            `json:"block_words"`
-	AllowWords   []string            `json:"allow_words"`
+	BlockWords   json.RawMessage     `json:"block_words"`
+	AllowWords   json.RawMessage     `json:"allow_words"`
 	ReplaceRules []model.ReplaceRule `json:"replace_rules"`
-	UseRegex     bool                `json:"use_regex"`
 }
 
-func normalizeStringSlice(in []string) []string {
+func normalizeKeywordRules(in []model.KeywordRule) []model.KeywordRule {
 	if len(in) == 0 {
-		return []string{}
+		return []model.KeywordRule{}
 	}
-	out := make([]string, 0, len(in))
-	seen := make(map[string]struct{}, len(in))
-	for _, raw := range in {
-		s := strings.TrimSpace(raw)
+	out := make([]model.KeywordRule, 0, len(in))
+	seen := make(map[string]struct{}, len(in)*2)
+	for _, r := range in {
+		s := strings.TrimSpace(r.Content)
 		if s == "" {
 			continue
 		}
-		if _, ok := seen[s]; ok {
+		key := s
+		if !r.IsRegex {
+			key = strings.ToLower(key)
+		}
+		if r.IsRegex {
+			key += "\x00re"
+		} else {
+			key += "\x00txt"
+		}
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[s] = struct{}{}
-		out = append(out, s)
+		seen[key] = struct{}{}
+		out = append(out, model.KeywordRule{Content: s, IsRegex: r.IsRegex})
 	}
 	return out
 }
@@ -69,6 +78,30 @@ func marshalJSON(v any) (datatypes.JSON, error) {
 	return datatypes.JSON(b), nil
 }
 
+func parseKeywordRules(raw json.RawMessage) ([]model.KeywordRule, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, nil
+	}
+
+	var out []model.KeywordRule
+	if err := json.Unmarshal(raw, &out); err == nil {
+		return out, nil
+	} else {
+		// Backward compatible: allow old payloads sending string arrays.
+		var legacy []string
+		if err2 := json.Unmarshal(raw, &legacy); err2 == nil {
+			out = make([]model.KeywordRule, 0, len(legacy))
+			for _, s := range legacy {
+				out = append(out, model.KeywordRule{Content: s, IsRegex: false})
+			}
+			return out, nil
+		}
+
+		return nil, err
+	}
+}
+
 // CreateKeywordProfile 创建关键词策略
 func (a *KeywordProfileApi) CreateKeywordProfile(c *gin.Context) {
 	var payload KeywordProfilePayload
@@ -90,22 +123,32 @@ func (a *KeywordProfileApi) CreateKeywordProfile(c *gin.Context) {
 	}
 
 	p := model.KeywordProfile{
-		Model:    gorm.Model{},
-		UserID:   userID,
-		Name:     payload.Name,
-		Remark:   strings.TrimSpace(payload.Remark),
-		UseRegex: payload.UseRegex,
+		Model:  gorm.Model{},
+		UserID: userID,
+		Name:   payload.Name,
+		Remark: strings.TrimSpace(payload.Remark),
 	}
 
 	var err error
-	p.BlockWords, err = marshalJSON(normalizeStringSlice(payload.BlockWords))
+	block, err := parseKeywordRules(payload.BlockWords)
 	if err != nil {
-		app.FailWithMsg("屏蔽词序列化失败: "+err.Error(), c)
+		app.FailWithMsg("屏蔽规则格式错误: "+err.Error(), c)
 		return
 	}
-	p.AllowWords, err = marshalJSON(normalizeStringSlice(payload.AllowWords))
+	p.BlockWords, err = marshalJSON(normalizeKeywordRules(block))
 	if err != nil {
-		app.FailWithMsg("白名单序列化失败: "+err.Error(), c)
+		app.FailWithMsg("屏蔽规则序列化失败: "+err.Error(), c)
+		return
+	}
+
+	allow, err := parseKeywordRules(payload.AllowWords)
+	if err != nil {
+		app.FailWithMsg("白名单规则格式错误: "+err.Error(), c)
+		return
+	}
+	p.AllowWords, err = marshalJSON(normalizeKeywordRules(allow))
+	if err != nil {
+		app.FailWithMsg("白名单规则序列化失败: "+err.Error(), c)
 		return
 	}
 	p.ReplaceRules, err = marshalJSON(normalizeReplaceRules(payload.ReplaceRules))
@@ -166,18 +209,29 @@ func (a *KeywordProfileApi) UpdateKeywordProfile(c *gin.Context) {
 	}
 
 	out := model.KeywordProfile{
-		Name:     payload.Name,
-		Remark:   strings.TrimSpace(payload.Remark),
-		UseRegex: payload.UseRegex,
+		Name:   payload.Name,
+		Remark: strings.TrimSpace(payload.Remark),
 	}
-	out.BlockWords, err = marshalJSON(normalizeStringSlice(payload.BlockWords))
+
+	block, err := parseKeywordRules(payload.BlockWords)
 	if err != nil {
-		app.FailWithMsg("屏蔽词序列化失败: "+err.Error(), c)
+		app.FailWithMsg("屏蔽规则格式错误: "+err.Error(), c)
 		return
 	}
-	out.AllowWords, err = marshalJSON(normalizeStringSlice(payload.AllowWords))
+	out.BlockWords, err = marshalJSON(normalizeKeywordRules(block))
 	if err != nil {
-		app.FailWithMsg("白名单序列化失败: "+err.Error(), c)
+		app.FailWithMsg("屏蔽规则序列化失败: "+err.Error(), c)
+		return
+	}
+
+	allow, err := parseKeywordRules(payload.AllowWords)
+	if err != nil {
+		app.FailWithMsg("白名单规则格式错误: "+err.Error(), c)
+		return
+	}
+	out.AllowWords, err = marshalJSON(normalizeKeywordRules(allow))
+	if err != nil {
+		app.FailWithMsg("白名单规则序列化失败: "+err.Error(), c)
 		return
 	}
 	out.ReplaceRules, err = marshalJSON(normalizeReplaceRules(payload.ReplaceRules))

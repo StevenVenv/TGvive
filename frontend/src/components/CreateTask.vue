@@ -38,9 +38,8 @@ type KeywordProfileItem = {
   ID: number
   name: string
   remark?: string
-  use_regex?: boolean
-  block_words?: string[]
-  allow_words?: string[]
+  block_words?: Array<{ content: string; is_regex: boolean } | string>
+  allow_words?: Array<{ content: string; is_regex: boolean } | string>
   replace_rules?: Array<{ from: string; to: string }>
 }
 
@@ -134,6 +133,12 @@ const strategyTip = computed(() => {
   const remark = (s.remark || '').trim()
   return remark ? `备注：${remark}` : ''
 })
+
+function kwHasRegex(k: KeywordProfileItem): boolean {
+  const has = (v: any): boolean =>
+    Array.isArray(v) && v.some((x) => typeof x === 'object' && x && (x.is_regex === true || x.IsRegex === true))
+  return has(k.block_words) || has(k.allow_words)
+}
 
 async function loadOptions() {
   loading.value = true
@@ -293,7 +298,7 @@ onMounted(() => {
                   <div class="opt-sub">
                     <span v-if="k.remark">{{ k.remark }} · </span>
                     屏蔽 {{ k.block_words?.length || 0 }} | 白名单 {{ k.allow_words?.length || 0 }} | 替换 {{ k.replace_rules?.length || 0 }}
-                    <span v-if="k.use_regex"> | Regex</span>
+                    <span v-if="kwHasRegex(k)"> | Regex</span>
                   </div>
                 </div>
               </div>

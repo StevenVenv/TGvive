@@ -32,7 +32,6 @@ func UpdateKeywordProfile(userID uint, profileID uint, payload *model.KeywordPro
 	p.BlockWords = payload.BlockWords
 	p.AllowWords = payload.AllowWords
 	p.ReplaceRules = payload.ReplaceRules
-	p.UseRegex = payload.UseRegex
 
 	if err := global.DB.Save(&p).Error; err != nil {
 		return p, err

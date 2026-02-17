@@ -1,20 +1,25 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
+import RegexCheatSheet from './RegexCheatSheet.vue'
 
 export type ReplaceRule = {
   from: string
   to: string
 }
 
+export type KeywordRule = {
+  content: string
+  is_regex: boolean
+}
+
 export type KeywordFormModel = {
   ID: number
   name: string
   remark: string
-  block_words: string[]
-  allow_words: string[]
+  block_words: KeywordRule[]
+  allow_words: KeywordRule[]
   replace_rules: ReplaceRule[]
-  use_regex: boolean
 }
 
 export type KeywordFormExpose = {
@@ -47,9 +52,48 @@ const emit = defineEmits<{
 const formRef = ref<FormInstance>()
 const form = computed(() => props.modelValue)
 const activePane = ref<'block' | 'allow' | 'replace'>('block')
+const regexHelpVisible = ref(false)
 
 const rules: FormRules = {
   name: [{ required: true, message: '请填写方案名称', trigger: 'blur' }],
+}
+
+function addBlockRule() {
+  if (!Array.isArray(form.value.block_words)) form.value.block_words = []
+  form.value.block_words.push({ content: '', is_regex: false })
+}
+
+function removeBlockRule(idx: number) {
+  const list = Array.isArray(form.value.block_words) ? form.value.block_words : []
+  if (idx < 0 || idx >= list.length) return
+  list.splice(idx, 1)
+}
+
+function addAllowRule() {
+  if (!Array.isArray(form.value.allow_words)) form.value.allow_words = []
+  form.value.allow_words.push({ content: '', is_regex: false })
+}
+
+function removeAllowRule(idx: number) {
+  const list = Array.isArray(form.value.allow_words) ? form.value.allow_words : []
+  if (idx < 0 || idx >= list.length) return
+  list.splice(idx, 1)
+}
+
+function onBlockEnter(idx: number) {
+  const list = Array.isArray(form.value.block_words) ? form.value.block_words : []
+  if (idx !== list.length - 1) return
+  const last = list[idx]
+  if (!String(last?.content || '').trim()) return
+  addBlockRule()
+}
+
+function onAllowEnter(idx: number) {
+  const list = Array.isArray(form.value.allow_words) ? form.value.allow_words : []
+  if (idx !== list.length - 1) return
+  const last = list[idx]
+  if (!String(last?.content || '').trim()) return
+  addAllowRule()
 }
 
 function addRule() {
@@ -104,19 +148,22 @@ defineExpose<KeywordFormExpose>({
             </el-form-item>
           </el-col>
 
-          <el-col :xs="24" :sm="12" :md="12">
+          <el-col :xs="24" :sm="12" :md="16">
             <el-form-item label="备注 (Remark)" prop="remark">
               <el-input v-model="form.remark" placeholder="可选：说明用途/范围" />
             </el-form-item>
           </el-col>
-
-          <el-col :xs="24" :sm="12" :md="4">
-            <el-form-item label="匹配模式" prop="use_regex">
-              <el-switch v-model="form.use_regex" active-text="Regex" inactive-text="Plain" />
-              <div class="hint compact">开启后：屏蔽/白名单/替换按正则执行</div>
-            </el-form-item>
-          </el-col>
         </el-row>
+
+        <div class="rule-toolbar">
+          <div class="rule-toolbar-left">
+            <div class="hint compact">提示：每条规则都可以选择“文本/正则”</div>
+          </div>
+          <el-button type="primary" link class="regex-help-btn" @click="regexHelpVisible = true">
+            <i class="ri-question-line" />
+            正则帮助
+          </el-button>
+        </div>
 
         <el-tabs v-model="activePane" class="rule-tabs">
           <el-tab-pane name="block">
@@ -131,21 +178,40 @@ defineExpose<KeywordFormExpose>({
                 <template #label>
                   <span class="label-with-tip">
                     <i class="ri-forbid-2-line" />
-                    <span>屏蔽词（不转发）</span>
+                    <span>屏蔽规则（不转发）</span>
                   </span>
                 </template>
-                <el-select
-                  v-model="form.block_words"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  collapse-tags
-                  collapse-tags-tooltip
-                  class="ctrl"
-                  placeholder="输入回车生成标签，例如：赌场 / 加微信"
-                  popper-class="tgvive-dark-popper"
-                />
+                <div class="rule-list">
+                  <div v-if="(form.block_words?.length || 0) === 0" class="rules-empty">
+                    <el-text type="info">暂无屏蔽规则（可选）</el-text>
+                  </div>
+
+                  <div v-else class="rule-rows">
+                    <div v-for="(r, idx) in form.block_words" :key="idx" class="rule-row">
+                      <el-input
+                        v-model="r.content"
+                        clearable
+                        placeholder="输入关键词或正则..."
+                        @keyup.enter="onBlockEnter(idx)"
+                      />
+                      <el-switch
+                        v-model="r.is_regex"
+                        inline-prompt
+                        active-text="正则"
+                        inactive-text="文本"
+                        style="--el-switch-on-color: #e6a23c"
+                      />
+                      <el-button link type="danger" class="rule-del" @click="removeBlockRule(idx)">
+                        <i class="ri-delete-bin-line" />
+                      </el-button>
+                    </div>
+                  </div>
+
+                  <el-button type="primary" plain size="small" class="add-btn" @click="addBlockRule">
+                    <i class="ri-add-line" />
+                    添加规则
+                  </el-button>
+                </div>
                 <div class="hint">命中任意屏蔽词：该消息将被跳过</div>
               </el-form-item>
             </div>
@@ -163,7 +229,7 @@ defineExpose<KeywordFormExpose>({
                 <template #label>
                   <span class="label-with-tip">
                     <i class="ri-shield-check-line" />
-                    <span>白名单（只转发）</span>
+                    <span>白名单规则（只转发）</span>
                     <el-tooltip
                       content="设置后，只有包含这些词的消息才会被搬运"
                       placement="top"
@@ -173,18 +239,37 @@ defineExpose<KeywordFormExpose>({
                     </el-tooltip>
                   </span>
                 </template>
-                <el-select
-                  v-model="form.allow_words"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  collapse-tags
-                  collapse-tags-tooltip
-                  class="ctrl"
-                  placeholder="可选：输入回车生成标签"
-                  popper-class="tgvive-dark-popper"
-                />
+                <div class="rule-list">
+                  <div v-if="(form.allow_words?.length || 0) === 0" class="rules-empty">
+                    <el-text type="info">暂无白名单规则（可选）</el-text>
+                  </div>
+
+                  <div v-else class="rule-rows">
+                    <div v-for="(r, idx) in form.allow_words" :key="idx" class="rule-row">
+                      <el-input
+                        v-model="r.content"
+                        clearable
+                        placeholder="输入关键词或正则..."
+                        @keyup.enter="onAllowEnter(idx)"
+                      />
+                      <el-switch
+                        v-model="r.is_regex"
+                        inline-prompt
+                        active-text="正则"
+                        inactive-text="文本"
+                        style="--el-switch-on-color: #e6a23c"
+                      />
+                      <el-button link type="danger" class="rule-del" @click="removeAllowRule(idx)">
+                        <i class="ri-delete-bin-line" />
+                      </el-button>
+                    </div>
+                  </div>
+
+                  <el-button type="primary" plain size="small" class="add-btn" @click="addAllowRule">
+                    <i class="ri-add-line" />
+                    添加规则
+                  </el-button>
+                </div>
                 <div class="hint">若白名单非空：消息必须命中至少一个词才会搬运</div>
               </el-form-item>
             </div>
@@ -247,6 +332,8 @@ defineExpose<KeywordFormExpose>({
         </el-space>
       </slot>
     </div>
+
+    <RegexCheatSheet v-model="regexHelpVisible" />
   </div>
 </template>
 
@@ -303,6 +390,22 @@ defineExpose<KeywordFormExpose>({
   margin-bottom: 4px;
 }
 
+.rule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 0 8px;
+}
+
+.rule-toolbar-left {
+  min-width: 0;
+}
+
+.regex-help-btn {
+  flex: none;
+}
+
 .rule-tabs :deep(.el-tabs__header) {
   margin: 0 0 10px;
 }
@@ -318,6 +421,40 @@ defineExpose<KeywordFormExpose>({
   border-radius: 4px;
   background: #1e1e1e;
   padding: 12px;
+}
+
+.rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rule-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rule-row :deep(.el-input) {
+  flex: 1;
+}
+
+.rule-row :deep(.el-switch) {
+  flex: none;
+}
+
+.rule-del {
+  flex: none;
+}
+
+.add-btn {
+  width: 100%;
 }
 
 .label-with-tip {
@@ -341,10 +478,6 @@ defineExpose<KeywordFormExpose>({
   font-size: 14px;
   color: rgba(191, 203, 217, 0.75);
   cursor: help;
-}
-
-.ctrl {
-  width: 100%;
 }
 
 .rules {
@@ -390,31 +523,5 @@ defineExpose<KeywordFormExpose>({
 .action {
   display: flex;
   justify-content: flex-end;
-}
-
-/* Fix: select text/placeholder in dark mode */
-:global(html.dark) .keyword-form :deep(.el-select__wrapper) {
-  background: rgba(255, 255, 255, 0.02);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-}
-
-:global(html.dark) .keyword-form :deep(.el-select__selected-item) {
-  color: rgba(255, 255, 255, 0.92);
-}
-
-:global(html.dark) .keyword-form :deep(.el-select__placeholder) {
-  color: rgba(191, 203, 217, 0.6);
-}
-
-:global(html.dark) .keyword-form :deep(.el-select__input) {
-  color: rgba(255, 255, 255, 0.92);
-}
-
-:global(html.dark) .keyword-form :deep(.el-select__input::placeholder) {
-  color: rgba(191, 203, 217, 0.6);
-}
-
-:global(html.dark) .keyword-form :deep(.el-select__caret) {
-  color: rgba(191, 203, 217, 0.75);
 }
 </style>

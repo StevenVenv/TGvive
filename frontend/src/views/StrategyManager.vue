@@ -84,7 +84,6 @@ function emptyKeywordModel(): KeywordFormModel {
     block_words: [],
     allow_words: [],
     replace_rules: [],
-    use_regex: false,
   }
 }
 
@@ -313,16 +312,32 @@ async function remove(row?: Strategy) {
 }
 
 function buildKeywordPayload(m: KeywordFormModel): Partial<KeywordProfile> {
-  const clean = (arr: any): string[] => {
+  const cleanRules = (arr: any): Array<{ content: string; is_regex: boolean }> => {
     if (!Array.isArray(arr)) return []
-    const out: string[] = []
+    const out: Array<{ content: string; is_regex: boolean }> = []
     const seen = new Set<string>()
-    for (const v of arr) {
-      const s = String(v || '').trim()
-      if (!s) continue
-      if (seen.has(s)) continue
-      seen.add(s)
-      out.push(s)
+    for (const raw of arr) {
+      if (typeof raw === 'string') {
+        const s = raw.trim()
+        if (!s) continue
+        const key = s.toLowerCase() + '\x00txt'
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ content: s, is_regex: false })
+        continue
+      }
+
+      const content = String(raw?.content ?? raw?.Content ?? '').trim()
+      if (!content) continue
+      const is_regex = Boolean(raw?.is_regex ?? raw?.IsRegex)
+
+      let key = content
+      if (!is_regex) key = key.toLowerCase()
+      key += is_regex ? '\x00re' : '\x00txt'
+
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ content, is_regex })
     }
     return out
   }
@@ -335,11 +350,16 @@ function buildKeywordPayload(m: KeywordFormModel): Partial<KeywordProfile> {
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
-    block_words: clean(m.block_words),
-    allow_words: clean(m.allow_words),
+    block_words: cleanRules(m.block_words),
+    allow_words: cleanRules(m.allow_words),
     replace_rules,
-    use_regex: Boolean(m.use_regex),
   }
+}
+
+function kwHasRegex(row: KeywordProfile): boolean {
+  const has = (v: any): boolean =>
+    Array.isArray(v) && v.some((x) => typeof x === 'object' && x && (x.is_regex === true || x.IsRegex === true))
+  return has((row as any).block_words) || has((row as any).allow_words)
 }
 
 function openKwCreate() {
@@ -350,14 +370,29 @@ function openKwCreate() {
 
 function openKwEdit(row: KeywordProfile) {
   kwDialogMode.value = 'edit'
+
+  const toRules = (v: any): Array<{ content: string; is_regex: boolean }> => {
+    if (!Array.isArray(v)) return []
+    return v
+      .map((raw) => {
+        if (typeof raw === 'string') {
+          const s = raw.trim()
+          return s ? { content: s, is_regex: false } : null
+        }
+        const content = String(raw?.content ?? raw?.Content ?? '').trim()
+        if (!content) return null
+        return { content, is_regex: Boolean(raw?.is_regex ?? raw?.IsRegex) }
+      })
+      .filter(Boolean) as Array<{ content: string; is_regex: boolean }>
+  }
+
   Object.assign(kwModel, emptyKeywordModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
     remark: (row.remark || '').trim(),
-    block_words: Array.isArray(row.block_words) ? [...row.block_words] : [],
-    allow_words: Array.isArray(row.allow_words) ? [...row.allow_words] : [],
+    block_words: toRules((row as any).block_words),
+    allow_words: toRules((row as any).allow_words),
     replace_rules: Array.isArray(row.replace_rules) ? row.replace_rules.map((r) => ({ from: r.from, to: r.to })) : [],
-    use_regex: Boolean(row.use_regex),
   })
   kwDialogVisible.value = true
 }
@@ -574,7 +609,7 @@ onMounted(() => {
                     <div class="st-meta">
                       屏蔽 {{ row.block_words?.length || 0 }} | 白名单 {{ row.allow_words?.length || 0 }} | 替换
                       {{ row.replace_rules?.length || 0 }}
-                      <span v-if="row.use_regex"> | Regex</span>
+                      <span v-if="kwHasRegex(row)"> | Regex</span>
                     </div>
                   </template>
                 </el-table-column>
@@ -585,7 +620,7 @@ onMounted(() => {
                       <el-tag size="small" type="info" effect="plain">屏蔽: {{ row.block_words?.length || 0 }}</el-tag>
                       <el-tag size="small" type="info" effect="plain">白名单: {{ row.allow_words?.length || 0 }}</el-tag>
                       <el-tag size="small" type="info" effect="plain">替换: {{ row.replace_rules?.length || 0 }}</el-tag>
-                      <el-tag v-if="row.use_regex" size="small" type="success" effect="plain">Regex</el-tag>
+                      <el-tag v-if="kwHasRegex(row)" size="small" type="success" effect="plain">Regex</el-tag>
                     </el-space>
                   </template>
                 </el-table-column>

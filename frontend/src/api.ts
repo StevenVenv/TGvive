@@ -72,6 +72,11 @@ export type ReplaceRule = {
   to: string
 }
 
+export type KeywordRule = {
+  content: string
+  is_regex: boolean
+}
+
 export type KeywordProfile = {
   ID: number
 
@@ -79,10 +84,9 @@ export type KeywordProfile = {
   name: string
   remark?: string
 
-  block_words: string[]
-  allow_words: string[]
+  block_words: KeywordRule[]
+  allow_words: KeywordRule[]
   replace_rules: ReplaceRule[]
-  use_regex: boolean
 }
 
 export type TaskProgress = {

@@ -15,8 +15,7 @@ import (
 )
 
 type keywordPolicy struct {
-	id       uint
-	useRegex bool
+	id uint
 
 	block   []matchRule
 	allow   []matchRule
@@ -32,19 +31,30 @@ type matchRule struct {
 type replaceRule struct {
 	from string
 	to   string
-	re   *regexp.Regexp
 }
 
-func parseJSONStringSlice(raw []byte) ([]string, error) {
+func parseJSONKeywordRules(raw []byte) ([]model.KeywordRule, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, nil
 	}
-	var out []string
-	if err := json.Unmarshal(raw, &out); err != nil {
+
+	var out []model.KeywordRule
+	if err := json.Unmarshal(raw, &out); err == nil {
+		return out, nil
+	} else {
+		// Backward compatible: support legacy string arrays.
+		var legacy []string
+		if err2 := json.Unmarshal(raw, &legacy); err2 == nil {
+			out = make([]model.KeywordRule, 0, len(legacy))
+			for _, s := range legacy {
+				out = append(out, model.KeywordRule{Content: s, IsRegex: false})
+			}
+			return out, nil
+		}
+
 		return nil, err
 	}
-	return out, nil
 }
 
 func parseJSONReplaceRules(raw []byte) ([]model.ReplaceRule, error) {
@@ -85,16 +95,15 @@ func newKeywordPolicy(p *model.KeywordProfile) (*keywordPolicy, error) {
 	}
 
 	k := &keywordPolicy{
-		id:       p.ID,
-		useRegex: p.UseRegex,
+		id: p.ID,
 	}
 
 	var compileErr error
-	blockWords, err := parseJSONStringSlice([]byte(p.BlockWords))
+	blockWords, err := parseJSONKeywordRules([]byte(p.BlockWords))
 	if err != nil {
 		compileErr = err
 	}
-	allowWords, err := parseJSONStringSlice([]byte(p.AllowWords))
+	allowWords, err := parseJSONKeywordRules([]byte(p.AllowWords))
 	if err != nil && compileErr == nil {
 		compileErr = err
 	}
@@ -103,73 +112,57 @@ func newKeywordPolicy(p *model.KeywordProfile) (*keywordPolicy, error) {
 		compileErr = err
 	}
 
-	if p.UseRegex {
-		k.block, err = compileMatchRegex(blockWords)
-		if err != nil && compileErr == nil {
-			compileErr = err
-		}
-		if compileErr != nil {
-			// keep going best-effort
-		}
-		allow, err := compileMatchRegex(allowWords)
-		if err != nil && compileErr == nil {
-			compileErr = err
-		}
-		k.allow = allow
-		repl, err := compileReplaceRegex(replaceRules)
-		if err != nil && compileErr == nil {
-			compileErr = err
-		}
-		k.replace = repl
-	} else {
-		k.block = compileMatchPlain(blockWords)
-		k.allow = compileMatchPlain(allowWords)
-		k.replace = compileReplacePlain(replaceRules)
+	k.block, err = compileMatchRules(blockWords)
+	if err != nil && compileErr == nil {
+		compileErr = err
 	}
+	allow, err := compileMatchRules(allowWords)
+	if err != nil && compileErr == nil {
+		compileErr = err
+	}
+	k.allow = allow
+	k.replace = compileReplacePlain(replaceRules)
 
 	return k, compileErr
 }
 
-func compileMatchPlain(in []string) []matchRule {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]matchRule, 0, len(in))
-	seen := make(map[string]struct{}, len(in))
-	for _, raw := range in {
-		s := strings.TrimSpace(raw)
-		if s == "" {
-			continue
-		}
-		key := strings.ToLower(s)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, matchRule{raw: s, lower: key})
-	}
-	return out
-}
-
-func compileMatchRegex(in []string) ([]matchRule, error) {
+func compileMatchRules(in []model.KeywordRule) ([]matchRule, error) {
 	if len(in) == 0 {
 		return nil, nil
 	}
 	out := make([]matchRule, 0, len(in))
+	seen := make(map[string]struct{}, len(in)*2)
 	var firstErr error
-	for _, raw := range in {
-		s := strings.TrimSpace(raw)
+	for _, r := range in {
+		s := strings.TrimSpace(r.Content)
 		if s == "" {
 			continue
 		}
-		re, err := regexp.Compile(s)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+
+		if r.IsRegex {
+			key := s + "\x00re"
+			if _, ok := seen[key]; ok {
+				continue
 			}
+			seen[key] = struct{}{}
+			re, err := regexp.Compile(s)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			out = append(out, matchRule{raw: s, re: re})
 			continue
 		}
-		out = append(out, matchRule{raw: s, re: re})
+
+		low := strings.ToLower(s)
+		key := low + "\x00txt"
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, matchRule{raw: s, lower: low})
 	}
 	return out, firstErr
 }
@@ -193,29 +186,6 @@ func compileReplacePlain(in []model.ReplaceRule) []replaceRule {
 		out = append(out, replaceRule{from: from, to: r.To})
 	}
 	return out
-}
-
-func compileReplaceRegex(in []model.ReplaceRule) ([]replaceRule, error) {
-	if len(in) == 0 {
-		return nil, nil
-	}
-	out := make([]replaceRule, 0, len(in))
-	var firstErr error
-	for _, r := range in {
-		from := strings.TrimSpace(r.From)
-		if from == "" {
-			continue
-		}
-		re, err := regexp.Compile(from)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		out = append(out, replaceRule{from: from, to: r.To, re: re})
-	}
-	return out, firstErr
 }
 
 func (k *keywordPolicy) shouldSkip(text string) bool {
@@ -243,20 +213,14 @@ func (k *keywordPolicy) matchAny(text string, rules []matchRule) bool {
 		return false
 	}
 
-	if k.useRegex {
-		for _, r := range rules {
-			if r.re == nil {
-				continue
-			}
+	lower := strings.ToLower(text)
+	for _, r := range rules {
+		if r.re != nil {
 			if r.re.MatchString(text) {
 				return true
 			}
+			continue
 		}
-		return false
-	}
-
-	lower := strings.ToLower(text)
-	for _, r := range rules {
 		if r.lower == "" {
 			continue
 		}
@@ -274,20 +238,6 @@ func (k *keywordPolicy) replaceText(text string) (string, bool) {
 
 	out := text
 	changed := false
-
-	if k.useRegex {
-		for _, r := range k.replace {
-			if r.re == nil {
-				continue
-			}
-			n := r.re.ReplaceAllString(out, r.to)
-			if n != out {
-				out = n
-				changed = true
-			}
-		}
-		return out, changed
-	}
 
 	for _, r := range k.replace {
 		if r.from == "" {

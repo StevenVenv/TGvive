@@ -10,6 +10,11 @@ type ReplaceRule struct {
 	To   string `json:"to"`
 }
 
+type KeywordRule struct {
+	Content string `json:"content"`
+	IsRegex bool   `json:"is_regex"`
+}
+
 // KeywordProfile stores keyword based filtering & replacement rules.
 // It is designed to be reusable across tasks (content control strategy).
 type KeywordProfile struct {
@@ -27,6 +32,4 @@ type KeywordProfile struct {
 	AllowWords datatypes.JSON `gorm:"type:json" json:"allow_words"`
 	// ReplaceRules: 文本替换规则（from -> to）
 	ReplaceRules datatypes.JSON `gorm:"type:json" json:"replace_rules"`
-
-	UseRegex bool `gorm:"default:false" json:"use_regex"`
 }
