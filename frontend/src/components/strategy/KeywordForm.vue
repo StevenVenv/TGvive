@@ -119,11 +119,20 @@ defineExpose<KeywordFormExpose>({
         </el-row>
 
         <el-tabs v-model="activePane" class="rule-tabs">
-          <el-tab-pane name="block" label="⛔️ 屏蔽词">
+          <el-tab-pane name="block">
+            <template #label>
+              <span class="tab-label">
+                <i class="ri-forbid-2-line" />
+                <span>屏蔽词</span>
+              </span>
+            </template>
             <div class="tab-pane">
               <el-form-item prop="block_words">
                 <template #label>
-                  <span class="label-with-tip">⛔️ 屏蔽词 (不转发)</span>
+                  <span class="label-with-tip">
+                    <i class="ri-forbid-2-line" />
+                    <span>屏蔽词（不转发）</span>
+                  </span>
                 </template>
                 <el-select
                   v-model="form.block_words"
@@ -142,12 +151,19 @@ defineExpose<KeywordFormExpose>({
             </div>
           </el-tab-pane>
 
-          <el-tab-pane name="allow" label="✅ 白名单">
+          <el-tab-pane name="allow">
+            <template #label>
+              <span class="tab-label">
+                <i class="ri-shield-check-line" />
+                <span>白名单</span>
+              </span>
+            </template>
             <div class="tab-pane">
               <el-form-item prop="allow_words">
                 <template #label>
                   <span class="label-with-tip">
-                    ✅ 白名单 (只转发)
+                    <i class="ri-shield-check-line" />
+                    <span>白名单（只转发）</span>
                     <el-tooltip
                       content="设置后，只有包含这些词的消息才会被搬运"
                       placement="top"
@@ -174,7 +190,13 @@ defineExpose<KeywordFormExpose>({
             </div>
           </el-tab-pane>
 
-          <el-tab-pane name="replace" label="🔄 替换规则">
+          <el-tab-pane name="replace">
+            <template #label>
+              <span class="tab-label">
+                <i class="ri-exchange-2-line" />
+                <span>替换规则</span>
+              </span>
+            </template>
             <div class="tab-pane">
               <div class="rules">
                 <div class="rules-head">
@@ -302,6 +324,17 @@ defineExpose<KeywordFormExpose>({
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tab-label i {
+  font-size: 14px;
+  color: rgba(191, 203, 217, 0.85);
 }
 
 .tip-icon {

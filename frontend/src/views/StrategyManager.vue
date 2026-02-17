@@ -627,7 +627,7 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="kwDialogVisible" :title="kwDialogTitle" width="820px" class="bt-dialog" destroy-on-close>
+    <el-dialog v-model="kwDialogVisible" :title="kwDialogTitle" width="960px" class="bt-dialog kw-dialog" destroy-on-close>
       <KeywordForm ref="kwFormRef" v-model="kwModel" :loading="kwSaving" :show-actions="false" />
 
       <template #footer>
@@ -808,6 +808,12 @@ onMounted(() => {
 
   :deep(.el-dialog__footer) {
     border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+}
+
+.kw-dialog {
+  :deep(.el-dialog) {
+    max-width: 96vw;
   }
 }
 </style>
