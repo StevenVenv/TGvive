@@ -96,12 +96,13 @@ type realtimeJob struct {
 }
 
 type runtimeTaskConfig struct {
-	Task       model.Task
-	RunID      uint64
-	Ctx        context.Context
-	SourcePeer tg.InputPeerClass
-	TargetPeer tg.InputPeerClass
-	Keyword    *keywordPolicy
+	Task            model.Task
+	RunID           uint64
+	Ctx             context.Context
+	SourcePeer      tg.InputPeerClass
+	TargetPeer      tg.InputPeerClass
+	Keyword         *keywordPolicy
+	PollIntervalSec int
 }
 
 type runtimeTask struct {
@@ -115,6 +116,7 @@ type runtimeTask struct {
 	delayMin     time.Duration
 	delayMax     time.Duration
 	keyword      *keywordPolicy
+	pollInterval time.Duration
 
 	queue    chan realtimeJob
 	stopOnce sync.Once
@@ -141,6 +143,13 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 	}
 
 	t.delayMin, t.delayMax = normalizeDelayRange(cfg.Task.DelayMinMs, cfg.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	if cfg.PollIntervalSec > 0 {
+		sec := cfg.PollIntervalSec
+		if sec < 10 {
+			sec = 10
+		}
+		t.pollInterval = time.Duration(sec) * time.Second
+	}
 	return t
 }
 
@@ -218,6 +227,16 @@ func (t *runtimeTask) cursorSnapshot() (order int, cursor int) {
 	return t.Task.HistoryOrder, t.Task.HistoryCursor
 }
 
+func (t *runtimeTask) latestProcessedIDSnapshot() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	last := t.Task.HistoryCursor
+	if t.Task.HistoryMaxID > last {
+		last = t.Task.HistoryMaxID
+	}
+	return last
+}
+
 func (t *runtimeTask) advanceCursor(cursor int) {
 	if t == nil || t.Task.ID == 0 || cursor <= 0 {
 		return
@@ -252,6 +271,153 @@ func (t *runtimeTask) advanceCursor(cursor int) {
 
 	if needMaxPersist {
 		_ = persistHistoryMaxID(taskID, cursor)
+	}
+}
+
+func (t *runtimeTask) startPoller(m *TaskManager, api *tg.Client) {
+	if t == nil || m == nil || api == nil || t.Ctx == nil || t.SourcePeer == nil || t.Task.ID == 0 {
+		return
+	}
+	if t.pollInterval <= 0 {
+		return
+	}
+
+	// Run an initial poll once to catch up messages that arrived between history clone completion and realtime enter.
+	t.pollOnce(m, api)
+
+	ticker := time.NewTicker(t.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.Ctx.Done():
+			return
+		case <-ticker.C:
+			t.pollOnce(m, api)
+		}
+	}
+}
+
+func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
+	if t == nil || m == nil || api == nil || t.Ctx == nil || t.SourcePeer == nil || t.Task.ID == 0 {
+		return
+	}
+	if err := t.Ctx.Err(); err != nil {
+		return
+	}
+	if !m.isActiveRun(t.Task.ID, t.RunID) {
+		return
+	}
+
+	allowed, remaining, _ := Scheduler.PeekPull(t.Task.ID)
+	if !allowed {
+		return
+	}
+
+	remoteLatest, err := getLatestRemoteMessageID(t.Ctx, api, t.SourcePeer)
+	if err != nil || remoteLatest <= 0 {
+		if err != nil && global.Logger != nil {
+			global.Logger.Warn("realtime poll get latest failed", zap.Uint("task_id", t.Task.ID), zap.Error(err))
+		}
+		return
+	}
+
+	localLast := t.latestProcessedIDSnapshot()
+	if localLast <= 0 {
+		// Avoid processing the entire history when local cursor is missing.
+		t.advanceCursor(remoteLatest)
+		return
+	}
+	if remoteLatest <= localLast {
+		return
+	}
+
+	maxCatchUpMessages := 500
+	if remaining >= 0 {
+		if remaining <= 0 {
+			return
+		}
+		if remaining < maxCatchUpMessages {
+			maxCatchUpMessages = remaining
+		}
+	}
+
+	afterID := localLast
+	enqueued := 0
+
+	for iter := 0; iter < 20 && afterID < remoteLatest && enqueued < maxCatchUpMessages; iter++ {
+		limit := defaultHistoryPageSize
+		if limit <= 0 {
+			limit = 50
+		}
+
+		req := &tg.MessagesGetHistoryRequest{
+			Peer:      t.SourcePeer,
+			OffsetID:  afterID,
+			AddOffset: -limit,
+			Limit:     limit,
+			MinID:     afterID,
+			MaxID:     remoteLatest + 1,
+		}
+
+		r, err := getHistoryWithFloodWait(t.Ctx, api, req)
+		if err != nil {
+			if global.Logger != nil {
+				global.Logger.Warn("realtime poll history failed", zap.Uint("task_id", t.Task.ID), zap.Error(err))
+			}
+			return
+		}
+		msgs := extractTGMessages(r)
+		if len(msgs) == 0 {
+			return
+		}
+
+		sort.Slice(msgs, func(i, j int) bool {
+			return msgs[i].ID < msgs[j].ID
+		})
+
+		pageMax := afterID
+		advanced := false
+
+		for _, msg := range msgs {
+			if msg == nil || msg.ID <= 0 {
+				continue
+			}
+			if msg.ID <= afterID || msg.ID > remoteLatest {
+				continue
+			}
+
+			// Skip if another goroutine already processed/advanced.
+			if cur := t.latestProcessedIDSnapshot(); cur > 0 && msg.ID <= cur {
+				if msg.ID > pageMax {
+					pageMax = msg.ID
+				}
+				continue
+			}
+
+			if remaining >= 0 {
+				reserved, _, _ := Scheduler.ReservePull(t.Task.ID, 1)
+				if reserved <= 0 {
+					return
+				}
+			}
+			m.dispatchMessageToRuntimeTask(t, msg)
+			enqueued++
+			advanced = true
+
+			if msg.ID > pageMax {
+				pageMax = msg.ID
+			}
+
+			if enqueued >= maxCatchUpMessages {
+				break
+			}
+		}
+
+		if !advanced || pageMax <= afterID {
+			return
+		}
+		afterID = pageMax
 	}
 }
 
@@ -738,6 +904,9 @@ func (m *TaskManager) registerRealtimeTask(tgRT *telegramRuntime, cfg runtimeTas
 	}
 
 	go taskPtr.run(m, api)
+	if taskPtr.pollInterval > 0 {
+		go taskPtr.startPoller(m, api)
+	}
 	return nil
 }
 
@@ -806,49 +975,60 @@ func (m *TaskManager) dispatchChannelMessage(tgRT *telegramRuntime, channelID in
 	tgRT.tasksMu.RUnlock()
 
 	for _, rt := range tasks {
-		if rt == nil || rt.TargetPeer == nil || rt.Ctx == nil {
+		// Push dispatcher only: allow poll-only tasks to stay silent on updates.
+		if rt == nil || !rt.Task.Realtime {
 			continue
 		}
-		if rt.Task.ID == 0 || msg.ID <= 0 {
-			continue
-		}
-		if rt.Ctx.Err() != nil {
-			continue
-		}
-		if !m.isActiveRun(rt.Task.ID, rt.RunID) {
-			continue
-		}
-
-		order, cursor := rt.cursorSnapshot()
-		// 基础去重：防止历史刚跑完，实时 difference 又推来同一条
-		if order != model.HistoryOrderNewToOld && cursor > 0 && msg.ID <= cursor {
-			continue
-		}
-		if m.dedup != nil && m.dedup.Seen(rt.Task.ID, msg.ID) {
-			continue
-		}
-
-		if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil {
-			groupedID := msg.GroupedID
-			ch, first := rt.ensureAlbumWaiter(groupedID)
-			m.grouper.Add(rt.Task.ID, groupedID, msg, func(batch []*tg.Message) {
-				rt.deliverAlbum(groupedID, batch)
-			})
-			if first {
-				rt.enqueue(realtimeJob{
-					kind:      realtimeJobAlbum,
-					groupedID: groupedID,
-					albumCh:   ch,
-				})
-			}
-			continue
-		}
-
-		rt.enqueue(realtimeJob{
-			kind: realtimeJobSingle,
-			msg:  msg,
-		})
+		m.dispatchMessageToRuntimeTask(rt, msg)
 	}
+}
+
+func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Message) {
+	if m == nil || rt == nil || msg == nil {
+		return
+	}
+	if rt.TargetPeer == nil || rt.Ctx == nil {
+		return
+	}
+	if rt.Task.ID == 0 || msg.ID <= 0 {
+		return
+	}
+	if rt.Ctx.Err() != nil {
+		return
+	}
+	if !m.isActiveRun(rt.Task.ID, rt.RunID) {
+		return
+	}
+
+	order, cursor := rt.cursorSnapshot()
+	// 基础去重：防止历史刚跑完，实时 difference 又推来同一条
+	if order != model.HistoryOrderNewToOld && cursor > 0 && msg.ID <= cursor {
+		return
+	}
+	if m.dedup != nil && m.dedup.Seen(rt.Task.ID, msg.ID) {
+		return
+	}
+
+	if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil {
+		groupedID := msg.GroupedID
+		ch, first := rt.ensureAlbumWaiter(groupedID)
+		m.grouper.Add(rt.Task.ID, groupedID, msg, func(batch []*tg.Message) {
+			rt.deliverAlbum(groupedID, batch)
+		})
+		if first {
+			rt.enqueue(realtimeJob{
+				kind:      realtimeJobAlbum,
+				groupedID: groupedID,
+				albumCh:   ch,
+			})
+		}
+		return
+	}
+
+	rt.enqueue(realtimeJob{
+		kind: realtimeJobSingle,
+		msg:  msg,
+	})
 }
 
 // resolveTargetPeer is a small helper for monitor/history orchestration.

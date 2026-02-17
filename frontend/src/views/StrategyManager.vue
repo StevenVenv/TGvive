@@ -15,7 +15,7 @@ import {
   type Strategy,
 } from '../api'
 import KeywordForm, { type KeywordFormExpose, type KeywordFormModel } from '../components/strategy/KeywordForm.vue'
-import StrategyForm, { type StrategyFormExpose, type StrategyFormModel } from '../components/strategy/StrategyForm.vue'
+import StrategyForm, { type ScheduleRule, type StrategyFormExpose, type StrategyFormModel } from '../components/strategy/StrategyForm.vue'
 
 type TabKey = 'library' | 'create' | 'keywords'
 type DialogMode = 'edit' | 'debug'
@@ -58,6 +58,9 @@ function emptyModel(): StrategyFormModel {
     scope_type: 1,
     scope_value: '',
     history_order: 1,
+    poll_interval: 0,
+    enable_realtime: false,
+    schedule_rules: [],
 
     keep_reply: false,
     realtime: false,
@@ -102,11 +105,15 @@ function summarizeTags(s: Strategy): string[] {
   const ct = Array.isArray(s.content_types) ? s.content_types : []
   tags.push(ct.length ? `类型:${ct.join(',')}` : '类型:全部')
 
-  if (s.realtime) tags.push('实时')
+  const push = Boolean((s as any).enable_realtime ?? s.realtime)
+  if (push) tags.push('监听')
   if (s.keep_reply) tags.push('保留回复')
   if (s.clone_comment) tags.push('克隆评论')
   if (s.gpu_accel) tags.push('GPU')
   if (s.change_md5) tags.push('改MD5')
+
+  const poll = Number(s.poll_interval ?? 0)
+  if (poll > 0) tags.push(`轮询:${poll}s`)
 
   const dmin = Number(s.delay_min_ms ?? 0)
   const dmax = Number(s.delay_max_ms ?? 0)
@@ -137,7 +144,34 @@ const filteredKwProfiles = computed(() => {
   return kwProfiles.value.filter((p) => (p.name || '').toLowerCase().includes(q))
 })
 
+function normalizeScheduleRules(input: any): ScheduleRule[] {
+  if (!input) return []
+  let raw: any = input
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(raw)) return []
+
+  const out: ScheduleRule[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const start = String((item as any).start ?? '').trim()
+    const end = String((item as any).end ?? '').trim()
+    const limit = Number((item as any).limit ?? 0)
+    if (!start || !end) continue
+    if (!Number.isFinite(limit) || limit <= 0) continue
+    out.push({ start, end, limit: Math.floor(limit) })
+  }
+  return out
+}
+
 function buildPayload(m: StrategyFormModel): Partial<Strategy> {
+  const poll = Number(m.poll_interval ?? 0)
+  const enable = Boolean((m as any).enable_realtime ?? m.realtime)
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
@@ -148,9 +182,14 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     scope_type: Number(m.scope_type || 1),
     scope_value: (m.scope_value || '').trim(),
     history_order: Number(m.history_order || 1),
+    poll_interval: !Number.isFinite(poll) ? 0 : poll <= 0 ? 0 : Math.max(10, Math.floor(poll)),
+
+    enable_realtime: enable,
+    // keep legacy field synced for backward compatibility
+    realtime: enable,
+    schedule_rules: normalizeScheduleRules((m as any).schedule_rules),
 
     keep_reply: Boolean(m.keep_reply),
-    realtime: Boolean(m.realtime),
     clone_comment: Boolean(m.clone_comment),
     gpu_accel: Boolean(m.gpu_accel),
     change_md5: Boolean(m.change_md5),
@@ -164,6 +203,7 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
 }
 
 function fillEdit(row: Strategy) {
+  const enable = Boolean((row as any).enable_realtime ?? row.realtime)
   Object.assign(editModel, emptyModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
@@ -175,9 +215,12 @@ function fillEdit(row: Strategy) {
     scope_type: Number(row.scope_type || 1),
     scope_value: (row.scope_value || '').trim(),
     history_order: Number(row.history_order || 1),
+    poll_interval: Number(row.poll_interval ?? 0),
+    enable_realtime: enable,
+    schedule_rules: normalizeScheduleRules((row as any).schedule_rules),
 
     keep_reply: Boolean(row.keep_reply),
-    realtime: Boolean(row.realtime),
+    realtime: enable,
     clone_comment: Boolean(row.clone_comment),
     gpu_accel: Boolean(row.gpu_accel),
     change_md5: Boolean(row.change_md5),

@@ -53,6 +53,10 @@ export type Strategy = {
   scope_type: number
   scope_value: string
   history_order?: number
+  poll_interval?: number
+
+  enable_realtime?: boolean
+  schedule_rules?: Array<{ start: string; end: string; limit: number }>
 
   keep_reply?: boolean
   realtime?: boolean

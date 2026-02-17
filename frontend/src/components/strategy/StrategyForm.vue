@@ -2,6 +2,12 @@
 import { computed, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 
+export type ScheduleRule = {
+  start: string
+  end: string
+  limit: number
+}
+
 export type StrategyFormModel = {
   ID: number
   name: string
@@ -13,6 +19,9 @@ export type StrategyFormModel = {
   scope_type: number
   scope_value: string
   history_order: number
+  poll_interval: number
+  enable_realtime: boolean
+  schedule_rules: ScheduleRule[]
 
   keep_reply: boolean
   realtime: boolean
@@ -56,6 +65,61 @@ const emit = defineEmits<{
 
 const formRef = ref<FormInstance>()
 const form = computed(() => props.modelValue)
+
+const enablePush = computed<boolean>({
+  get() {
+    const v = (form.value as any).enable_realtime
+    if (v === undefined || v === null) return Boolean(form.value.realtime)
+    return Boolean(v)
+  },
+  set(v) {
+    form.value.enable_realtime = Boolean(v)
+    form.value.realtime = Boolean(v) // legacy field for backward compatibility
+  },
+})
+
+const enablePull = computed<boolean>({
+  get() {
+    return Number(form.value.poll_interval ?? 0) > 0
+  },
+  set(v) {
+    if (!v) {
+      form.value.poll_interval = 0
+      return
+    }
+    const cur = Number(form.value.poll_interval ?? 0)
+    if (!Number.isFinite(cur) || cur <= 0) form.value.poll_interval = 60
+  },
+})
+
+function normalizeScheduleRules(input: any): ScheduleRule[] {
+  const raw = Array.isArray(input) ? input : []
+  const out: ScheduleRule[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const start = String((item as any).start ?? '').trim()
+    const end = String((item as any).end ?? '').trim()
+    const limit = Number((item as any).limit ?? 0)
+    if (!start || !end) continue
+    if (!Number.isFinite(limit) || limit <= 0) continue
+    out.push({ start, end, limit: Math.floor(limit) })
+  }
+  return out
+}
+
+function ensureScheduleRulesArray() {
+  if (!Array.isArray(form.value.schedule_rules)) form.value.schedule_rules = []
+}
+
+function addScheduleRule() {
+  ensureScheduleRulesArray()
+  form.value.schedule_rules = [...form.value.schedule_rules, { start: '', end: '', limit: 1 }]
+}
+
+function removeScheduleRule(index: number) {
+  ensureScheduleRulesArray()
+  form.value.schedule_rules = form.value.schedule_rules.filter((_, i) => i !== index)
+}
 
 type ContentTypeKey = 'text' | 'image' | 'video' | 'audio' | 'file' | 'other'
 
@@ -163,6 +227,18 @@ function onContentTypeTagChange(key: ContentTypeKey, ev: any) {
 
 const rules: FormRules = {
   name: [{ required: true, message: '请填写策略名称', trigger: 'blur' }],
+  poll_interval: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        const n = Number(v ?? 0)
+        if (!Number.isFinite(n)) cb(new Error('轮询间隔不合法'))
+        else if (n < 0) cb(new Error('轮询间隔不能为负数'))
+        else if (n > 0 && n < 10) cb(new Error('轮询间隔最小 10 秒'))
+        else cb()
+      },
+      trigger: 'change',
+    },
+  ],
   delay_min_ms: [
     {
       validator: (_: any, v: any, cb: any) => {
@@ -212,6 +288,14 @@ function clearValidate() {
 }
 
 async function submit() {
+  // keep legacy + new fields in sync
+  form.value.enable_realtime = enablePush.value
+  form.value.realtime = enablePush.value
+
+  if (!enablePull.value) {
+    form.value.poll_interval = 0
+  }
+  form.value.schedule_rules = normalizeScheduleRules(form.value.schedule_rules)
   const ok = await validate()
   if (!ok) return
   emit('submit')
@@ -347,6 +431,43 @@ defineExpose<StrategyFormExpose>({
             </div>
           </template>
 
+          <div class="monitor-box">
+            <div class="monitor-pane">
+              <el-form-item class="monitor-item">
+                <template #label>
+                  <div class="monitor-label">
+                    <i class="ri-broadcast-line" />
+                    <span>实时监听 (Push)</span>
+                  </div>
+                </template>
+                <el-switch v-model="enablePush" inline-prompt active-text="开" inactive-text="关" />
+                <div class="hint compact">通过 Telegram 推送事件触发转发</div>
+              </el-form-item>
+            </div>
+
+            <div class="monitor-pane">
+              <el-form-item prop="poll_interval" class="monitor-item">
+                <template #label>
+                  <div class="monitor-label">
+                    <i class="ri-loop-right-line" />
+                    <span>定时兜底 (Pull)</span>
+                    <el-tooltip effect="dark" placement="top" content="用于兜底：按间隔主动检测最新消息，建议间隔 60 秒以上。">
+                      <i class="ri-question-line monitor-tip" />
+                    </el-tooltip>
+                  </div>
+                </template>
+
+                <div class="poll-mode">
+                  <el-switch v-model="enablePull" inline-prompt active-text="开" inactive-text="关" />
+                  <div v-if="enablePull" class="poll-interval">
+                    <el-input-number v-model="form.poll_interval" :min="10" :step="10" controls-position="right" class="poll-input" />
+                    <span class="poll-unit">秒</span>
+                  </div>
+                </div>
+              </el-form-item>
+            </div>
+          </div>
+
           <el-row :gutter="12">
             <el-col :xs="24" :sm="12" :lg="6">
               <el-form-item label="最小延时 (ms)" prop="delay_min_ms">
@@ -373,12 +494,62 @@ defineExpose<StrategyFormExpose>({
           </el-row>
 
           <div class="sub-split">
+            <span>分时段计划</span>
+          </div>
+
+          <el-table :data="form.schedule_rules" size="small" border class="schedule-table" empty-text="未配置">
+            <el-table-column label="开始时间" width="150">
+              <template #default="{ row }">
+                <el-time-picker
+                  v-model="row.start"
+                  value-format="HH:mm"
+                  format="HH:mm"
+                  placeholder="HH:mm"
+                  class="ctrl ctrl-time"
+                  popper-class="tgvive-dark-popper"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="结束时间" width="150">
+              <template #default="{ row }">
+                <el-time-picker
+                  v-model="row.end"
+                  value-format="HH:mm"
+                  format="HH:mm"
+                  placeholder="HH:mm"
+                  class="ctrl ctrl-time"
+                  popper-class="tgvive-dark-popper"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="时段配额" width="160">
+              <template #default="{ row }">
+                <el-input-number v-model="row.limit" :min="1" :step="1" controls-position="right" class="ctrl ctrl-num" />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="90" align="right">
+              <template #default="{ $index }">
+                <el-button type="danger" link size="small" @click="removeScheduleRule($index)">
+                  <i class="ri-delete-bin-line" />
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div class="schedule-actions">
+            <el-button type="primary" plain size="small" @click="addScheduleRule">
+              <i class="ri-add-line" />
+              添加时段
+            </el-button>
+            <div class="hint">示例：10:00-11:00 配额 2；12:00-13:00 配额 4</div>
+          </div>
+
+          <div class="sub-split">
             <span>处理开关</span>
           </div>
 
           <div class="switch-wrap">
             <el-switch v-model="form.keep_reply" active-text="保留回复" />
-            <el-switch v-model="form.realtime" active-text="实时监控" />
             <el-switch v-model="form.clone_comment" active-text="克隆评论" />
             <el-switch v-model="form.gpu_accel" active-text="GPU 加速" />
             <el-switch v-model="form.change_md5" active-text="修改 MD5" />
@@ -599,6 +770,88 @@ defineExpose<StrategyFormExpose>({
   height: 1px;
   flex: 1;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.monitor-box {
+  border: 1px solid #363637;
+  border-radius: 4px;
+  background: #252525;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 768px) {
+  .monitor-box {
+    grid-template-columns: 1fr;
+  }
+}
+
+.monitor-box :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.monitor-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  i {
+    font-size: 14px;
+    color: var(--el-color-primary);
+  }
+}
+
+.monitor-tip {
+  font-size: 14px;
+  color: rgba(191, 203, 217, 0.7);
+  cursor: pointer;
+}
+
+.monitor-tip:hover {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.poll-mode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.poll-interval {
+  display: flex;
+  align-items: center;
+  margin-left: 15px;
+}
+
+.poll-input {
+  width: 150px;
+}
+
+.poll-unit {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.schedule-table {
+  width: 100%;
+}
+
+.schedule-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.schedule-actions .hint {
+  margin-top: 0;
 }
 
 .switch-wrap {

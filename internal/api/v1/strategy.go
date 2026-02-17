@@ -56,6 +56,15 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	if s.DailyLimit < 0 {
 		s.DailyLimit = 0
 	}
+	if s.PollInterval < 0 {
+		s.PollInterval = 0
+	}
+	if s.PollInterval > 0 && s.PollInterval < 10 {
+		s.PollInterval = 10
+	}
+	enableRealtime := s.EnableRealtime || s.Realtime
+	s.EnableRealtime = enableRealtime
+	s.Realtime = enableRealtime
 
 	if err := service.CreateStrategy(&s); err != nil {
 		app.FailWithMsg("策略保存失败: "+err.Error(), c)
@@ -129,6 +138,15 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 	if payload.DailyLimit < 0 {
 		payload.DailyLimit = 0
 	}
+	if payload.PollInterval < 0 {
+		payload.PollInterval = 0
+	}
+	if payload.PollInterval > 0 && payload.PollInterval < 10 {
+		payload.PollInterval = 10
+	}
+	enableRealtime := payload.EnableRealtime || payload.Realtime
+	payload.EnableRealtime = enableRealtime
+	payload.Realtime = enableRealtime
 
 	updated, err := service.UpdateStrategy(userID, uint(idU64), &payload)
 	if err != nil {

@@ -1,6 +1,10 @@
 package model
 
-import "gorm.io/gorm"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 const (
 	TaskStatusStopped = 0
@@ -63,6 +67,9 @@ type Task struct {
 
 	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`
+
+	// NextRunTime is the next wake-up time calculated by scheduler (optional).
+	NextRunTime *time.Time `gorm:"type:datetime" json:"next_run_time,omitempty"`
 
 	// 历史克隆进度（断点续传）
 	HistoryCursor int `gorm:"type:int;default:0" json:"history_cursor"` // 最近一次成功转发的消息 ID

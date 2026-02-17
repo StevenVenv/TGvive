@@ -87,7 +87,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		ScopeValue: strings.TrimSpace(strategy.ScopeValue),
 
 		KeepReply:    strategy.KeepReply,
-		Realtime:     strategy.Realtime,
+		Realtime:     strategy.EnableRealtime || strategy.Realtime,
 		CloneComment: strategy.CloneComment,
 		GpuAccel:     strategy.GpuAccel,
 		ChangeMD5:    strategy.ChangeMD5,
@@ -251,7 +251,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		ScopeValue: strings.TrimSpace(strategy.ScopeValue),
 
 		KeepReply:    strategy.KeepReply,
-		Realtime:     strategy.Realtime,
+		Realtime:     strategy.EnableRealtime || strategy.Realtime,
 		CloneComment: strategy.CloneComment,
 		GpuAccel:     strategy.GpuAccel,
 		ChangeMD5:    strategy.ChangeMD5,

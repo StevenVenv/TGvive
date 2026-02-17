@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"my-go-server/internal/engine"
 	"my-go-server/internal/global"
 	"my-go-server/internal/initialize"
 	"my-go-server/internal/router"
@@ -19,6 +20,9 @@ func main() {
 		}
 	}()
 	initialize.InitDB()
+
+	// Start per-task scheduler (time-slot rules, polling quota).
+	engine.Scheduler.Start()
 
 	// Start dashboard monitor (CPU/mem/disk/net counters).
 	global.StartMonitor()

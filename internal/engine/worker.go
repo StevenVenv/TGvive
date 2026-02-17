@@ -70,7 +70,23 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		return
 	}
 
-	if task.Realtime {
+	pollIntervalSec := 0
+	enablePush := task.Realtime
+	if global.DB != nil && task.StrategyID != 0 && task.UserID != 0 {
+		var s model.Strategy
+		if err := global.DB.Select("poll_interval", "enable_realtime", "realtime").Where("id = ? AND user_id = ?", task.StrategyID, task.UserID).First(&s).Error; err == nil {
+			pollIntervalSec = s.PollInterval
+			enablePush = s.EnableRealtime || s.Realtime
+		}
+	}
+	if pollIntervalSec < 0 {
+		pollIntervalSec = 0
+	} else if pollIntervalSec > 0 && pollIntervalSec < 10 {
+		pollIntervalSec = 10
+	}
+
+	keepAlive := enablePush || pollIntervalSec > 0
+	if keepAlive {
 		if global.DB != nil {
 			var latest model.Task
 			if err := global.DB.Select("history_cursor", "history_order", "history_max_id").Where("id = ?", taskID).First(&latest).Error; err == nil {
@@ -80,15 +96,19 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			}
 		}
 
+		task.Realtime = enablePush
+		_ = Scheduler.RegisterTask(task)
+
 		m.record(taskID, runID, 0, 0, 0, 0, "进入实时监控")
 		m.markCompleted(taskID, runID, false)
 		_ = m.registerRealtimeTask(tgRT, runtimeTaskConfig{
-			Task:       task,
-			RunID:      runID,
-			Ctx:        ctx,
-			SourcePeer: sourcePeer,
-			TargetPeer: targetPeer,
-			Keyword:    kw,
+			Task:            task,
+			RunID:           runID,
+			Ctx:             ctx,
+			SourcePeer:      sourcePeer,
+			TargetPeer:      targetPeer,
+			Keyword:         kw,
+			PollIntervalSec: pollIntervalSec,
 		}, sourceChannelID)
 		<-ctx.Done()
 		m.unregisterTask(taskID, sourceChannelID)

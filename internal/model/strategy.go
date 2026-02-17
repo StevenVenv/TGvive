@@ -1,6 +1,9 @@
 package model
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
+)
 
 // Strategy stores reusable task configuration templates.
 // It is intentionally kept close to Task's config fields so Tasks can reference StrategyID later.
@@ -25,8 +28,19 @@ type Strategy struct {
 	// 历史克隆方向：1-从旧到新，2-从新到旧
 	HistoryOrder int `gorm:"type:tinyint;default:1" json:"history_order"`
 
+	// PollInterval controls fallback polling in realtime mode (seconds).
+	// 0 = disabled (push only), >0 = poll newest message every N seconds.
+	PollInterval int `gorm:"type:int;default:0" json:"poll_interval"`
+
+	// EnableRealtime controls push mode (UpdateDispatcher).
+	EnableRealtime bool `gorm:"default:false" json:"enable_realtime"`
+
+	// ScheduleRules stores slot based limits, e.g. [{start:"10:00",end:"11:00",limit:2}, ...]
+	ScheduleRules datatypes.JSON `gorm:"type:json" json:"schedule_rules"`
+
 	// 开关配置 (布尔值)
 	KeepReply    bool `gorm:"default:false" json:"keep_reply"`
+	// Realtime is kept for backward compatibility (legacy field).
 	Realtime     bool `gorm:"default:false" json:"realtime"`
 	CloneComment bool `gorm:"default:false" json:"clone_comment"`
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`

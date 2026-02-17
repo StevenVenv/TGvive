@@ -35,6 +35,9 @@ func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (mode
 	s.ScopeType = payload.ScopeType
 	s.ScopeValue = payload.ScopeValue
 	s.HistoryOrder = payload.HistoryOrder
+	s.PollInterval = payload.PollInterval
+	s.EnableRealtime = payload.EnableRealtime
+	s.ScheduleRules = payload.ScheduleRules
 
 	s.KeepReply = payload.KeepReply
 	s.Realtime = payload.Realtime
