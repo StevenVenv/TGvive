@@ -189,12 +189,14 @@ type taskScheduleState struct {
 	slotEnd       time.Time
 	limit         int
 	used          int
+	reserved      int
+
+	currentSlotKey string
 
 	nextRun time.Time
 }
 
-// SchedulerEngine keeps in-memory pull quotas based on Strategy.ScheduleRules.
-// It is best-effort (development mode): restarting server will reset per-slot counters.
+// SchedulerEngine keeps pull quotas based on Strategy.ScheduleRules and persists slot counters on task table.
 type SchedulerEngine struct {
 	mu sync.Mutex
 
@@ -259,13 +261,15 @@ func (s *SchedulerEngine) refresh() {
 		TaskID        uint   `gorm:"column:task_id"`
 		UserID        uint   `gorm:"column:user_id"`
 		StrategyID    uint   `gorm:"column:strategy_id"`
+		SlotKey       string `gorm:"column:current_slot_key"`
+		SlotCount     int    `gorm:"column:current_slot_count"`
 		ScheduleRules []byte `gorm:"column:schedule_rules"`
 	}
 
 	var rows []row
 	if err := global.DB.
 		Table("task").
-		Select("task.id as task_id, task.user_id, task.strategy_id, strategy.schedule_rules as schedule_rules").
+		Select("task.id as task_id, task.user_id, task.strategy_id, task.current_slot_key, task.current_slot_count, strategy.schedule_rules as schedule_rules").
 		Joins("LEFT JOIN strategy ON strategy.id = task.strategy_id AND strategy.user_id = task.user_id").
 		Where("task.status = ? AND task.strategy_id <> 0", model.TaskStatusRunning).
 		Scan(&rows).Error; err != nil {
@@ -320,9 +324,27 @@ func (s *SchedulerEngine) refresh() {
 			cache[key] = ent
 		}
 
-		s.applyRules(r.TaskID, r.UserID, r.StrategyID, ent.rules, ent.rulesKey)
-		next := s.computeNextRun(r.TaskID, now)
-		_ = global.DB.Model(&model.Task{}).Where("id = ?", r.TaskID).Update("next_run_time", nullableTimePtr(next)).Error
+		persistReset := s.applyRules(r.TaskID, r.UserID, r.StrategyID, ent.rules, ent.rulesKey)
+		if !persistReset {
+			s.syncPersistedState(r.TaskID, r.SlotKey, r.SlotCount)
+		}
+		next, slotReset := s.computeNextRun(r.TaskID, now)
+
+		updates := map[string]any{
+			"next_run_time": nullableTimePtr(next),
+		}
+		if persistReset {
+			if slotReset != nil && strings.TrimSpace(slotReset.SlotKey) != "" {
+				updates["current_slot_key"] = slotReset.SlotKey
+			} else {
+				updates["current_slot_key"] = ""
+			}
+			updates["current_slot_count"] = 0
+		} else if slotReset != nil {
+			updates["current_slot_key"] = slotReset.SlotKey
+			updates["current_slot_count"] = 0
+		}
+		_ = global.DB.Model(&model.Task{}).Where("id = ?", r.TaskID).Updates(updates).Error
 	}
 
 	s.mu.Lock()
@@ -366,7 +388,7 @@ func (s *SchedulerEngine) setRules(taskID uint, userID uint, strategyID uint, ra
 		)
 	}
 	key := scheduleRulesKey(rules)
-	s.applyRules(taskID, userID, strategyID, rules, key)
+	_ = s.applyRules(taskID, userID, strategyID, rules, key)
 }
 
 func scheduleRulesKey(rules []parsedScheduleRule) string {
@@ -380,22 +402,28 @@ func scheduleRulesKey(rules []parsedScheduleRule) string {
 	return b.String()
 }
 
-func (s *SchedulerEngine) applyRules(taskID uint, userID uint, strategyID uint, rules []parsedScheduleRule, rulesKey string) {
+func (s *SchedulerEngine) applyRules(taskID uint, userID uint, strategyID uint, rules []parsedScheduleRule, rulesKey string) (persistReset bool) {
 	if s == nil || taskID == 0 {
-		return
+		return false
 	}
 
 	s.mu.Lock()
 	st := s.tasks[taskID]
+	isNew := st == nil
 	if st == nil {
 		st = &taskScheduleState{activeRuleIdx: -1}
 		s.tasks[taskID] = st
 	}
 
 	changed := st.userID != userID || st.strategyID != strategyID || st.rulesKey != rulesKey
+	persistReset = !isNew && changed
 	if changed {
 		st.activeRuleIdx = -1
 		st.used = 0
+		st.reserved = 0
+		if persistReset {
+			st.currentSlotKey = ""
+		}
 		st.slotEnd = time.Time{}
 		st.limit = 0
 		st.nextRun = time.Time{}
@@ -405,6 +433,36 @@ func (s *SchedulerEngine) applyRules(taskID uint, userID uint, strategyID uint, 
 	st.strategyID = strategyID
 	st.rules = rules
 	st.rulesKey = rulesKey
+	s.mu.Unlock()
+	return persistReset
+}
+
+func (s *SchedulerEngine) syncPersistedState(taskID uint, slotKey string, slotCount int) {
+	if s == nil || taskID == 0 {
+		return
+	}
+	if slotCount < 0 {
+		slotCount = 0
+	}
+
+	s.mu.Lock()
+	st := s.tasks[taskID]
+	if st == nil {
+		s.mu.Unlock()
+		return
+	}
+
+	if st.reserved > 0 && st.currentSlotKey != "" && slotKey != "" && slotKey != st.currentSlotKey {
+		// Do not overwrite slot identity while there are pending reserved jobs.
+		s.mu.Unlock()
+		return
+	}
+
+	st.currentSlotKey = strings.TrimSpace(slotKey)
+	st.used = slotCount
+	if st.used < 0 {
+		st.used = 0
+	}
 	s.mu.Unlock()
 }
 
@@ -420,11 +478,14 @@ func (s *SchedulerEngine) ReservePull(taskID uint, need int) (int, time.Time, er
 
 	now := time.Now()
 
+	var needPersistReset bool
+	var persistKey string
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	st := s.tasks[taskID]
 	if st == nil || len(st.rules) == 0 {
+		s.mu.Unlock()
 		return need, time.Time{}, nil
 	}
 
@@ -433,25 +494,51 @@ func (s *SchedulerEngine) ReservePull(taskID uint, need int) (int, time.Time, er
 		next, has := nextSlotStart(now, st.rules)
 		if has {
 			st.nextRun = next
+			s.mu.Unlock()
 			return 0, next, nil
 		}
 		// No valid rules -> unlimited.
+		s.mu.Unlock()
 		return need, time.Time{}, nil
 	}
 
 	// Slot changed -> reset.
 	if st.activeRuleIdx != idx || !st.slotEnd.Equal(end) {
+		// Do not switch slot while there are pending reserved jobs.
+		if st.reserved > 0 {
+			next := st.slotEnd
+			if next.IsZero() {
+				next = end
+			}
+			st.nextRun = next
+			s.mu.Unlock()
+			return 0, next, nil
+		}
+
+		newKey := buildSlotKey(now, st.rules[idx])
+
 		st.activeRuleIdx = idx
-		st.used = 0
 		st.slotEnd = end
 		st.limit = limit
 		st.nextRun = time.Time{}
+
+		if newKey != "" && newKey != st.currentSlotKey {
+			st.currentSlotKey = newKey
+			st.used = 0
+			st.reserved = 0
+			needPersistReset = true
+			persistKey = newKey
+		}
 	}
 
-	remaining := st.limit - st.used
+	remaining := st.limit - st.used - st.reserved
 	if remaining <= 0 {
 		next := st.slotEnd
 		st.nextRun = next
+		s.mu.Unlock()
+		if needPersistReset {
+			_ = persistSlotReset(taskID, persistKey)
+		}
 		return 0, next, nil
 	}
 
@@ -459,21 +546,32 @@ func (s *SchedulerEngine) ReservePull(taskID uint, need int) (int, time.Time, er
 	if reserved > remaining {
 		reserved = remaining
 	}
-	st.used += reserved
+	st.reserved += reserved
+
+	s.mu.Unlock()
+	if needPersistReset {
+		_ = persistSlotReset(taskID, persistKey)
+	}
 	return reserved, time.Time{}, nil
 }
 
-func (s *SchedulerEngine) computeNextRun(taskID uint, now time.Time) time.Time {
+type slotResetInfo struct {
+	SlotKey string
+}
+
+func (s *SchedulerEngine) computeNextRun(taskID uint, now time.Time) (time.Time, *slotResetInfo) {
 	if s == nil || taskID == 0 {
-		return time.Time{}
+		return time.Time{}, nil
 	}
+
+	var reset *slotResetInfo
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	st := s.tasks[taskID]
 	if st == nil || len(st.rules) == 0 {
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	idx, end, limit, ok := pickActiveSlot(now, st.rules)
@@ -481,32 +579,41 @@ func (s *SchedulerEngine) computeNextRun(taskID uint, now time.Time) time.Time {
 		next, has := nextSlotStart(now, st.rules)
 		if has {
 			st.nextRun = next
-			return next
+			return next, nil
 		}
 		st.nextRun = time.Time{}
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	if st.activeRuleIdx != idx || !st.slotEnd.Equal(end) {
-		st.activeRuleIdx = idx
-		st.used = 0
-		st.slotEnd = end
-		st.limit = limit
-		st.nextRun = time.Time{}
-		return time.Time{}
+		if st.reserved == 0 {
+			st.activeRuleIdx = idx
+			st.slotEnd = end
+			st.limit = limit
+			st.nextRun = time.Time{}
+
+			newKey := buildSlotKey(now, st.rules[idx])
+			if newKey != "" && newKey != st.currentSlotKey {
+				st.currentSlotKey = newKey
+				st.used = 0
+				st.reserved = 0
+				reset = &slotResetInfo{SlotKey: newKey}
+			}
+		}
+		return time.Time{}, reset
 	}
 
 	if st.limit <= 0 {
 		st.nextRun = time.Time{}
-		return time.Time{}
+		return time.Time{}, reset
 	}
 	if st.used >= st.limit {
 		st.nextRun = st.slotEnd
-		return st.slotEnd
+		return st.slotEnd, reset
 	}
 
 	st.nextRun = time.Time{}
-	return time.Time{}
+	return time.Time{}, reset
 }
 
 func (s *SchedulerEngine) RegisterTask(task model.Task) error {
@@ -525,6 +632,18 @@ func (s *SchedulerEngine) RegisterTask(task model.Task) error {
 		return err
 	}
 	s.setRules(task.ID, task.UserID, task.StrategyID, st.ScheduleRules)
+
+	// Sync persisted slot quota into memory to avoid 1-minute window after restart.
+	slotKey := strings.TrimSpace(task.CurrentSlotKey)
+	slotCount := task.CurrentSlotCount
+	if slotKey == "" && global.DB != nil {
+		var latest model.Task
+		if err := global.DB.Select("current_slot_key", "current_slot_count").Where("id = ? AND user_id = ?", task.ID, task.UserID).First(&latest).Error; err == nil {
+			slotKey = strings.TrimSpace(latest.CurrentSlotKey)
+			slotCount = latest.CurrentSlotCount
+		}
+	}
+	s.syncPersistedState(task.ID, slotKey, slotCount)
 	return nil
 }
 
@@ -537,11 +656,14 @@ func (s *SchedulerEngine) PeekPull(taskID uint) (allowed bool, remaining int, ne
 
 	now := time.Now()
 
+	var needPersistReset bool
+	var persistKey string
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	st := s.tasks[taskID]
 	if st == nil || len(st.rules) == 0 {
+		s.mu.Unlock()
 		return true, -1, time.Time{}
 	}
 
@@ -550,24 +672,156 @@ func (s *SchedulerEngine) PeekPull(taskID uint) (allowed bool, remaining int, ne
 		next, has := nextSlotStart(now, st.rules)
 		if has {
 			st.nextRun = next
+			s.mu.Unlock()
 			return false, 0, next
 		}
+		s.mu.Unlock()
 		return true, -1, time.Time{}
 	}
 
 	if st.activeRuleIdx != idx || !st.slotEnd.Equal(end) {
+		if st.reserved > 0 {
+			next = st.slotEnd
+			if next.IsZero() {
+				next = end
+			}
+			st.nextRun = next
+			s.mu.Unlock()
+			return false, 0, next
+		}
+
+		newKey := buildSlotKey(now, st.rules[idx])
 		st.activeRuleIdx = idx
-		st.used = 0
 		st.slotEnd = end
 		st.limit = limit
 		st.nextRun = time.Time{}
+
+		if newKey != "" && newKey != st.currentSlotKey {
+			st.currentSlotKey = newKey
+			st.used = 0
+			st.reserved = 0
+			needPersistReset = true
+			persistKey = newKey
+		}
 	}
 
-	remaining = st.limit - st.used
+	remaining = st.limit - st.used - st.reserved
 	if remaining <= 0 {
 		next = st.slotEnd
 		st.nextRun = next
+		s.mu.Unlock()
+		if needPersistReset {
+			_ = persistSlotReset(taskID, persistKey)
+		}
 		return false, 0, next
 	}
+	s.mu.Unlock()
+	if needPersistReset {
+		_ = persistSlotReset(taskID, persistKey)
+	}
 	return true, remaining, time.Time{}
+}
+
+func persistSlotReset(taskID uint, slotKey string) error {
+	if taskID == 0 || global.DB == nil {
+		return nil
+	}
+	slotKey = strings.TrimSpace(slotKey)
+	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+		Updates(map[string]any{
+			"current_slot_key":   slotKey,
+			"current_slot_count": 0,
+		}).Error
+}
+
+func (s *SchedulerEngine) CommitPull(taskID uint, usedDelta int) {
+	if usedDelta <= 0 || s == nil || taskID == 0 {
+		return
+	}
+
+	var slotKey string
+	var used int
+
+	s.mu.Lock()
+	st := s.tasks[taskID]
+	if st == nil || len(st.rules) == 0 || st.limit <= 0 {
+		s.mu.Unlock()
+		return
+	}
+	if st.currentSlotKey == "" {
+		s.mu.Unlock()
+		return
+	}
+
+	if st.reserved > 0 {
+		st.reserved -= usedDelta
+		if st.reserved < 0 {
+			st.reserved = 0
+		}
+	}
+	st.used += usedDelta
+	if st.used < 0 {
+		st.used = 0
+	}
+	slotKey = st.currentSlotKey
+	used = st.used
+	s.mu.Unlock()
+
+	if global.DB != nil {
+		if err := global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+			Updates(map[string]any{
+				"current_slot_key":   slotKey,
+				"current_slot_count": used,
+			}).Error; err != nil && global.Logger != nil {
+			global.Logger.Warn("persist slot quota failed", zap.Uint("task_id", taskID), zap.Error(err))
+		}
+	}
+}
+
+func (s *SchedulerEngine) ReleasePull(taskID uint, reservedDelta int) {
+	if reservedDelta <= 0 || s == nil || taskID == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	st := s.tasks[taskID]
+	if st == nil {
+		s.mu.Unlock()
+		return
+	}
+	if st.reserved > 0 {
+		st.reserved -= reservedDelta
+		if st.reserved < 0 {
+			st.reserved = 0
+		}
+	}
+	s.mu.Unlock()
+}
+
+func buildSlotKey(now time.Time, r parsedScheduleRule) string {
+	loc := now.Location()
+	startDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	if r.allDay {
+		return startDay.Format("2006-01-02") + "|all-day"
+	}
+
+	minutes := now.Hour()*60 + now.Minute()
+	if r.crossMidnight && minutes < r.endMin {
+		startDay = startDay.AddDate(0, 0, -1)
+	}
+
+	return startDay.Format("2006-01-02") + "|" + formatHHMM(r.startMin) + "-" + formatHHMM(r.endMin)
+}
+
+func formatHHMM(minutes int) string {
+	if minutes < 0 {
+		minutes = 0
+	}
+	if minutes > 23*60+59 {
+		minutes = 23*60 + 59
+	}
+	h := minutes / 60
+	m := minutes % 60
+	return fmt.Sprintf("%02d:%02d", h, m)
 }

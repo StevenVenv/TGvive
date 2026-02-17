@@ -89,37 +89,67 @@ function accountFileName(key: string): string {
   return `session_${key}.json`
 }
 
-function statusTagType(task: Task): 'success' | 'warning' | 'danger' | 'info' {
-  const p = progressMap.value[task.ID]
-  if (p?.status === '异常') return 'danger'
-  if (p?.status === '进行中') return 'success'
-  if (p?.status === '已暂停') return 'warning'
+type StatusView = {
+  type: 'success' | 'warning' | 'danger' | 'info'
+  text: string
+  icon: string
+  tooltip?: string
+}
 
-  switch (task.status) {
-    case 1:
-      return 'success'
-    case 2:
-      return 'warning'
-    case 3:
-      return 'danger'
-    default:
-      return 'info'
+function parseNextRunTime(raw?: string | null): Date | null {
+  const s = String(raw || '').trim()
+  if (!s) return null
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return null
+  return d
+}
+
+function formatDateTime(d: Date): string {
+  try {
+    return d.toLocaleString()
+  } catch {
+    return d.toISOString()
   }
 }
 
-function statusText(task: Task): string {
-  const p = progressMap.value[task.ID]
-  if (p?.status) return p.status
-  switch (task.status) {
-    case 1:
-      return '进行中'
-    case 2:
-      return '已暂停'
-    case 3:
-      return '异常'
-    default:
-      return '已停止'
+function statusView(task: Task): StatusView {
+  const status = Number(task?.status ?? 0)
+
+  if (status === 3) return { type: 'danger', text: '异常', icon: 'ri-error-warning-line' }
+  if (status === 2) return { type: 'warning', text: '已暂停', icon: 'ri-pause-circle-line' }
+  if (status !== 1) return { type: 'info', text: '已停止', icon: 'ri-stop-circle-line' }
+
+  if (task?.realtime) {
+    return { type: 'success', text: '实时监控', icon: 'ri-broadcast-line' }
   }
+
+  const next = parseNextRunTime(task?.next_run_time)
+  if (next && next.getTime() > Date.now()) {
+    return {
+      type: 'warning',
+      text: '等待调度',
+      icon: 'ri-time-line',
+      tooltip: `下次唤醒: ${formatDateTime(next)}`,
+    }
+  }
+
+  return { type: 'success', text: '运行中', icon: 'ri-play-circle-line' }
+}
+
+function statusTagType(task: Task): 'success' | 'warning' | 'danger' | 'info' {
+  return statusView(task).type
+}
+
+function statusText(task: Task): string {
+  return statusView(task).text
+}
+
+function statusIcon(task: Task): string {
+  return statusView(task).icon
+}
+
+function statusTooltip(task: Task): string {
+  return statusView(task).tooltip || ''
 }
 
 async function reloadTasks() {
@@ -444,9 +474,18 @@ defineExpose({
                   </template>
                 </el-table-column>
 
-                <el-table-column label="状态" width="120">
+                <el-table-column label="状态" width="160">
                   <template #default="{ row }">
-                    <el-tag :type="statusTagType(row)">{{ statusText(row) }}</el-tag>
+                    <el-tooltip v-if="statusTooltip(row)" :content="statusTooltip(row)" placement="top" :show-after="200">
+                      <el-tag :type="statusTagType(row)" class="status-tag">
+                        <i class="status-icon" :class="statusIcon(row)" />
+                        <span>{{ statusText(row) }}</span>
+                      </el-tag>
+                    </el-tooltip>
+                    <el-tag v-else :type="statusTagType(row)" class="status-tag">
+                      <i class="status-icon" :class="statusIcon(row)" />
+                      <span>{{ statusText(row) }}</span>
+                    </el-tag>
                   </template>
                 </el-table-column>
 
@@ -521,7 +560,21 @@ defineExpose({
               <div class="log-head">
                 <div class="log-title">
                   <el-text>#{{ selectedTask.ID }}</el-text>
-                  <el-tag class="ml8" :type="statusTagType(selectedTask)">{{ statusText(selectedTask) }}</el-tag>
+                  <el-tooltip
+                    v-if="statusTooltip(selectedTask)"
+                    :content="statusTooltip(selectedTask)"
+                    placement="top"
+                    :show-after="200"
+                  >
+                    <el-tag class="ml8 status-tag" :type="statusTagType(selectedTask)">
+                      <i class="status-icon" :class="statusIcon(selectedTask)" />
+                      <span>{{ statusText(selectedTask) }}</span>
+                    </el-tag>
+                  </el-tooltip>
+                  <el-tag v-else class="ml8 status-tag" :type="statusTagType(selectedTask)">
+                    <i class="status-icon" :class="statusIcon(selectedTask)" />
+                    <span>{{ statusText(selectedTask) }}</span>
+                  </el-tag>
                 </div>
                 <el-space size="small">
                   <el-button size="small" @click="refreshOne(selectedTask.ID)">
@@ -785,6 +838,16 @@ defineExpose({
 
 .ml8 {
   margin-left: 8px;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-icon {
+  font-size: 14px;
 }
 
 .log-meta {

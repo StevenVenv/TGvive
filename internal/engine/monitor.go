@@ -90,6 +90,7 @@ const (
 
 type realtimeJob struct {
 	kind      realtimeJobKind
+	fromPull  bool
 	msg       *tg.Message
 	groupedID int64
 	albumCh   <-chan []*tg.Message
@@ -121,8 +122,9 @@ type runtimeTask struct {
 	queue    chan realtimeJob
 	stopOnce sync.Once
 
-	mu        sync.Mutex
-	albumWait map[int64]chan []*tg.Message
+	mu                sync.Mutex
+	albumWait         map[int64]chan []*tg.Message
+	albumPullReserved map[int64]int
 }
 
 func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
@@ -138,8 +140,9 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		delayMax:     defaultMsgDelayMax,
 		keyword:      cfg.Keyword,
 
-		queue:     make(chan realtimeJob, 512),
-		albumWait: make(map[int64]chan []*tg.Message),
+		queue:             make(chan realtimeJob, 512),
+		albumWait:         make(map[int64]chan []*tg.Message),
+		albumPullReserved: make(map[int64]int),
 	}
 
 	t.delayMin, t.delayMax = normalizeDelayRange(cfg.Task.DelayMinMs, cfg.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
@@ -167,6 +170,7 @@ func (t *runtimeTask) stop() {
 				close(ch)
 			}
 		}
+		t.albumPullReserved = make(map[int64]int)
 		t.mu.Unlock()
 	})
 }
@@ -219,6 +223,35 @@ func (t *runtimeTask) deliverAlbum(groupedID int64, batch []*tg.Message) {
 	default:
 	}
 	close(ch)
+}
+
+func (t *runtimeTask) addAlbumPullReserved(groupedID int64, delta int) {
+	if t == nil || groupedID == 0 || delta <= 0 {
+		return
+	}
+	t.mu.Lock()
+	if t.albumPullReserved == nil {
+		t.albumPullReserved = make(map[int64]int)
+	}
+	t.albumPullReserved[groupedID] += delta
+	if t.albumPullReserved[groupedID] < 0 {
+		t.albumPullReserved[groupedID] = 0
+	}
+	t.mu.Unlock()
+}
+
+func (t *runtimeTask) takeAlbumPullReserved(groupedID int64) int {
+	if t == nil || groupedID == 0 {
+		return 0
+	}
+	t.mu.Lock()
+	n := t.albumPullReserved[groupedID]
+	delete(t.albumPullReserved, groupedID)
+	t.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	return n
 }
 
 func (t *runtimeTask) cursorSnapshot() (order int, cursor int) {
@@ -401,7 +434,11 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 					return
 				}
 			}
-			m.dispatchMessageToRuntimeTask(t, msg)
+			dispatched := m.dispatchMessageToRuntimeTask(t, msg, true)
+			if !dispatched && remaining >= 0 {
+				Scheduler.ReleasePull(t.Task.ID, 1)
+				continue
+			}
 			enqueued++
 			advanced = true
 
@@ -466,6 +503,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					continue
 				}
 
+				pullReserved := t.takeAlbumPullReserved(job.groupedID)
+
 				need := quotaSendableAlbumCount(m, batch, t.allowedTypes)
 				if skipped := len(batch) - need; skipped > 0 {
 					global.AddFiltered(uint64(skipped))
@@ -481,6 +520,9 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				if need > 0 && t.keyword != nil {
 					if out, skip := applyKeywordPolicyToAlbum(m, batch, t.allowedTypes, t.keyword); skip {
 						global.AddFiltered(uint64(need))
+						if pullReserved > 0 {
+							Scheduler.ReleasePull(t.Task.ID, pullReserved)
+						}
 						if maxID > 0 {
 							t.advanceCursor(maxID)
 						}
@@ -507,8 +549,25 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							zap.Error(err),
 						)
 					}
+					if pullReserved > 0 {
+						Scheduler.ReleasePull(t.Task.ID, pullReserved)
+					}
 				} else if need > 0 {
 					global.AddSuccess(uint64(need))
+					if pullReserved > 0 {
+						commit := need
+						if commit > pullReserved {
+							commit = pullReserved
+						}
+						if commit > 0 {
+							Scheduler.CommitPull(t.Task.ID, commit)
+						}
+						if extra := pullReserved - commit; extra > 0 {
+							Scheduler.ReleasePull(t.Task.ID, extra)
+						}
+					}
+				} else if pullReserved > 0 {
+					Scheduler.ReleasePull(t.Task.ID, pullReserved)
 				}
 				if maxID > 0 {
 					t.advanceCursor(maxID)
@@ -521,10 +580,18 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					continue
 				}
 
+				reservedTotal := 0
+				if job.fromPull {
+					reservedTotal = 1
+				}
+
 				if t.allowedTypes != nil {
 					ct := m.DetectContentType(msg)
 					if _, ok := t.allowedTypes[ct]; !ok {
 						global.IncFiltered()
+						if job.fromPull && reservedTotal > 0 {
+							Scheduler.ReleasePull(t.Task.ID, reservedTotal)
+						}
 						t.advanceCursor(msg.ID)
 						continue
 					}
@@ -535,6 +602,9 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if out, skip := applyKeywordPolicyToMessage(msg, t.keyword); skip {
 						if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
 							global.IncFiltered()
+						}
+						if job.fromPull && reservedTotal > 0 {
+							Scheduler.ReleasePull(t.Task.ID, reservedTotal)
 						}
 						t.advanceCursor(msg.ID)
 						continue
@@ -564,6 +634,17 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					}
 				} else if need > 0 {
 					global.AddSuccess(uint64(need))
+				}
+
+				if job.fromPull && reservedTotal > 0 {
+					if err == nil && need > 0 {
+						Scheduler.CommitPull(t.Task.ID, need)
+						if extra := reservedTotal - need; extra > 0 {
+							Scheduler.ReleasePull(t.Task.ID, extra)
+						}
+					} else {
+						Scheduler.ReleasePull(t.Task.ID, reservedTotal)
+					}
 				}
 
 				t.advanceCursor(msg.ID)
@@ -979,56 +1060,62 @@ func (m *TaskManager) dispatchChannelMessage(tgRT *telegramRuntime, channelID in
 		if rt == nil || !rt.Task.Realtime {
 			continue
 		}
-		m.dispatchMessageToRuntimeTask(rt, msg)
+		_ = m.dispatchMessageToRuntimeTask(rt, msg, false)
 	}
 }
 
-func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Message) {
+func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Message, fromPull bool) bool {
 	if m == nil || rt == nil || msg == nil {
-		return
+		return false
 	}
 	if rt.TargetPeer == nil || rt.Ctx == nil {
-		return
+		return false
 	}
 	if rt.Task.ID == 0 || msg.ID <= 0 {
-		return
+		return false
 	}
 	if rt.Ctx.Err() != nil {
-		return
+		return false
 	}
 	if !m.isActiveRun(rt.Task.ID, rt.RunID) {
-		return
+		return false
 	}
 
 	order, cursor := rt.cursorSnapshot()
 	// 基础去重：防止历史刚跑完，实时 difference 又推来同一条
 	if order != model.HistoryOrderNewToOld && cursor > 0 && msg.ID <= cursor {
-		return
+		return false
 	}
 	if m.dedup != nil && m.dedup.Seen(rt.Task.ID, msg.ID) {
-		return
+		return false
 	}
 
 	if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil {
 		groupedID := msg.GroupedID
 		ch, first := rt.ensureAlbumWaiter(groupedID)
+		if fromPull {
+			rt.addAlbumPullReserved(groupedID, 1)
+		}
 		m.grouper.Add(rt.Task.ID, groupedID, msg, func(batch []*tg.Message) {
 			rt.deliverAlbum(groupedID, batch)
 		})
 		if first {
 			rt.enqueue(realtimeJob{
 				kind:      realtimeJobAlbum,
+				fromPull:  fromPull,
 				groupedID: groupedID,
 				albumCh:   ch,
 			})
 		}
-		return
+		return true
 	}
 
 	rt.enqueue(realtimeJob{
-		kind: realtimeJobSingle,
-		msg:  msg,
+		kind:     realtimeJobSingle,
+		fromPull: fromPull,
+		msg:      msg,
 	})
+	return true
 }
 
 // resolveTargetPeer is a small helper for monitor/history orchestration.

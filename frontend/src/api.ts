@@ -36,6 +36,11 @@ export type Task = {
   run_window?: string
 
   status: number
+  next_run_time?: string | null
+
+  current_slot_count?: number
+  current_slot_key?: string
+
   history_cursor?: number
   history_order?: number
 }
