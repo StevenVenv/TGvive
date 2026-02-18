@@ -3,12 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 
-	"my-go-server/internal/engine/processor"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
@@ -97,6 +93,14 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 		return nil
 	}
 
+	if task.CloneMode != 3 {
+		task.EnableMediaEdit = false
+	}
+
+	if task.CloneMode == 1 {
+		return m.ForwardMessagesWithFallback(ctx, api, sourcePeer, []*tg.Message{msg}, task, peer)
+	}
+
 	msgToSend := msg
 	if procs := m.processors(); procs.Text != nil && procs.Text.Enabled() {
 		if out, changed := procs.Text.Process(msg.Message); changed {
@@ -120,137 +124,9 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 
 	switch task.CloneMode {
 	case 2:
-		return m.SendMedia(ctx, api, msgToSend, task, peer)
+		return m.SendMediaWithFallback(ctx, api, sourcePeer, msgToSend, task, peer)
 	case 3:
-		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msgToSend, task.ID)
-		if err != nil {
-			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
-				if serr := m.SendMedia(ctx, api, msgToSend, task, peer); serr == nil {
-					global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msgToSend.ID))
-					return nil
-				}
-			}
-			return err
-		}
-		if cleanup != nil {
-			defer func() { _ = cleanup() }()
-		}
-
-		uploadPath := localPath
-		var thumb tg.InputFileClass
-
-		procs := m.processors()
-		switch media := msgToSend.Media.(type) {
-		case *tg.MessageMediaPhoto:
-			if procs.Image != nil && procs.Image.Enabled() {
-				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
-					if err != processor.ErrUnsupportedImage && global.Logger != nil {
-						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
-					}
-				} else if changed {
-					uploadPath = outPath
-					if c != nil {
-						defer func() { _ = c() }()
-					}
-				}
-			}
-		case *tg.MessageMediaDocument:
-			if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
-				dir := filepath.Dir(localPath)
-				f, err := os.CreateTemp(dir, "tgcover_*.jpg")
-				if err == nil {
-					coverPath := f.Name()
-					_ = f.Close()
-					defer func() { _ = os.Remove(coverPath) }()
-
-					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
-						if global.Logger != nil {
-							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
-						}
-					} else if ok {
-						coverUploadPath := coverPath
-						if procs.CoverImage != nil && procs.CoverImage.Enabled() {
-							if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
-								if err != processor.ErrUnsupportedImage && global.Logger != nil {
-									global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
-								}
-							} else if changed {
-								coverUploadPath = outPath
-								if c != nil {
-									defer func() { _ = c() }()
-								}
-							}
-						}
-
-						if task.ChangeMD5 {
-							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
-								return err
-							}
-						}
-						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
-							if global.Logger != nil {
-								global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
-							}
-						} else {
-							thumb = inputThumb
-						}
-					}
-				}
-			}
-
-			if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
-				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
-					if err != processor.ErrUnsupportedImage && global.Logger != nil {
-						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
-					}
-				} else if changed {
-					uploadPath = outPath
-					if c != nil {
-						defer func() { _ = c() }()
-					}
-				}
-			}
-		}
-
-		if task.ChangeMD5 {
-			if err := processor.ModifyFileMD5(uploadPath); err != nil {
-				return err
-			}
-		}
-		inputFile, err := m.UploadFile(ctx, api, uploadPath)
-		if err != nil {
-			return err
-		}
-		inputMedia, err := m.WrapUploadedMedia(ctx, api, inputFile, msgToSend)
-		if err != nil {
-			return err
-		}
-		if inputMedia == nil {
-			return ErrUnsupportedMedia
-		}
-		if thumb != nil {
-			if doc, ok := inputMedia.(*tg.InputMediaUploadedDocument); ok {
-				doc.Thumb = thumb
-			}
-		}
-
-		rid, err := randomID()
-		if err != nil {
-			return err
-		}
-
-		req := &tg.MessagesSendMediaRequest{
-			Peer:     peer,
-			Media:    inputMedia,
-			Message:  msgToSend.Message,
-			RandomID: rid,
-		}
-		if len(msgToSend.Entities) > 0 {
-			req.Entities = msgToSend.Entities
-		}
-
-		_, err = api.MessagesSendMedia(ctx, req)
-		return err
+		return m.SendUploadedMedia(ctx, api, sourcePeer, msgToSend, task, peer)
 	default:
 		return ErrUnsupportedCloneMode
 	}
@@ -261,6 +137,9 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sou
 		return err
 	}
 	_ = allowedTypes
+	if task.CloneMode != 3 {
+		task.EnableMediaEdit = false
+	}
 
 	// Filter nil/unsupported messages.
 	filtered := make([]*tg.Message, 0, len(msgs))
@@ -286,24 +165,28 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sou
 	})
 
 	// Caption/entities only on the first item.
-	if procs := m.processors(); procs.Text != nil && procs.Text.Enabled() && len(filtered) > 0 {
-		first := filtered[0]
-		if first != nil {
-			if out, changed := procs.Text.Process(first.Message); changed {
-				cp := *first
-				cp.Message = out
-				cp.Entities = nil
-				copied := make([]*tg.Message, len(filtered))
-				copy(copied, filtered)
-				copied[0] = &cp
-				filtered = copied
+	if task.CloneMode != 1 {
+		if procs := m.processors(); procs.Text != nil && procs.Text.Enabled() && len(filtered) > 0 {
+			first := filtered[0]
+			if first != nil {
+				if out, changed := procs.Text.Process(first.Message); changed {
+					cp := *first
+					cp.Message = out
+					cp.Entities = nil
+					copied := make([]*tg.Message, len(filtered))
+					copy(copied, filtered)
+					copied[0] = &cp
+					filtered = copied
+				}
 			}
 		}
 	}
 
 	switch task.CloneMode {
+	case 1:
+		return m.ForwardMessagesWithFallback(ctx, api, sourcePeer, filtered, task, peer)
 	case 2:
-		return m.SendAlbum(ctx, api, filtered, task, peer)
+		return m.SendAlbumWithFallback(ctx, api, sourcePeer, filtered, task, peer)
 	case 3:
 		return m.SendUploadedAlbum(ctx, api, sourcePeer, filtered, task, peer)
 	default:

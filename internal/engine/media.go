@@ -336,7 +336,7 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 		return nil
 	}
 
-	localPath, meta, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
+	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
 		if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
 			if serr := m.SendMedia(ctx, api, msg, task, peer); serr == nil {
@@ -352,75 +352,78 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 
 	uploadPath := localPath
 	var thumb tg.InputFileClass
+	enableMediaEdit := task.CloneMode == 3 && task.EnableMediaEdit
 	procs := m.processors()
 
-	switch media := msg.Media.(type) {
-	case *tg.MessageMediaPhoto:
-		if procs.Image != nil && procs.Image.Enabled() {
-			if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
-				if err != processor.ErrUnsupportedImage && global.Logger != nil {
-					global.Logger.Warn("image processor failed, skipped", zap.Error(err))
-				}
-			} else if changed {
-				uploadPath = outPath
-				if c != nil {
-					defer func() { _ = c() }()
+	if enableMediaEdit {
+		switch media := msg.Media.(type) {
+		case *tg.MessageMediaPhoto:
+			if procs.Image != nil && procs.Image.Enabled() {
+				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					if err != processor.ErrUnsupportedImage && global.Logger != nil {
+						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						defer func() { _ = c() }()
+					}
 				}
 			}
-		}
-	case *tg.MessageMediaDocument:
-		if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
-			dir := filepath.Dir(localPath)
-			f, err := os.CreateTemp(dir, "tgcover_*.jpg")
-			if err == nil {
-				coverPath := f.Name()
-				_ = f.Close()
-				defer func() { _ = os.Remove(coverPath) }()
+		case *tg.MessageMediaDocument:
+			if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
+				dir := filepath.Dir(localPath)
+				f, err := os.CreateTemp(dir, "tgcover_*.jpg")
+				if err == nil {
+					coverPath := f.Name()
+					_ = f.Close()
+					defer func() { _ = os.Remove(coverPath) }()
 
-				if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
-					if global.Logger != nil {
-						global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
-					}
-				} else if ok {
-					coverUploadPath := coverPath
-					if procs.CoverImage != nil && procs.CoverImage.Enabled() {
-						if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
-							if err != processor.ErrUnsupportedImage && global.Logger != nil {
-								global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
-							}
-						} else if changed {
-							coverUploadPath = outPath
-							if c != nil {
-								defer func() { _ = c() }()
-							}
-						}
-					}
-
-					if task.ChangeMD5 {
-						if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
-							return err
-						}
-					}
-					if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
 						if global.Logger != nil {
-							global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
 						}
-					} else {
-						thumb = inputThumb
+					} else if ok {
+						coverUploadPath := coverPath
+						if procs.CoverImage != nil && procs.CoverImage.Enabled() {
+							if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
+								if err != processor.ErrUnsupportedImage && global.Logger != nil {
+									global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
+								}
+							} else if changed {
+								coverUploadPath = outPath
+								if c != nil {
+									defer func() { _ = c() }()
+								}
+							}
+						}
+
+						if task.ChangeMD5 {
+							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
+								return err
+							}
+						}
+						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+							if global.Logger != nil {
+								global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+							}
+						} else {
+							thumb = inputThumb
+						}
 					}
 				}
 			}
-		}
 
-		if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
-			if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
-				if err != processor.ErrUnsupportedImage && global.Logger != nil {
-					global.Logger.Warn("image processor failed, skipped", zap.Error(err))
-				}
-			} else if changed {
-				uploadPath = outPath
-				if c != nil {
-					defer func() { _ = c() }()
+			if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					if err != processor.ErrUnsupportedImage && global.Logger != nil {
+						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						defer func() { _ = c() }()
+					}
 				}
 			}
 		}
@@ -436,7 +439,13 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 		return fmt.Errorf("upload file %q: %w", uploadPath, err)
 	}
 
-	uploaded := uploadAsInputMediaUploaded(meta, inputFile)
+	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
+	if err != nil {
+		return err
+	}
+	if uploaded == nil {
+		return ErrUnsupportedMedia
+	}
 	if thumb != nil {
 		if doc, ok := uploaded.(*tg.InputMediaUploadedDocument); ok {
 			doc.Thumb = thumb
@@ -507,10 +516,11 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 		}
 	}()
 
+	enableMediaEdit := task.CloneMode == 3 && task.EnableMediaEdit
 	procs := m.processors()
 
 	for _, msg := range mediaMsgs {
-		localPath, meta, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
+		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
 			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
 				if serr := m.SendAlbum(ctx, api, mediaMsgs, task, peer); serr == nil {
@@ -526,73 +536,75 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 		uploadPath := localPath
 		var thumb tg.InputFileClass
 
-		switch media := msg.Media.(type) {
-		case *tg.MessageMediaPhoto:
-			if procs.Image != nil && procs.Image.Enabled() {
-				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
-					if err != processor.ErrUnsupportedImage && global.Logger != nil {
-						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
-					}
-				} else if changed {
-					uploadPath = outPath
-					if c != nil {
-						cleanups = append(cleanups, c)
+		if enableMediaEdit {
+			switch media := msg.Media.(type) {
+			case *tg.MessageMediaPhoto:
+				if procs.Image != nil && procs.Image.Enabled() {
+					if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+						if err != processor.ErrUnsupportedImage && global.Logger != nil {
+							global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+						}
+					} else if changed {
+						uploadPath = outPath
+						if c != nil {
+							cleanups = append(cleanups, c)
+						}
 					}
 				}
-			}
-		case *tg.MessageMediaDocument:
-			if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
-				dir := filepath.Dir(localPath)
-				f, err := os.CreateTemp(dir, "tgcover_*.jpg")
-				if err == nil {
-					coverPath := f.Name()
-					_ = f.Close()
-					cleanups = append(cleanups, func() error { return os.Remove(coverPath) })
+			case *tg.MessageMediaDocument:
+				if isVideoDocument(media) && procs.Video != nil && procs.Video.Enabled() && !documentHasThumbs(media) {
+					dir := filepath.Dir(localPath)
+					f, err := os.CreateTemp(dir, "tgcover_*.jpg")
+					if err == nil {
+						coverPath := f.Name()
+						_ = f.Close()
+						cleanups = append(cleanups, func() error { return os.Remove(coverPath) })
 
-					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
-						if global.Logger != nil {
-							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
-						}
-					} else if ok {
-						coverUploadPath := coverPath
-						if procs.CoverImage != nil && procs.CoverImage.Enabled() {
-							if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
-								if err != processor.ErrUnsupportedImage && global.Logger != nil {
-									global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
-								}
-							} else if changed {
-								coverUploadPath = outPath
-								if c != nil {
-									cleanups = append(cleanups, c)
-								}
-							}
-						}
-
-						if task.ChangeMD5 {
-							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
-								return err
-							}
-						}
-						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+						if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
 							if global.Logger != nil {
-								global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+								global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
 							}
-						} else {
-							thumb = inputThumb
+						} else if ok {
+							coverUploadPath := coverPath
+							if procs.CoverImage != nil && procs.CoverImage.Enabled() {
+								if outPath, c, changed, err := procs.CoverImage.ProcessPath(ctx, coverPath); err != nil {
+									if err != processor.ErrUnsupportedImage && global.Logger != nil {
+										global.Logger.Warn("cover image processor failed, skipped", zap.Error(err))
+									}
+								} else if changed {
+									coverUploadPath = outPath
+									if c != nil {
+										cleanups = append(cleanups, c)
+									}
+								}
+							}
+
+							if task.ChangeMD5 {
+								if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
+									return err
+								}
+							}
+							if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
+								if global.Logger != nil {
+									global.Logger.Warn("upload video cover failed, skipped", zap.Error(err))
+								}
+							} else {
+								thumb = inputThumb
+							}
 						}
 					}
 				}
-			}
 
-			if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
-				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
-					if err != processor.ErrUnsupportedImage && global.Logger != nil {
-						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
-					}
-				} else if changed {
-					uploadPath = outPath
-					if c != nil {
-						cleanups = append(cleanups, c)
+				if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
+					if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+						if err != processor.ErrUnsupportedImage && global.Logger != nil {
+							global.Logger.Warn("image processor failed, skipped", zap.Error(err))
+						}
+					} else if changed {
+						uploadPath = outPath
+						if c != nil {
+							cleanups = append(cleanups, c)
+						}
 					}
 				}
 			}
@@ -608,7 +620,13 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 			return fmt.Errorf("upload file %q: %w", uploadPath, err)
 		}
 
-		uploaded := uploadAsInputMediaUploaded(meta, inputFile)
+		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
+		if err != nil {
+			return err
+		}
+		if uploaded == nil {
+			return ErrUnsupportedMedia
+		}
 		if thumb != nil {
 			if doc, ok := uploaded.(*tg.InputMediaUploadedDocument); ok {
 				doc.Thumb = thumb

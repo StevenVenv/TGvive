@@ -46,8 +46,6 @@ const (
 //   - order: task.HistoryOrder (old->new / new->old)
 //   - resume: task.HistoryCursor
 //   - throttling: randomized request/message delays
-//
-// NOTE: At this stage, CloneMode=2/3 are supported. CloneMode=1 (forward) is not implemented yet.
 func (m *TaskManager) CloneHistory(ctx context.Context, api *tg.Client, task model.Task) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -49,6 +49,9 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		_ = updateTaskStatus(taskID, model.TaskStatusError)
 		return
 	}
+	if task.CloneMode != 3 {
+		task.EnableMediaEdit = false
+	}
 
 	kw, kwErr := loadKeywordPolicy(ctx, task)
 	if kwErr != nil {

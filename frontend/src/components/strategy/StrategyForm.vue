@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 
 export type ScheduleRule = {
@@ -31,6 +31,7 @@ export type StrategyFormModel = {
   clone_comment: boolean
   gpu_accel: boolean
   change_md5: boolean
+  enable_media_edit: boolean
 
   delay_min_ms: number
   delay_max_ms: number
@@ -68,6 +69,19 @@ const emit = defineEmits<{
 
 const formRef = ref<FormInstance>()
 const form = computed(() => props.modelValue)
+
+const isUploadMode = computed(() => Number(form.value.clone_mode || 3) === 3)
+const mediaEditDisabled = computed(() => !isUploadMode.value)
+
+watch(
+  () => Number(form.value.clone_mode || 3),
+  (mode) => {
+    if (mode !== 3) {
+      form.value.enable_media_edit = false
+    }
+  },
+  { immediate: true },
+)
 
 const enablePush = computed<boolean>({
   get() {
@@ -581,6 +595,11 @@ defineExpose<StrategyFormExpose>({
           <div class="switch-wrap">
             <el-switch v-model="form.keep_reply" active-text="保留回复" />
             <el-switch v-model="form.clone_comment" active-text="克隆评论" />
+            <el-tooltip effect="dark" placement="top" content="媒体编辑仅在‘上传模式’下可用" :disabled="!mediaEditDisabled">
+              <span class="switch-tooltip">
+                <el-switch v-model="form.enable_media_edit" :disabled="mediaEditDisabled" active-text="媒体编辑" />
+              </span>
+            </el-tooltip>
             <el-switch v-model="form.gpu_accel" active-text="GPU 加速" />
             <el-switch v-model="form.change_md5" active-text="修改 MD5" />
           </div>
@@ -901,6 +920,10 @@ defineExpose<StrategyFormExpose>({
   justify-content: flex-start;
   flex-wrap: wrap;
   gap: 12px 20px;
+}
+
+.switch-tooltip {
+  display: inline-flex;
 }
 
 .switch-wrap :deep(.el-switch__label) {

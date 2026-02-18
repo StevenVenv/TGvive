@@ -70,6 +70,7 @@ function emptyModel(): StrategyFormModel {
     clone_comment: false,
     gpu_accel: false,
     change_md5: false,
+    enable_media_edit: false,
 
     delay_min_ms: 1000,
     delay_max_ms: 3000,
@@ -120,6 +121,7 @@ function summarizeTags(s: Strategy): string[] {
   if (s.clone_comment) tags.push('克隆评论')
   if (s.gpu_accel) tags.push('GPU')
   if (s.change_md5) tags.push('改MD5')
+  if ((s as any).enable_media_edit) tags.push('媒体编辑')
 
   const poll = Number(s.poll_interval ?? 0)
   if (poll > 0) tags.push(`轮询:${poll}s`)
@@ -228,6 +230,7 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     clone_comment: Boolean(m.clone_comment),
     gpu_accel: Boolean(m.gpu_accel),
     change_md5: Boolean(m.change_md5),
+    enable_media_edit: Boolean((m as any).enable_media_edit),
 
     delay_min_ms: Number(m.delay_min_ms || 0),
     delay_max_ms: Number(m.delay_max_ms || 0),
@@ -270,6 +273,7 @@ function fillEdit(row: Strategy) {
     clone_comment: Boolean(row.clone_comment),
     gpu_accel: Boolean(row.gpu_accel),
     change_md5: Boolean(row.change_md5),
+    enable_media_edit: Boolean((row as any).enable_media_edit),
 
     delay_min_ms: Number(row.delay_min_ms ?? 0),
     delay_max_ms: Number(row.delay_max_ms ?? 0),

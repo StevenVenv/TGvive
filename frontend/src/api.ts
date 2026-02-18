@@ -26,6 +26,7 @@ export type Task = {
   clone_comment?: boolean
   gpu_accel?: boolean
   change_md5?: boolean
+  enable_media_edit?: boolean
 
   delay_min_ms?: number
   delay_max_ms?: number
@@ -71,6 +72,7 @@ export type Strategy = {
   clone_comment?: boolean
   gpu_accel?: boolean
   change_md5?: boolean
+  enable_media_edit?: boolean
 
   delay_min_ms?: number
   delay_max_ms?: number

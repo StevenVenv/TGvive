@@ -56,6 +56,9 @@ type Strategy struct {
 	CloneComment bool `gorm:"default:false" json:"clone_comment"`
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`
 	ChangeMD5    bool `gorm:"default:false" json:"change_md5"`
+	// EnableMediaEdit controls whether to apply media processors (image/video watermark, cover extraction, etc.).
+	// It is only effective in CloneMode=3 (Upload). For other modes it will be force-disabled at runtime.
+	EnableMediaEdit bool `gorm:"default:false" json:"enable_media_edit"`
 
 	// Anti-detection delays (random interval): sleep after each successfully processed message.
 	DelayMinMs int `gorm:"type:int;default:0" json:"delay_min_ms"`

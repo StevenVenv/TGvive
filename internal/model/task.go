@@ -60,6 +60,9 @@ type Task struct {
 	CloneComment bool `gorm:"default:false" json:"clone_comment"` // 克隆评论
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`     // GPU 加速
 	ChangeMD5    bool `gorm:"default:false" json:"change_md5"`    // 下载上传时修改文件 MD5
+	// EnableMediaEdit controls whether to apply media processors (image/video watermark, cover extraction, etc.).
+	// It is only effective in CloneMode=3 (Upload). For other modes it will be force-disabled at runtime.
+	EnableMediaEdit bool `gorm:"default:false" json:"enable_media_edit"`
 
 	// Anti-detection delays (random interval): sleep after each successfully processed message.
 	DelayMinMs int `gorm:"type:int;default:0" json:"delay_min_ms"`

@@ -118,6 +118,7 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	task.CloneComment = payload.CloneComment
 	task.GpuAccel = payload.GpuAccel
 	task.ChangeMD5 = payload.ChangeMD5
+	task.EnableMediaEdit = payload.EnableMediaEdit
 
 	task.DelayMinMs = payload.DelayMinMs
 	task.DelayMaxMs = payload.DelayMaxMs
