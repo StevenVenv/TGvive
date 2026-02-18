@@ -37,12 +37,13 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, source
 	strategy := ResolveRuntimeStrategy(task)
 	hotTask := MergeHotFieldsIntoTask(task, strategy)
 	allowedTypes, _ := ResolveAllowedTypes(task, strategy)
+	allowFileSuffixes, blockFileSuffixes, _ := ResolveFileSuffixRules(task, strategy)
 
 	if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil && task.ID != 0 {
 		taskID := task.ID
 		groupedID := msg.GroupedID
 		m.grouper.Add(taskID, groupedID, msg, func(batch []*tg.Message) {
-			plan := PlanMediaGroup(m, batch, allowedTypes)
+			plan := PlanMediaGroup(m, batch, allowedTypes, allowFileSuffixes, blockFileSuffixes)
 			if plan.Skipped > 0 {
 				global.AddFiltered(uint64(plan.Skipped))
 			}
@@ -79,6 +80,10 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, source
 			global.IncFiltered()
 			return nil
 		}
+	}
+	if contentType == "file" && !fileSuffixAllowed(msg, allowFileSuffixes, blockFileSuffixes) {
+		global.IncFiltered()
+		return nil
 	}
 
 	return m.processSingleMessage(ctx, api, sourcePeer, peer, hotTask, msg)

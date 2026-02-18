@@ -103,6 +103,35 @@ var runtimeTypeWhitelist = map[string]struct{}{
 	"other": {},
 }
 
+func normalizeRuntimeFileSuffixList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		k := strings.ToLower(strings.TrimSpace(v))
+		if k == "" {
+			continue
+		}
+		if !strings.HasPrefix(k, ".") {
+			k = "." + k
+		}
+		if k == "." {
+			continue
+		}
+		if strings.ContainsAny(k, " \t\r\n/\\") {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
 func normalizeRuntimeTypeList(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -149,6 +178,28 @@ func ResolveAllowedTypes(task model.Task, st *model.Strategy) (types map[string]
 	return normalizeTypeSet(list), strings.Join(list, ",")
 }
 
+func ResolveFileSuffixRules(task model.Task, st *model.Strategy) (allow []string, block []string, key string) {
+	var rawBlock []string
+	var rawAllow []string
+	if st != nil {
+		rawBlock = st.BlockFileExts.Strings()
+		rawAllow = st.AllowFileExts.Strings()
+	} else {
+		rawBlock = task.BlockFileExts.Strings()
+		rawAllow = task.AllowFileExts.Strings()
+	}
+
+	block = normalizeRuntimeFileSuffixList(rawBlock)
+	allow = normalizeRuntimeFileSuffixList(rawAllow)
+	if len(block) == 0 && len(allow) == 0 {
+		return nil, nil, "all"
+	}
+
+	// Keep stable key for change detection.
+	key = strings.Join(allow, ",") + "|" + strings.Join(block, ",")
+	return allow, block, key
+}
+
 func MergeHotFieldsIntoTask(task model.Task, st *model.Strategy) model.Task {
 	if st == nil {
 		return task
@@ -162,4 +213,3 @@ func MergeHotFieldsIntoTask(task model.Task, st *model.Strategy) model.Task {
 	out.ChangeMD5 = st.ChangeMD5
 	return out
 }
-

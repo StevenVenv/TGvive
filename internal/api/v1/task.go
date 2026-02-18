@@ -68,6 +68,8 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 	if len(types.Strings()) == 0 {
 		types = strategy.ContentTypes
 	}
+	blockExts := strategy.BlockFileExts
+	allowExts := strategy.AllowFileExts
 
 	if req.KeywordProfileID != 0 {
 		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
@@ -84,8 +86,10 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		StrategyID:       req.StrategyID,
 		KeywordProfileID: req.KeywordProfileID,
 
-		CloneMode:    strategy.CloneMode,
-		ContentTypes: types,
+		CloneMode:     strategy.CloneMode,
+		ContentTypes:  types,
+		BlockFileExts: blockExts,
+		AllowFileExts: allowExts,
 
 		ScopeType:  strategy.ScopeType,
 		ScopeValue: strings.TrimSpace(strategy.ScopeValue),
@@ -237,6 +241,8 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	if len(types.Strings()) == 0 {
 		types = strategy.ContentTypes
 	}
+	blockExts := strategy.BlockFileExts
+	allowExts := strategy.AllowFileExts
 
 	if req.KeywordProfileID != 0 {
 		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
@@ -252,8 +258,10 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		StrategyID:       req.StrategyID,
 		KeywordProfileID: req.KeywordProfileID,
 
-		CloneMode:    strategy.CloneMode,
-		ContentTypes: types,
+		CloneMode:     strategy.CloneMode,
+		ContentTypes:  types,
+		BlockFileExts: blockExts,
+		AllowFileExts: allowExts,
 
 		ScopeType:  strategy.ScopeType,
 		ScopeValue: strings.TrimSpace(strategy.ScopeValue),

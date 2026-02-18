@@ -37,6 +37,8 @@ func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (mode
 	}
 	s.AllowedTypes = allowed
 	s.ContentTypes = allowed
+	s.BlockFileExts = payload.BlockFileExts
+	s.AllowFileExts = payload.AllowFileExts
 	s.ScopeType = payload.ScopeType
 	s.ScopeValue = payload.ScopeValue
 	s.HistoryOrder = payload.HistoryOrder

@@ -55,6 +55,8 @@ export type Strategy = {
   clone_mode: number
   allowed_types?: string[]
   content_types: string[]
+  block_file_exts?: string[]
+  allow_file_exts?: string[]
 
   scope_type: number
   scope_value: string

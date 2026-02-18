@@ -232,6 +232,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 
 	runtimeTask := task
 	curAllowedTypes := allowedTypes
+	curAllowFileSuffixes, curBlockFileSuffixes, _ := ResolveFileSuffixRules(task, nil)
 	msgDelayMin, msgDelayMax := normalizeDelayRange(runtimeTask.DelayMinMs, runtimeTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 
 	lastHotRefresh := time.Time{}
@@ -239,6 +240,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 		st := ResolveRuntimeStrategy(task)
 		runtimeTask = MergeHotFieldsIntoTask(task, st)
 		curAllowedTypes, _ = ResolveAllowedTypes(task, st)
+		curAllowFileSuffixes, curBlockFileSuffixes, _ = ResolveFileSuffixRules(task, st)
 		msgDelayMin, msgDelayMax = normalizeDelayRange(runtimeTask.DelayMinMs, runtimeTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 		if quota != nil {
 			quota.UpdateConfig(runtimeTask.DailyLimit, runtimeTask.RunWindow)
@@ -370,7 +372,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				}
 
 				if len(group) > 0 {
-					plan := PlanMediaGroup(m, group, curAllowedTypes)
+					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
 					if plan.Skipped > 0 {
 						global.AddFiltered(uint64(plan.Skipped))
 					}
@@ -451,8 +453,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				continue
 			}
 
+			ct := m.DetectContentType(msg)
 			if curAllowedTypes != nil {
-				ct := m.DetectContentType(msg)
 				if _, ok := curAllowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
@@ -464,6 +466,17 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					i++
 					continue
 				}
+			}
+			if ct == "file" && !fileSuffixAllowed(msg, curAllowFileSuffixes, curBlockFileSuffixes) {
+				global.IncFiltered()
+				cursor = msg.ID
+				if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+					return err
+				}
+				processed++
+				advanced = true
+				i++
+				continue
 			}
 
 			msgToSend := msg
@@ -565,6 +578,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 
 	runtimeTask := task
 	curAllowedTypes := allowedTypes
+	curAllowFileSuffixes, curBlockFileSuffixes, _ := ResolveFileSuffixRules(task, nil)
 	msgDelayMin, msgDelayMax := normalizeDelayRange(runtimeTask.DelayMinMs, runtimeTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 
 	lastHotRefresh := time.Time{}
@@ -572,6 +586,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 		st := ResolveRuntimeStrategy(task)
 		runtimeTask = MergeHotFieldsIntoTask(task, st)
 		curAllowedTypes, _ = ResolveAllowedTypes(task, st)
+		curAllowFileSuffixes, curBlockFileSuffixes, _ = ResolveFileSuffixRules(task, st)
 		msgDelayMin, msgDelayMax = normalizeDelayRange(runtimeTask.DelayMinMs, runtimeTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 		if quota != nil {
 			quota.UpdateConfig(runtimeTask.DailyLimit, runtimeTask.RunWindow)
@@ -719,7 +734,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 
 				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
 				if len(group) > 0 {
-					plan := PlanMediaGroup(m, group, curAllowedTypes)
+					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
 					if plan.Skipped > 0 {
 						global.AddFiltered(uint64(plan.Skipped))
 					}
@@ -800,8 +815,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				continue
 			}
 
+			ct := m.DetectContentType(msg)
 			if curAllowedTypes != nil {
-				ct := m.DetectContentType(msg)
 				if _, ok := curAllowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
@@ -813,6 +828,17 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					i++
 					continue
 				}
+			}
+			if ct == "file" && !fileSuffixAllowed(msg, curAllowFileSuffixes, curBlockFileSuffixes) {
+				global.IncFiltered()
+				cursor = msg.ID
+				if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+					return err
+				}
+				processed++
+				advanced = true
+				i++
+				continue
 			}
 
 			msgToSend := msg
@@ -834,7 +860,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				}
 			}
 
-			need := quotaSendableCount(m, msgToSend, allowedTypes)
+			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
 					return err
@@ -909,6 +935,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 
 	runtimeTask := task
 	curAllowedTypes := allowedTypes
+	curAllowFileSuffixes, curBlockFileSuffixes, _ := ResolveFileSuffixRules(task, nil)
 	msgDelayMin, msgDelayMax := normalizeDelayRange(runtimeTask.DelayMinMs, runtimeTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 
 	lastHotRefresh := time.Time{}
@@ -916,6 +943,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 		st := ResolveRuntimeStrategy(task)
 		runtimeTask = MergeHotFieldsIntoTask(task, st)
 		curAllowedTypes, _ = ResolveAllowedTypes(task, st)
+		curAllowFileSuffixes, curBlockFileSuffixes, _ = ResolveFileSuffixRules(task, st)
 		msgDelayMin, msgDelayMax = normalizeDelayRange(runtimeTask.DelayMinMs, runtimeTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 		if quota != nil {
 			quota.UpdateConfig(runtimeTask.DailyLimit, runtimeTask.RunWindow)
@@ -1069,7 +1097,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 
 				if len(group) > 0 {
-					plan := PlanMediaGroup(m, group, curAllowedTypes)
+					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
 					if plan.Skipped > 0 {
 						global.AddFiltered(uint64(plan.Skipped))
 					}
@@ -1148,8 +1176,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				continue
 			}
 
+			ct := m.DetectContentType(msg)
 			if curAllowedTypes != nil {
-				ct := m.DetectContentType(msg)
 				if _, ok := curAllowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
@@ -1161,6 +1189,17 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					i++
 					continue
 				}
+			}
+			if ct == "file" && !fileSuffixAllowed(msg, curAllowFileSuffixes, curBlockFileSuffixes) {
+				global.IncFiltered()
+				cursor = msg.ID
+				if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					return err
+				}
+				processed++
+				advanced = true
+				i++
+				continue
 			}
 
 			msgToSend := msg

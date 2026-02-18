@@ -69,7 +69,59 @@ type MediaGroupPlan struct {
 	HasMedia bool
 }
 
-func PlanMediaGroup(m *TaskManager, msgs []*tg.Message, allowed map[string]struct{}) MediaGroupPlan {
+func documentFilenameLower(msg *tg.Message) string {
+	if msg == nil {
+		return ""
+	}
+	media, ok := msg.Media.(*tg.MessageMediaDocument)
+	if !ok || media == nil || media.Document == nil {
+		return ""
+	}
+	doc, ok := media.Document.AsNotEmpty()
+	if !ok || doc == nil {
+		return ""
+	}
+	name, ok := findDocumentFilename(doc.Attributes)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func matchAnyFileSuffix(filenameLower string, suffixes []string) bool {
+	if filenameLower == "" || len(suffixes) == 0 {
+		return false
+	}
+	for _, suf := range suffixes {
+		if suf == "" {
+			continue
+		}
+		if strings.HasSuffix(filenameLower, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+func fileSuffixAllowed(msg *tg.Message, allowSuffixes []string, blockSuffixes []string) bool {
+	if len(allowSuffixes) == 0 && len(blockSuffixes) == 0 {
+		return true
+	}
+	filename := documentFilenameLower(msg)
+	if filename == "" {
+		// If whitelist is configured but filename is missing, we can't safely pass it.
+		return len(allowSuffixes) == 0
+	}
+	if matchAnyFileSuffix(filename, blockSuffixes) {
+		return false
+	}
+	if len(allowSuffixes) > 0 && !matchAnyFileSuffix(filename, allowSuffixes) {
+		return false
+	}
+	return true
+}
+
+func PlanMediaGroup(m *TaskManager, msgs []*tg.Message, allowed map[string]struct{}, allowFileSuffixes []string, blockFileSuffixes []string) MediaGroupPlan {
 	var plan MediaGroupPlan
 	if m == nil || len(msgs) == 0 {
 		return plan
@@ -107,6 +159,10 @@ func PlanMediaGroup(m *TaskManager, msgs []*tg.Message, allowed map[string]struc
 				skipped++
 				continue
 			}
+		}
+		if ct == "file" && !fileSuffixAllowed(msg, allowFileSuffixes, blockFileSuffixes) {
+			skipped++
+			continue
 		}
 		if _, err := convertMessageMediaToInput(msg.Media); err != nil {
 			skipped++

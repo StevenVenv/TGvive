@@ -154,7 +154,7 @@ function onMenuSelect(idx: string) {
             <span>任务管理</span>
           </el-menu-item>
           <el-menu-item index="strategies">
-            <el-icon><i class="ri-flow-chart-line" /></el-icon>
+            <el-icon><i class="ri-flow-chart" /></el-icon>
             <span>策略管理</span>
           </el-menu-item>
           <el-menu-item index="accounts">

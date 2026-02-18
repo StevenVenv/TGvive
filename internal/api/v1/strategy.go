@@ -31,6 +31,36 @@ var strategyTypeWhitelist = map[string]struct{}{
 	"other": {},
 }
 
+func normalizeFileSuffixList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		k := strings.ToLower(strings.TrimSpace(v))
+		if k == "" {
+			continue
+		}
+		if !strings.HasPrefix(k, ".") {
+			k = "." + k
+		}
+		if k == "." {
+			continue
+		}
+		// Suffix match on filename, forbid whitespace and path separators.
+		if strings.ContainsAny(k, " \t\r\n/\\") {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
 func normalizeStrategyTypeList(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -78,6 +108,16 @@ func syncStrategyTypes(s *model.Strategy) {
 	csv := model.CSVStringSlice(strings.Join(types, ","))
 	s.AllowedTypes = csv
 	s.ContentTypes = csv
+}
+
+func syncStrategyFileSuffixes(s *model.Strategy) {
+	if s == nil {
+		return
+	}
+	block := normalizeFileSuffixList(s.BlockFileExts.Strings())
+	allow := normalizeFileSuffixList(s.AllowFileExts.Strings())
+	s.BlockFileExts = model.CSVStringSlice(strings.Join(block, ","))
+	s.AllowFileExts = model.CSVStringSlice(strings.Join(allow, ","))
 }
 
 // CreateStrategy 创建策略模板
@@ -133,6 +173,7 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	s.Realtime = enableRealtime
 
 	syncStrategyTypes(&s)
+	syncStrategyFileSuffixes(&s)
 
 	if err := service.CreateStrategy(&s); err != nil {
 		app.FailWithMsg("策略保存失败: "+err.Error(), c)
@@ -219,6 +260,7 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 	payload.Realtime = enableRealtime
 
 	syncStrategyTypes(&payload)
+	syncStrategyFileSuffixes(&payload)
 
 	updated, err := service.UpdateStrategy(userID, uint(idU64), &payload)
 	if err != nil {

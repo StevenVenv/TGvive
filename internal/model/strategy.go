@@ -26,6 +26,12 @@ type Strategy struct {
 	// ContentTypes is kept for backward compatibility (legacy field).
 	ContentTypes CSVStringSlice `gorm:"type:varchar(100)" json:"content_types"`
 
+	// File extension (suffix) filters (only apply to "file" content type).
+	// DB stores CSV like ".zip,.apk", API uses JSON string array.
+	// Empty means allow all file suffixes.
+	BlockFileExts CSVStringSlice `gorm:"type:varchar(255)" json:"block_file_exts"`
+	AllowFileExts CSVStringSlice `gorm:"type:varchar(255)" json:"allow_file_exts"`
+
 	// 消息范围: 1-全部, 2-最近N条, 3-时间范围, 4-ID范围
 	ScopeType  int    `gorm:"type:tinyint;not null" json:"scope_type"`
 	ScopeValue string `gorm:"type:varchar(255)" json:"scope_value"`
@@ -44,7 +50,7 @@ type Strategy struct {
 	ScheduleRules datatypes.JSON `gorm:"type:json" json:"schedule_rules"`
 
 	// 开关配置 (布尔值)
-	KeepReply    bool `gorm:"default:false" json:"keep_reply"`
+	KeepReply bool `gorm:"default:false" json:"keep_reply"`
 	// Realtime is kept for backward compatibility (legacy field).
 	Realtime     bool `gorm:"default:false" json:"realtime"`
 	CloneComment bool `gorm:"default:false" json:"clone_comment"`

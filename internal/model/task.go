@@ -44,6 +44,12 @@ type Task struct {
 	// 内容类型 (DB 存 "text,image,video"，API 传 JSON 数组)
 	ContentTypes CSVStringSlice `gorm:"type:varchar(100)" json:"content_types"`
 
+	// File extension (suffix) filters (only apply to "file" content type).
+	// DB stores CSV like ".zip,.apk", API uses JSON string array.
+	// Empty means allow all file suffixes.
+	BlockFileExts CSVStringSlice `gorm:"type:varchar(255)" json:"block_file_exts"`
+	AllowFileExts CSVStringSlice `gorm:"type:varchar(255)" json:"allow_file_exts"`
+
 	// 消息范围: 1-全部, 2-最近N条, 3-时间范围, 4-ID范围
 	ScopeType  int    `gorm:"type:tinyint;not null" json:"scope_type"`
 	ScopeValue string `gorm:"type:varchar(255)" json:"scope_value"` // 存储具体的N条或时间范围

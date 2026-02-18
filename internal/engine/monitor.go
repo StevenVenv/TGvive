@@ -113,12 +113,15 @@ type runtimeTask struct {
 	SourcePeer tg.InputPeerClass
 	TargetPeer tg.InputPeerClass
 
-	allowedTypes map[string]struct{}
-	allowedTypesKey string
-	delayMin     time.Duration
-	delayMax     time.Duration
-	keyword      *keywordPolicy
-	pollInterval time.Duration
+	allowedTypes      map[string]struct{}
+	allowedTypesKey   string
+	allowFileSuffixes []string
+	blockFileSuffixes []string
+	fileSuffixKey     string
+	delayMin          time.Duration
+	delayMax          time.Duration
+	keyword           *keywordPolicy
+	pollInterval      time.Duration
 
 	queue    chan realtimeJob
 	done     chan struct{}
@@ -130,6 +133,8 @@ type runtimeTask struct {
 }
 
 func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
+	allowSuffixes, blockSuffixes, suffixKey := ResolveFileSuffixRules(cfg.Task, nil)
+
 	t := &runtimeTask{
 		Task:       cfg.Task,
 		RunID:      cfg.RunID,
@@ -137,10 +142,13 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		SourcePeer: cfg.SourcePeer,
 		TargetPeer: cfg.TargetPeer,
 
-		allowedTypes: normalizeTypeSet(cfg.Task.ContentTypes.Strings()),
-		delayMin:     defaultMsgDelayMin,
-		delayMax:     defaultMsgDelayMax,
-		keyword:      cfg.Keyword,
+		allowedTypes:      normalizeTypeSet(cfg.Task.ContentTypes.Strings()),
+		allowFileSuffixes: allowSuffixes,
+		blockFileSuffixes: blockSuffixes,
+		fileSuffixKey:     suffixKey,
+		delayMin:          defaultMsgDelayMin,
+		delayMax:          defaultMsgDelayMax,
+		keyword:           cfg.Keyword,
 
 		queue:             make(chan realtimeJob, 512),
 		done:              make(chan struct{}),
@@ -168,10 +176,16 @@ func (t *runtimeTask) refreshStrategySnapshot() model.Task {
 	strategy := ResolveRuntimeStrategy(base)
 	hotTask := MergeHotFieldsIntoTask(base, strategy)
 	types, key := ResolveAllowedTypes(base, strategy)
+	allowSuffixes, blockSuffixes, suffixKey := ResolveFileSuffixRules(base, strategy)
 
 	if key != t.allowedTypesKey {
 		t.allowedTypesKey = key
 		t.allowedTypes = types
+	}
+	if suffixKey != t.fileSuffixKey {
+		t.fileSuffixKey = suffixKey
+		t.allowFileSuffixes = allowSuffixes
+		t.blockFileSuffixes = blockSuffixes
 	}
 
 	t.delayMin, t.delayMax = normalizeDelayRange(hotTask.DelayMinMs, hotTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
@@ -629,7 +643,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				pullReserved := t.takeAlbumPullReserved(job.groupedID)
 
 				hotTask := t.refreshStrategySnapshot()
-				plan := PlanMediaGroup(m, batch, t.allowedTypes)
+				plan := PlanMediaGroup(m, batch, t.allowedTypes, t.allowFileSuffixes, t.blockFileSuffixes)
 				if plan.Skipped > 0 {
 					global.AddFiltered(uint64(plan.Skipped))
 				}
@@ -732,8 +746,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 
 				hotTask := t.refreshStrategySnapshot()
 
+				ct := m.DetectContentType(msg)
 				if t.allowedTypes != nil {
-					ct := m.DetectContentType(msg)
 					if _, ok := t.allowedTypes[ct]; !ok {
 						global.IncFiltered()
 						if job.fromPull && reservedTotal > 0 {
@@ -742,6 +756,14 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 						t.advanceCursor(msg.ID)
 						continue
 					}
+				}
+				if ct == "file" && !fileSuffixAllowed(msg, t.allowFileSuffixes, t.blockFileSuffixes) {
+					global.IncFiltered()
+					if job.fromPull && reservedTotal > 0 {
+						Scheduler.ReleasePull(t.Task.ID, reservedTotal)
+					}
+					t.advanceCursor(msg.ID)
+					continue
 				}
 
 				msgToSend := msg

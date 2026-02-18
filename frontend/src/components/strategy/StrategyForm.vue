@@ -16,6 +16,8 @@ export type StrategyFormModel = {
   clone_mode: number
   allowed_types: string[]
   content_types: string[]
+  block_file_exts: string[]
+  allow_file_exts: string[]
 
   scope_type: number
   scope_value: string
@@ -142,6 +144,59 @@ const scopeValuePlaceholder = computed(() => {
   return '可留空'
 })
 
+function normalizeFileExtList(input: any): string[] {
+  const raw = Array.isArray(input) ? input : []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const v of raw) {
+    let k = String(v || '')
+      .trim()
+      .toLowerCase()
+    if (!k) continue
+    if (!k.startsWith('.')) k = '.' + k
+    if (k === '.') continue
+    if (/[ \t\r\n/\\]/.test(k)) continue
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(k)
+  }
+  return out
+}
+
+const fileExtSuggestions = ['.zip', '.rar', '.7z', '.apk', '.exe', '.dmg', '.pkg', '.pdf', '.docx', '.xlsx', '.pptx']
+
+const blockFileExtOptions = computed(() => {
+  const set = new Set<string>()
+  normalizeFileExtList((form.value as any).block_file_exts).forEach((v) => set.add(v))
+  fileExtSuggestions.forEach((v) => set.add(v))
+  return Array.from(set)
+})
+
+const allowFileExtOptions = computed(() => {
+  const set = new Set<string>()
+  normalizeFileExtList((form.value as any).allow_file_exts).forEach((v) => set.add(v))
+  fileExtSuggestions.forEach((v) => set.add(v))
+  return Array.from(set)
+})
+
+const blockFileExts = computed<string[]>({
+  get() {
+    return normalizeFileExtList((form.value as any).block_file_exts)
+  },
+  set(v) {
+    ;(form.value as any).block_file_exts = normalizeFileExtList(v)
+  },
+})
+
+const allowFileExts = computed<string[]>({
+  get() {
+    return normalizeFileExtList((form.value as any).allow_file_exts)
+  },
+  set(v) {
+    ;(form.value as any).allow_file_exts = normalizeFileExtList(v)
+  },
+})
+
 function normalizeAllowedTypes(input: any): AllowedTypeKey[] {
   const raw = Array.isArray(input) ? input : []
   const set = new Set<string>()
@@ -242,6 +297,8 @@ async function submit() {
   if (!enablePull.value) {
     form.value.poll_interval = 0
   }
+  ;(form.value as any).block_file_exts = normalizeFileExtList((form.value as any).block_file_exts)
+  ;(form.value as any).allow_file_exts = normalizeFileExtList((form.value as any).allow_file_exts)
   form.value.schedule_rules = normalizeScheduleRules(form.value.schedule_rules)
   const ok = await validate()
   if (!ok) return
@@ -345,6 +402,64 @@ defineExpose<StrategyFormExpose>({
             </el-checkbox-group>
             <div class="hint compact">未选择表示不过滤（全类型，包括未知类型）</div>
           </el-form-item>
+
+          <el-row :gutter="12">
+            <el-col :xs="24" :sm="12">
+              <el-form-item prop="block_file_exts">
+                <template #label>
+                  <span class="label-with-icon">
+                    <i class="ri-forbid-2-line" />
+                    <span>屏蔽文件后缀</span>
+                  </span>
+                </template>
+                <el-select
+                  v-model="blockFileExts"
+                  class="ctrl"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  reserve-keyword
+                  clearable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="例如：.apk .zip（回车添加）"
+                  popper-class="tgvive-dark-popper"
+                >
+                  <el-option v-for="opt in blockFileExtOptions" :key="opt" :label="opt" :value="opt" />
+                </el-select>
+                <div class="hint compact">命中后缀：该文件将被跳过</div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12">
+              <el-form-item prop="allow_file_exts">
+                <template #label>
+                  <span class="label-with-icon">
+                    <i class="ri-shield-check-line" />
+                    <span>保留文件后缀（白名单）</span>
+                  </span>
+                </template>
+                <el-select
+                  v-model="allowFileExts"
+                  class="ctrl"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  reserve-keyword
+                  clearable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="为空表示不过滤（全放行）"
+                  popper-class="tgvive-dark-popper"
+                >
+                  <el-option v-for="opt in allowFileExtOptions" :key="opt" :label="opt" :value="opt" />
+                </el-select>
+                <div class="hint compact">设置后，仅保留这些后缀的文件</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <div class="hint compact">仅对“文件”类型生效（非图片/音频/视频）。支持 zip 或 .zip，不区分大小写。</div>
 
           <div class="monitor-box">
             <div class="monitor-pane">
@@ -521,6 +636,17 @@ defineExpose<StrategyFormExpose>({
 
 .hint.compact {
   margin-top: 6px;
+}
+
+.label-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  i {
+    font-size: 14px;
+    color: var(--el-color-primary);
+  }
 }
 
 .radio-dense :deep(.el-radio) {

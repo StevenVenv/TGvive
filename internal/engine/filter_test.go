@@ -36,7 +36,7 @@ func TestPlanMediaGroup_CaptionMigrationFromFilteredOutMedia(t *testing.T) {
 	}
 
 	allowed := map[string]struct{}{"image": {}}
-	plan := PlanMediaGroup(m, []*tg.Message{photoMsg, videoMsg}, allowed)
+	plan := PlanMediaGroup(m, []*tg.Message{photoMsg, videoMsg}, allowed, nil, nil)
 
 	if plan.Need != 1 {
 		t.Fatalf("expected Need=1, got %d", plan.Need)
@@ -87,7 +87,7 @@ func TestPlanMediaGroup_DowngradeToTextWhenOnlyTextAllowed(t *testing.T) {
 	}
 
 	allowed := map[string]struct{}{"text": {}}
-	plan := PlanMediaGroup(m, []*tg.Message{photoMsg, videoMsg}, allowed)
+	plan := PlanMediaGroup(m, []*tg.Message{photoMsg, videoMsg}, allowed, nil, nil)
 
 	if plan.Need != 1 {
 		t.Fatalf("expected Need=1, got %d", plan.Need)
@@ -137,7 +137,7 @@ func TestPlanMediaGroup_DropWhenNoCaptionAndNoMediaKept(t *testing.T) {
 	}
 
 	allowed := map[string]struct{}{"text": {}}
-	plan := PlanMediaGroup(m, []*tg.Message{photoMsg, videoMsg}, allowed)
+	plan := PlanMediaGroup(m, []*tg.Message{photoMsg, videoMsg}, allowed, nil, nil)
 
 	// Sanity: no captions in input.
 	if plan.Caption != "" {

@@ -55,6 +55,8 @@ function emptyModel(): StrategyFormModel {
     // empty = 全类型（不做过滤）
     allowed_types: [],
     content_types: [],
+    block_file_exts: [],
+    allow_file_exts: [],
 
     scope_type: 1,
     scope_value: '',
@@ -106,6 +108,11 @@ function summarizeTags(s: Strategy): string[] {
   const at = Array.isArray(s.allowed_types) ? s.allowed_types : []
   const ct = at.length ? at : Array.isArray(s.content_types) ? s.content_types : []
   tags.push(ct.length ? `类型:${ct.join(',')}` : '类型:全部')
+
+  const allowExts = Array.isArray((s as any).allow_file_exts) ? ((s as any).allow_file_exts as string[]) : []
+  const blockExts = Array.isArray((s as any).block_file_exts) ? ((s as any).block_file_exts as string[]) : []
+  if (allowExts.length) tags.push(`后缀白名单:${allowExts.slice(0, 3).join(',')}${allowExts.length > 3 ? '...' : ''}`)
+  if (blockExts.length) tags.push(`屏蔽后缀:${blockExts.slice(0, 3).join(',')}${blockExts.length > 3 ? '...' : ''}`)
 
   const push = Boolean((s as any).enable_realtime ?? s.realtime)
   if (push) tags.push('监听')
@@ -171,10 +178,31 @@ function normalizeScheduleRules(input: any): ScheduleRule[] {
   return out
 }
 
+function normalizeFileExtList(input: any): string[] {
+  const raw = Array.isArray(input) ? input : []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const v of raw) {
+    let k = String(v || '')
+      .trim()
+      .toLowerCase()
+    if (!k) continue
+    if (!k.startsWith('.')) k = '.' + k
+    if (k === '.') continue
+    if (/[ \t\r\n/\\]/.test(k)) continue
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(k)
+  }
+  return out
+}
+
 function buildPayload(m: StrategyFormModel): Partial<Strategy> {
   const poll = Number(m.poll_interval ?? 0)
   const enable = Boolean((m as any).enable_realtime ?? m.realtime)
   const types = Array.isArray(m.allowed_types) ? m.allowed_types : Array.isArray(m.content_types) ? m.content_types : []
+  const blockExts = normalizeFileExtList((m as any).block_file_exts)
+  const allowExts = normalizeFileExtList((m as any).allow_file_exts)
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
@@ -183,6 +211,8 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     allowed_types: types,
     // keep legacy field synced for backward compatibility
     content_types: types,
+    block_file_exts: blockExts,
+    allow_file_exts: allowExts,
 
     scope_type: Number(m.scope_type || 1),
     scope_value: (m.scope_value || '').trim(),
@@ -215,6 +245,8 @@ function fillEdit(row: Strategy) {
       : Array.isArray(row.content_types)
         ? [...row.content_types]
         : []
+  const blockExts = Array.isArray((row as any).block_file_exts) ? ([...(row as any).block_file_exts] as string[]) : []
+  const allowExts = Array.isArray((row as any).allow_file_exts) ? ([...(row as any).allow_file_exts] as string[]) : []
   Object.assign(editModel, emptyModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
@@ -223,6 +255,8 @@ function fillEdit(row: Strategy) {
     clone_mode: Number(row.clone_mode || 3),
     allowed_types: types,
     content_types: types,
+    block_file_exts: blockExts,
+    allow_file_exts: allowExts,
 
     scope_type: Number(row.scope_type || 1),
     scope_value: (row.scope_value || '').trim(),
@@ -531,7 +565,7 @@ onMounted(() => {
           <template #header>
             <div class="card-header">
               <div class="card-title">
-                <i class="ri-flow-chart-line" />
+                <i class="ri-flow-chart" />
                 <span>行为策略库</span>
               </div>
               <div class="card-sub">共 {{ strategies.length }} 条</div>

@@ -105,6 +105,8 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 		task.CloneMode = payload.CloneMode
 	}
 	task.ContentTypes = payload.ContentTypes
+	task.BlockFileExts = payload.BlockFileExts
+	task.AllowFileExts = payload.AllowFileExts
 
 	if payload.ScopeType != 0 {
 		task.ScopeType = payload.ScopeType

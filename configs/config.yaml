@@ -3,11 +3,11 @@ server:
   mode: debug # debug, release, test
 
 mysql:
-  host: "192.168.0.108"
+  host: "142.171.85.117"
   port: 3306
-  user: "test111"
-  password: "nL8i8kaLyjsArNZr"
-  dbname: "test111"
+  user: "revive"
+  password: "HL8sJBz4kYPG8XFF"
+  dbname: "revive"
   config: "charset=utf8mb4&parseTime=True&loc=Local"
 
 jwt:
