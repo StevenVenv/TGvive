@@ -3,11 +3,11 @@ server:
   mode: debug # debug, release, test
 
 mysql:
-  host: "142.171.85.117"
+  host: "database-1.cdsy6cgcuu1i.ap-southeast-2.rds.amazonaws.com"
   port: 3306
-  user: "revive"
-  password: "HL8sJBz4kYPG8XFF"
-  dbname: "revive"
+  user: "admin"
+  password: "Eyhs6FNgnXFaOLuWX5uN"
+  dbname: "tgvive"
   config: "charset=utf8mb4&parseTime=True&loc=Local"
 
 jwt:
