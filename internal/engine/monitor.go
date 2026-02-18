@@ -114,6 +114,7 @@ type runtimeTask struct {
 	TargetPeer tg.InputPeerClass
 
 	allowedTypes map[string]struct{}
+	allowedTypesKey string
 	delayMin     time.Duration
 	delayMax     time.Duration
 	keyword      *keywordPolicy
@@ -156,6 +157,25 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		t.pollInterval = time.Duration(sec) * time.Second
 	}
 	return t
+}
+
+func (t *runtimeTask) refreshStrategySnapshot() model.Task {
+	if t == nil {
+		return model.Task{}
+	}
+
+	base := t.Task
+	strategy := ResolveRuntimeStrategy(base)
+	hotTask := MergeHotFieldsIntoTask(base, strategy)
+	types, key := ResolveAllowedTypes(base, strategy)
+
+	if key != t.allowedTypesKey {
+		t.allowedTypesKey = key
+		t.allowedTypes = types
+	}
+
+	t.delayMin, t.delayMax = normalizeDelayRange(hotTask.DelayMinMs, hotTask.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	return hotTask
 }
 
 func (t *runtimeTask) stop() {
@@ -608,9 +628,10 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 
 				pullReserved := t.takeAlbumPullReserved(job.groupedID)
 
-				need := quotaSendableAlbumCount(m, batch, t.allowedTypes)
-				if skipped := len(batch) - need; skipped > 0 {
-					global.AddFiltered(uint64(skipped))
+				hotTask := t.refreshStrategySnapshot()
+				plan := PlanMediaGroup(m, batch, t.allowedTypes)
+				if plan.Skipped > 0 {
+					global.AddFiltered(uint64(plan.Skipped))
 				}
 
 				maxID := 0
@@ -620,27 +641,47 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					}
 				}
 
-				if need > 0 && t.keyword != nil {
-					if out, skip := applyKeywordPolicyToAlbum(m, batch, t.allowedTypes, t.keyword); skip {
-						global.AddFiltered(uint64(need))
-						if pullReserved > 0 {
-							Scheduler.ReleasePull(t.Task.ID, pullReserved)
+				if plan.Need > 0 && t.keyword != nil {
+					carrier := plan.Text
+					if carrier == nil && len(plan.Media) > 0 {
+						carrier = plan.Media[0]
+					}
+					if carrier != nil {
+						if out, skip := applyKeywordPolicyToMessage(carrier, t.keyword); skip {
+							global.AddFiltered(uint64(plan.Need))
+							if pullReserved > 0 {
+								Scheduler.ReleasePull(t.Task.ID, pullReserved)
+							}
+							if maxID > 0 {
+								t.advanceCursor(maxID)
+							}
+							sleepRandom(t.Ctx, t.delayMin, t.delayMax)
+							continue
+						} else if out != nil && out != carrier {
+							if plan.Text != nil {
+								plan.Text = out
+							} else if len(plan.Media) > 0 {
+								copied := make([]*tg.Message, len(plan.Media))
+								copy(copied, plan.Media)
+								copied[0] = out
+								plan.Media = copied
+							}
 						}
-						if maxID > 0 {
-							t.advanceCursor(maxID)
-						}
-						sleepRandom(t.Ctx, t.delayMin, t.delayMax)
-						continue
-					} else if out != nil {
-						batch = out
 					}
 				}
-				err := processWithRetry(t.Ctx, func() error {
-					return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, batch, t.allowedTypes)
-				})
+
+				var err error
+				if plan.Need > 0 {
+					err = processWithRetry(t.Ctx, func() error {
+						if plan.Text != nil {
+							return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Text)
+						}
+						return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Media, nil)
+					})
+				}
 				if err != nil {
-					if need > 0 {
-						global.AddFail(uint64(need))
+					if plan.Need > 0 {
+						global.AddFail(uint64(plan.Need))
 					} else {
 						global.IncFail()
 					}
@@ -655,10 +696,10 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if pullReserved > 0 {
 						Scheduler.ReleasePull(t.Task.ID, pullReserved)
 					}
-				} else if need > 0 {
-					global.AddSuccess(uint64(need))
+				} else if plan.Need > 0 {
+					global.AddSuccess(uint64(plan.Need))
 					if pullReserved > 0 {
-						commit := need
+						commit := plan.Need
 						if commit > pullReserved {
 							commit = pullReserved
 						}
@@ -688,6 +729,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				if job.fromPull {
 					reservedTotal = 1
 				}
+
+				hotTask := t.refreshStrategySnapshot()
 
 				if t.allowedTypes != nil {
 					ct := m.DetectContentType(msg)
@@ -720,7 +763,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				need := quotaSendableCount(m, msgToSend, nil)
 
 				err := processWithRetry(t.Ctx, func() error {
-					return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, t.Task, msgToSend)
+					return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, msgToSend)
 				})
 				if err != nil {
 					if need > 0 {

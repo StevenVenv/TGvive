@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"my-go-server/internal/engine"
 	"my-go-server/internal/model"
 	"my-go-server/internal/service"
 	"my-go-server/pkg/app"
@@ -13,6 +14,71 @@ import (
 )
 
 type StrategyApi struct{}
+
+var strategyTypeAliases = map[string]string{
+	"photo":    "image",
+	"picture":  "image",
+	"img":      "image",
+	"document": "file",
+}
+
+var strategyTypeWhitelist = map[string]struct{}{
+	"text":  {},
+	"image": {},
+	"video": {},
+	"audio": {},
+	"file":  {},
+	"other": {},
+}
+
+func normalizeStrategyTypeList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		k := strings.ToLower(strings.TrimSpace(v))
+		if k == "" {
+			continue
+		}
+		if ali, ok := strategyTypeAliases[k]; ok {
+			k = ali
+		}
+		if _, ok := strategyTypeWhitelist[k]; !ok {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
+func syncStrategyTypes(s *model.Strategy) {
+	if s == nil {
+		return
+	}
+
+	allowed := normalizeStrategyTypeList(s.AllowedTypes.Strings())
+	legacy := normalizeStrategyTypeList(s.ContentTypes.Strings())
+
+	types := allowed
+	if len(types) == 0 {
+		types = legacy
+	}
+	if len(types) == 0 {
+		s.AllowedTypes = ""
+		s.ContentTypes = ""
+		return
+	}
+
+	csv := model.CSVStringSlice(strings.Join(types, ","))
+	s.AllowedTypes = csv
+	s.ContentTypes = csv
+}
 
 // CreateStrategy 创建策略模板
 func (a *StrategyApi) CreateStrategy(c *gin.Context) {
@@ -66,10 +132,14 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	s.EnableRealtime = enableRealtime
 	s.Realtime = enableRealtime
 
+	syncStrategyTypes(&s)
+
 	if err := service.CreateStrategy(&s); err != nil {
 		app.FailWithMsg("策略保存失败: "+err.Error(), c)
 		return
 	}
+
+	engine.GlobalStrategyCache.Set(&s)
 
 	app.OkWithData(s, c)
 }
@@ -148,11 +218,16 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 	payload.EnableRealtime = enableRealtime
 	payload.Realtime = enableRealtime
 
+	syncStrategyTypes(&payload)
+
 	updated, err := service.UpdateStrategy(userID, uint(idU64), &payload)
 	if err != nil {
 		app.FailWithMsg("策略更新失败: "+err.Error(), c)
 		return
 	}
+
+	engine.GlobalStrategyCache.Set(&updated)
+	engine.Scheduler.RefreshNow()
 	app.OkWithData(updated, c)
 }
 
@@ -176,5 +251,6 @@ func (a *StrategyApi) DeleteStrategy(c *gin.Context) {
 		return
 	}
 
+	engine.GlobalStrategyCache.Invalidate(int64(idU64))
 	app.OkWithData(gin.H{"ok": true}, c)
 }

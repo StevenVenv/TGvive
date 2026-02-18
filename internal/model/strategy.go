@@ -18,7 +18,12 @@ type Strategy struct {
 	// 克隆模式: 1-转发, 2-发送, 3-下载上传
 	CloneMode int `gorm:"type:tinyint;not null" json:"clone_mode"`
 
-	// 内容类型 (DB 存 "text,image,video"，API 传 JSON 数组)
+	// AllowedTypes controls message content type filtering.
+	// DB stores CSV like "text,image,video" while API uses JSON string array.
+	// Empty means allow all types.
+	AllowedTypes CSVStringSlice `gorm:"type:varchar(100)" json:"allowed_types"`
+
+	// ContentTypes is kept for backward compatibility (legacy field).
 	ContentTypes CSVStringSlice `gorm:"type:varchar(100)" json:"content_types"`
 
 	// 消息范围: 1-全部, 2-最近N条, 3-时间范围, 4-ID范围

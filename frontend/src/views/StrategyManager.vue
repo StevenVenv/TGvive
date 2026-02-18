@@ -53,6 +53,7 @@ function emptyModel(): StrategyFormModel {
 
     clone_mode: 3,
     // empty = 全类型（不做过滤）
+    allowed_types: [],
     content_types: [],
 
     scope_type: 1,
@@ -102,7 +103,8 @@ function summarizeTags(s: Strategy): string[] {
   const tags: string[] = []
   tags.push(cloneModeLabel(Number(s.clone_mode || 3)))
 
-  const ct = Array.isArray(s.content_types) ? s.content_types : []
+  const at = Array.isArray(s.allowed_types) ? s.allowed_types : []
+  const ct = at.length ? at : Array.isArray(s.content_types) ? s.content_types : []
   tags.push(ct.length ? `类型:${ct.join(',')}` : '类型:全部')
 
   const push = Boolean((s as any).enable_realtime ?? s.realtime)
@@ -172,12 +174,15 @@ function normalizeScheduleRules(input: any): ScheduleRule[] {
 function buildPayload(m: StrategyFormModel): Partial<Strategy> {
   const poll = Number(m.poll_interval ?? 0)
   const enable = Boolean((m as any).enable_realtime ?? m.realtime)
+  const types = Array.isArray(m.allowed_types) ? m.allowed_types : Array.isArray(m.content_types) ? m.content_types : []
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
 
     clone_mode: Number(m.clone_mode || 3),
-    content_types: Array.isArray(m.content_types) ? m.content_types : [],
+    allowed_types: types,
+    // keep legacy field synced for backward compatibility
+    content_types: types,
 
     scope_type: Number(m.scope_type || 1),
     scope_value: (m.scope_value || '').trim(),
@@ -204,13 +209,20 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
 
 function fillEdit(row: Strategy) {
   const enable = Boolean((row as any).enable_realtime ?? row.realtime)
+  const types =
+    Array.isArray(row.allowed_types) && row.allowed_types.length
+      ? [...row.allowed_types]
+      : Array.isArray(row.content_types)
+        ? [...row.content_types]
+        : []
   Object.assign(editModel, emptyModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
     remark: (row.remark || '').trim(),
 
     clone_mode: Number(row.clone_mode || 3),
-    content_types: Array.isArray(row.content_types) ? [...row.content_types] : [],
+    allowed_types: types,
+    content_types: types,
 
     scope_type: Number(row.scope_type || 1),
     scope_value: (row.scope_value || '').trim(),

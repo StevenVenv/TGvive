@@ -28,7 +28,11 @@ func (s CSVStringSlice) Strings() []string {
 }
 
 func (s CSVStringSlice) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.Strings())
+	items := s.Strings()
+	if items == nil {
+		items = []string{}
+	}
+	return json.Marshal(items)
 }
 
 func (s *CSVStringSlice) UnmarshalJSON(b []byte) error {

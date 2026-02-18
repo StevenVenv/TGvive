@@ -64,6 +64,10 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
 		return
 	}
+	types := strategy.AllowedTypes
+	if len(types.Strings()) == 0 {
+		types = strategy.ContentTypes
+	}
 
 	if req.KeywordProfileID != 0 {
 		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
@@ -81,7 +85,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		KeywordProfileID: req.KeywordProfileID,
 
 		CloneMode:    strategy.CloneMode,
-		ContentTypes: strategy.ContentTypes,
+		ContentTypes: types,
 
 		ScopeType:  strategy.ScopeType,
 		ScopeValue: strings.TrimSpace(strategy.ScopeValue),
@@ -229,6 +233,10 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
 		return
 	}
+	types := strategy.AllowedTypes
+	if len(types.Strings()) == 0 {
+		types = strategy.ContentTypes
+	}
 
 	if req.KeywordProfileID != 0 {
 		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
@@ -245,7 +253,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		KeywordProfileID: req.KeywordProfileID,
 
 		CloneMode:    strategy.CloneMode,
-		ContentTypes: strategy.ContentTypes,
+		ContentTypes: types,
 
 		ScopeType:  strategy.ScopeType,
 		ScopeValue: strings.TrimSpace(strategy.ScopeValue),

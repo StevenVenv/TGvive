@@ -31,7 +31,12 @@ func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (mode
 	s.Remark = payload.Remark
 
 	s.CloneMode = payload.CloneMode
-	s.ContentTypes = payload.ContentTypes
+	allowed := payload.AllowedTypes
+	if len(allowed.Strings()) == 0 {
+		allowed = payload.ContentTypes
+	}
+	s.AllowedTypes = allowed
+	s.ContentTypes = allowed
 	s.ScopeType = payload.ScopeType
 	s.ScopeValue = payload.ScopeValue
 	s.HistoryOrder = payload.HistoryOrder

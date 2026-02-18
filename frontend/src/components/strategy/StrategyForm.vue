@@ -14,6 +14,7 @@ export type StrategyFormModel = {
   remark: string
 
   clone_mode: number
+  allowed_types: string[]
   content_types: string[]
 
   scope_type: number
@@ -121,33 +122,17 @@ function removeScheduleRule(index: number) {
   form.value.schedule_rules = form.value.schedule_rules.filter((_, i) => i !== index)
 }
 
-type ContentTypeKey = 'text' | 'image' | 'video' | 'audio' | 'file' | 'other'
+type AllowedTypeKey = 'text' | 'image' | 'video' | 'audio' | 'file'
 
-const contentTypeOptions: Array<{ key: ContentTypeKey; label: string; icon: string }> = [
+const allowedTypeOptions: Array<{ key: AllowedTypeKey; label: string; icon: string }> = [
   { key: 'text', label: '文本', icon: 'ri-file-text-line' },
   { key: 'image', label: '图片', icon: 'ri-image-line' },
   { key: 'video', label: '视频', icon: 'ri-video-line' },
   { key: 'audio', label: '音频', icon: 'ri-volume-up-line' },
   { key: 'file', label: '文件', icon: 'ri-file-3-line' },
-  { key: 'other', label: '其他', icon: 'ri-more-line' },
 ]
 
-const allContentTypeKeys = contentTypeOptions.map((x) => x.key)
-const lastCustomContentTypes = ref<ContentTypeKey[]>([])
-
-type ContentPreset = 'common' | 'media' | 'all'
-
-const contentPresets: Record<ContentPreset, ContentTypeKey[]> = {
-  common: ['text', 'image', 'video', 'audio', 'file'],
-  media: ['image', 'video', 'audio', 'file'],
-  all: allContentTypeKeys,
-}
-
-function applyContentPreset(preset: ContentPreset) {
-  const next = contentPresets[preset]
-  form.value.content_types = [...next]
-  lastCustomContentTypes.value = [...next]
-}
+const allowedTypeKeys = allowedTypeOptions.map((x) => x.key)
 
 const scopeValuePlaceholder = computed(() => {
   const t = Number(form.value.scope_type || 1)
@@ -157,7 +142,7 @@ const scopeValuePlaceholder = computed(() => {
   return '可留空'
 })
 
-function normalizeContentTypes(input: any): ContentTypeKey[] {
+function normalizeAllowedTypes(input: any): AllowedTypeKey[] {
   const raw = Array.isArray(input) ? input : []
   const set = new Set<string>()
   for (const v of raw) {
@@ -167,63 +152,25 @@ function normalizeContentTypes(input: any): ContentTypeKey[] {
     if (!k) continue
     set.add(k)
   }
-  const out: ContentTypeKey[] = []
-  for (const k of allContentTypeKeys) {
+  const out: AllowedTypeKey[] = []
+  for (const k of allowedTypeKeys) {
     if (set.has(k)) out.push(k)
   }
   return out
 }
 
-const contentTypeMode = computed<'all' | 'custom'>({
+const allowedTypes = computed<AllowedTypeKey[]>({
   get() {
-    const cur = Array.isArray(form.value.content_types) ? form.value.content_types : []
-    return cur.length === 0 ? 'all' : 'custom'
+    const v = (form.value as any).allowed_types
+    if (Array.isArray(v)) return normalizeAllowedTypes(v)
+    return normalizeAllowedTypes(form.value.content_types)
   },
   set(v) {
-    if (v === 'all') {
-      const cur = normalizeContentTypes(form.value.content_types)
-      if (cur.length) lastCustomContentTypes.value = cur
-      form.value.content_types = []
-      return
-    }
-    // custom
-    const cur = Array.isArray(form.value.content_types) ? form.value.content_types : []
-    if (cur.length === 0) {
-      const next = lastCustomContentTypes.value.length ? [...lastCustomContentTypes.value] : [...contentPresets.common]
-      form.value.content_types = next
-    }
+    const next = normalizeAllowedTypes(v)
+    ;(form.value as any).allowed_types = next
+    form.value.content_types = next
   },
 })
-
-const contentTypesSummary = computed(() => {
-  if (contentTypeMode.value === 'all') return '当前：全类型（不过滤）'
-  const cur = normalizeContentTypes(form.value.content_types)
-  return `已选：${cur.length}/${allContentTypeKeys.length}`
-})
-
-function isContentTypeChecked(key: ContentTypeKey): boolean {
-  const cur = normalizeContentTypes(form.value.content_types)
-  return cur.includes(key)
-}
-
-function toggleContentType(key: ContentTypeKey, checked: boolean) {
-  const cur = normalizeContentTypes(form.value.content_types)
-  const set = new Set<ContentTypeKey>(cur)
-  if (checked) set.add(key)
-  else set.delete(key)
-
-  const next = allContentTypeKeys.filter((k) => set.has(k))
-  if (next.length === 0) {
-    // keep custom mode stable: require at least one
-    return
-  }
-  form.value.content_types = next
-  lastCustomContentTypes.value = next
-}
-
-function onContentTypeTagChange(key: ContentTypeKey, ev: any) {
-  toggleContentType(key, Boolean(ev))
-}
 
 const rules: FormRules = {
   name: [{ required: true, message: '请填写策略名称', trigger: 'blur' }],
@@ -375,48 +322,6 @@ defineExpose<StrategyFormExpose>({
                 <el-input v-model="form.scope_value" class="ctrl ctrl-md" :placeholder="scopeValuePlaceholder" />
               </el-form-item>
             </el-col>
-
-            <el-col :xs="24">
-              <el-form-item label="内容类型" prop="content_types">
-                <div class="ct-block">
-                  <div class="ct-head">
-                    <div class="ct-left">
-                      <el-radio-group v-model="contentTypeMode" size="small" class="ct-mode">
-                        <el-radio-button label="all">全类型</el-radio-button>
-                        <el-radio-button label="custom">自定义</el-radio-button>
-                      </el-radio-group>
-                      <div class="ct-meta">{{ contentTypesSummary }}</div>
-                    </div>
-
-                    <el-space v-if="contentTypeMode === 'custom'" size="small" class="ct-actions">
-                      <el-button link type="primary" size="small" @click="applyContentPreset('common')">常用</el-button>
-                      <el-button link type="primary" size="small" @click="applyContentPreset('media')">媒体</el-button>
-                      <el-button link type="primary" size="small" @click="applyContentPreset('all')">全选</el-button>
-                    </el-space>
-                  </div>
-
-                  <div v-if="contentTypeMode === 'custom'" class="ct-tags">
-                    <el-check-tag
-                      v-for="opt in contentTypeOptions"
-                      :key="opt.key"
-                      :checked="isContentTypeChecked(opt.key)"
-                      @change="onContentTypeTagChange(opt.key, $event)"
-                    >
-                      <span class="ct-tag">
-                        <i :class="opt.icon" />
-                        {{ opt.label }}
-                      </span>
-                    </el-check-tag>
-                    <div class="hint compact">提示：自定义会过滤未选类型；“全类型”包含其他/未知类型</div>
-                  </div>
-
-                  <div v-else class="ct-all">
-                    <i class="ri-checkbox-multiple-line" />
-                    <span>不做类型过滤（包含 other/未知类型）</span>
-                  </div>
-                </div>
-              </el-form-item>
-            </el-col>
           </el-row>
         </el-card>
 
@@ -430,6 +335,16 @@ defineExpose<StrategyFormExpose>({
               <div class="panel-sub">Anti-detect & Processing</div>
             </div>
           </template>
+
+          <el-form-item label="允许转发的内容类型" prop="allowed_types">
+            <el-checkbox-group v-model="allowedTypes" class="types-group">
+              <el-checkbox v-for="opt in allowedTypeOptions" :key="opt.key" :label="opt.key" class="type-item">
+                <i :class="opt.icon" />
+                <span class="type-label">{{ opt.label }}</span>
+              </el-checkbox>
+            </el-checkbox-group>
+            <div class="hint compact">未选择表示不过滤（全类型，包括未知类型）</div>
+          </el-form-item>
 
           <div class="monitor-box">
             <div class="monitor-pane">

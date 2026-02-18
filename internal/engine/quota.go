@@ -178,6 +178,34 @@ func newTaskQuota(task model.Task) *taskQuota {
 	return q
 }
 
+func (q *taskQuota) UpdateConfig(dailyLimit int, windowRaw string) {
+	if q == nil {
+		return
+	}
+	if dailyLimit < 0 {
+		dailyLimit = 0
+	}
+	windowRaw = strings.TrimSpace(windowRaw)
+	if q.dailyLimit == dailyLimit && strings.TrimSpace(q.windowRaw) == windowRaw {
+		return
+	}
+
+	q.dailyLimit = dailyLimit
+	q.windowRaw = windowRaw
+	q.windowErr = nil
+	q.window = runWindow{}
+
+	if windowRaw == "" {
+		return
+	}
+	w, err := parseRunWindow(windowRaw)
+	if err != nil {
+		q.windowErr = err
+		return
+	}
+	q.window = w
+}
+
 func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint64, q *taskQuota, need int) error {
 	if err := ctx.Err(); err != nil {
 		return err

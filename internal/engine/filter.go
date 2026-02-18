@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"sort"
 	"strings"
 
 	"my-go-server/internal/model"
+
+	"github.com/gotd/td/tg"
 )
 
 // CheckKeywordPolicy applies keyword profiles to a text and returns (newText, ok).
@@ -55,4 +58,110 @@ func CheckKeywordPolicy(text string, profiles []model.KeywordProfile) (string, b
 	k.replace = compileReplacePlain(mergedReplace)
 	out, _ := k.replaceText(text)
 	return out, true
+}
+
+type MediaGroupPlan struct {
+	Media    []*tg.Message
+	Text     *tg.Message
+	Need     int
+	Skipped  int
+	Caption  string
+	HasMedia bool
+}
+
+func PlanMediaGroup(m *TaskManager, msgs []*tg.Message, allowed map[string]struct{}) MediaGroupPlan {
+	var plan MediaGroupPlan
+	if m == nil || len(msgs) == 0 {
+		return plan
+	}
+
+	var captionMsg *tg.Message
+	captionID := 0
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		if strings.TrimSpace(msg.Message) == "" {
+			continue
+		}
+		if captionMsg == nil || (msg.ID > 0 && (captionID == 0 || msg.ID < captionID)) {
+			captionMsg = msg
+			captionID = msg.ID
+		}
+	}
+
+	kept := make([]*tg.Message, 0, len(msgs))
+	skipped := 0
+	hasMedia := false
+
+	for _, msg := range msgs {
+		if msg == nil || msg.Media == nil {
+			skipped++
+			continue
+		}
+		hasMedia = true
+
+		ct := m.DetectContentType(msg)
+		if allowed != nil {
+			if _, ok := allowed[ct]; !ok {
+				skipped++
+				continue
+			}
+		}
+		if _, err := convertMessageMediaToInput(msg.Media); err != nil {
+			skipped++
+			continue
+		}
+		kept = append(kept, msg)
+	}
+
+	sort.Slice(kept, func(i, j int) bool {
+		return kept[i].ID < kept[j].ID
+	})
+
+	plan.Skipped = skipped
+	plan.HasMedia = hasMedia
+
+	if captionMsg != nil {
+		plan.Caption = captionMsg.Message
+	}
+
+	if len(kept) == 0 {
+		if captionMsg != nil && strings.TrimSpace(captionMsg.Message) != "" {
+			if allowed == nil {
+				cp := *captionMsg
+				cp.Media = nil
+				cp.GroupedID = 0
+				plan.Text = &cp
+				plan.Need = 1
+				return plan
+			}
+			if _, ok := allowed["text"]; ok {
+				cp := *captionMsg
+				cp.Media = nil
+				cp.GroupedID = 0
+				plan.Text = &cp
+				plan.Need = 1
+				return plan
+			}
+		}
+		return plan
+	}
+
+	if captionMsg != nil && strings.TrimSpace(captionMsg.Message) != "" {
+		first := kept[0]
+		if first != nil && strings.TrimSpace(first.Message) == "" {
+			cp := *first
+			cp.Message = captionMsg.Message
+			cp.Entities = captionMsg.Entities
+			copied := make([]*tg.Message, len(kept))
+			copy(copied, kept)
+			copied[0] = &cp
+			kept = copied
+		}
+	}
+
+	plan.Media = kept
+	plan.Need = len(kept)
+	return plan
 }

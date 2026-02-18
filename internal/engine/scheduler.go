@@ -235,6 +235,13 @@ func (s *SchedulerEngine) Stop() {
 	})
 }
 
+func (s *SchedulerEngine) RefreshNow() {
+	if s == nil {
+		return
+	}
+	s.refresh()
+}
+
 func (s *SchedulerEngine) loop() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()

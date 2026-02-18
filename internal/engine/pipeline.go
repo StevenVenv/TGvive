@@ -34,20 +34,34 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, source
 		return errors.New("tg peer is nil")
 	}
 
-	allowedTypes := normalizeTypeSet(task.ContentTypes.Strings())
-	contentType := m.DetectContentType(msg)
-	if allowedTypes != nil {
-		if _, ok := allowedTypes[contentType]; !ok {
-			global.IncFiltered()
-			return nil
-		}
-	}
+	strategy := ResolveRuntimeStrategy(task)
+	hotTask := MergeHotFieldsIntoTask(task, strategy)
+	allowedTypes, _ := ResolveAllowedTypes(task, strategy)
 
 	if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil && task.ID != 0 {
 		taskID := task.ID
 		groupedID := msg.GroupedID
 		m.grouper.Add(taskID, groupedID, msg, func(batch []*tg.Message) {
-			if err := m.processAlbumBatch(ctx, api, sourcePeer, peer, task, batch, allowedTypes); err != nil && global.Logger != nil {
+			plan := PlanMediaGroup(m, batch, allowedTypes)
+			if plan.Skipped > 0 {
+				global.AddFiltered(uint64(plan.Skipped))
+			}
+			if plan.Need == 0 {
+				return
+			}
+			if plan.Text != nil {
+				if err := m.processSingleMessage(ctx, api, sourcePeer, peer, hotTask, plan.Text); err != nil && global.Logger != nil {
+					global.Logger.Error(
+						"process album downgraded text failed",
+						zap.Uint("task_id", taskID),
+						zap.Int64("grouped_id", groupedID),
+						zap.Error(err),
+					)
+				}
+				return
+			}
+
+			if err := m.processAlbumBatch(ctx, api, sourcePeer, peer, hotTask, plan.Media, nil); err != nil && global.Logger != nil {
 				global.Logger.Error(
 					"process album batch failed",
 					zap.Uint("task_id", taskID),
@@ -59,7 +73,15 @@ func (m *TaskManager) ProcessMessage(ctx context.Context, api *tg.Client, source
 		return nil
 	}
 
-	return m.processSingleMessage(ctx, api, sourcePeer, peer, task, msg)
+	contentType := m.DetectContentType(msg)
+	if allowedTypes != nil {
+		if _, ok := allowedTypes[contentType]; !ok {
+			global.IncFiltered()
+			return nil
+		}
+	}
+
+	return m.processSingleMessage(ctx, api, sourcePeer, peer, hotTask, msg)
 }
 
 func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, task model.Task, msg *tg.Message) error {
@@ -226,18 +248,16 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sou
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	_ = allowedTypes
 
-	// Filter nil/unsupported/filtered-out messages.
+	// Filter nil/unsupported messages.
 	filtered := make([]*tg.Message, 0, len(msgs))
 	for _, msg := range msgs {
 		if msg == nil || msg.Media == nil {
 			continue
 		}
-		if allowedTypes != nil {
-			ct := m.DetectContentType(msg)
-			if _, ok := allowedTypes[ct]; !ok {
-				continue
-			}
+		if _, err := convertMessageMediaToInput(msg.Media); err != nil {
+			continue
 		}
 		filtered = append(filtered, msg)
 	}

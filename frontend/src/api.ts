@@ -53,6 +53,7 @@ export type Strategy = {
   remark?: string
 
   clone_mode: number
+  allowed_types?: string[]
   content_types: string[]
 
   scope_type: number
