@@ -120,6 +120,7 @@ type runtimeTask struct {
 	pollInterval time.Duration
 
 	queue    chan realtimeJob
+	done     chan struct{}
 	stopOnce sync.Once
 
 	mu                sync.Mutex
@@ -141,6 +142,7 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		keyword:      cfg.Keyword,
 
 		queue:             make(chan realtimeJob, 512),
+		done:              make(chan struct{}),
 		albumWait:         make(map[int64]chan []*tg.Message),
 		albumPullReserved: make(map[int64]int),
 	}
@@ -161,7 +163,7 @@ func (t *runtimeTask) stop() {
 		return
 	}
 	t.stopOnce.Do(func() {
-		close(t.queue)
+		close(t.done)
 
 		t.mu.Lock()
 		for gid, ch := range t.albumWait {
@@ -170,32 +172,38 @@ func (t *runtimeTask) stop() {
 				close(ch)
 			}
 		}
-		t.albumPullReserved = make(map[int64]int)
 		t.mu.Unlock()
 	})
 }
 
-func (t *runtimeTask) enqueue(job realtimeJob) {
+func (t *runtimeTask) enqueue(job realtimeJob) bool {
 	if t == nil {
-		return
+		return false
 	}
 	if t.Ctx == nil || t.Ctx.Err() != nil {
-		return
+		return false
 	}
 
 	select {
+	case <-t.done:
+		return false
 	case t.queue <- job:
 		if global.Stats != nil {
 			global.Stats.AddPending(1)
 		}
+		return true
 	default:
 		if global.Logger != nil {
 			global.Logger.Warn("realtime queue full, dropping message", zap.Uint("task_id", t.Task.ID))
 		}
+		return false
 	}
 }
 
-func (t *runtimeTask) ensureAlbumWaiter(groupedID int64) (chan []*tg.Message, bool) {
+func (t *runtimeTask) ensureAlbumWaiter(groupedID int64, fromPull bool) (chan []*tg.Message, bool) {
+	if t == nil || groupedID == 0 {
+		return nil, false
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.albumWait == nil {
@@ -205,6 +213,15 @@ func (t *runtimeTask) ensureAlbumWaiter(groupedID int64) (chan []*tg.Message, bo
 		return ch, false
 	}
 	ch := make(chan []*tg.Message, 1)
+	if ok := t.enqueue(realtimeJob{
+		kind:      realtimeJobAlbum,
+		fromPull:  fromPull,
+		groupedID: groupedID,
+		albumCh:   ch,
+	}); !ok {
+		return nil, false
+	}
+
 	t.albumWait[groupedID] = ch
 	return ch, true
 }
@@ -252,6 +269,70 @@ func (t *runtimeTask) takeAlbumPullReserved(groupedID int64) int {
 		n = 0
 	}
 	return n
+}
+
+func (t *runtimeTask) releasePullReservationForJob(job realtimeJob) {
+	if t == nil || t.Task.ID == 0 {
+		return
+	}
+	switch job.kind {
+	case realtimeJobSingle:
+		if job.fromPull {
+			Scheduler.ReleasePull(t.Task.ID, 1)
+		}
+	case realtimeJobAlbum:
+		if job.groupedID == 0 {
+			return
+		}
+		if n := t.takeAlbumPullReserved(job.groupedID); n > 0 {
+			Scheduler.ReleasePull(t.Task.ID, n)
+		}
+	}
+}
+
+func (t *runtimeTask) releaseAllAlbumPullReserved() {
+	if t == nil || t.Task.ID == 0 {
+		return
+	}
+
+	sum := 0
+	t.mu.Lock()
+	for gid, n := range t.albumPullReserved {
+		if n <= 0 {
+			delete(t.albumPullReserved, gid)
+			continue
+		}
+		sum += n
+		delete(t.albumPullReserved, gid)
+	}
+	t.mu.Unlock()
+
+	if sum > 0 {
+		Scheduler.ReleasePull(t.Task.ID, sum)
+	}
+}
+
+func (t *runtimeTask) drainQueueOnStop() {
+	if t == nil {
+		return
+	}
+
+	for {
+		select {
+		case job, ok := <-t.queue:
+			if !ok {
+				t.releaseAllAlbumPullReserved()
+				return
+			}
+			if global.Stats != nil {
+				global.Stats.AddPending(-1)
+			}
+			t.releasePullReservationForJob(job)
+		default:
+			t.releaseAllAlbumPullReserved()
+			return
+		}
+	}
 }
 
 func (t *runtimeTask) cursorSnapshot() (order int, cursor int) {
@@ -315,6 +396,12 @@ func (t *runtimeTask) startPoller(m *TaskManager, api *tg.Client) {
 		return
 	}
 
+	select {
+	case <-t.done:
+		return
+	default:
+	}
+
 	// Run an initial poll once to catch up messages that arrived between history clone completion and realtime enter.
 	t.pollOnce(m, api)
 
@@ -325,6 +412,8 @@ func (t *runtimeTask) startPoller(m *TaskManager, api *tg.Client) {
 		select {
 		case <-t.Ctx.Done():
 			return
+		case <-t.done:
+			return
 		case <-ticker.C:
 			t.pollOnce(m, api)
 		}
@@ -334,6 +423,11 @@ func (t *runtimeTask) startPoller(m *TaskManager, api *tg.Client) {
 func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 	if t == nil || m == nil || api == nil || t.Ctx == nil || t.SourcePeer == nil || t.Task.ID == 0 {
 		return
+	}
+	select {
+	case <-t.done:
+		return
+	default:
 	}
 	if err := t.Ctx.Err(); err != nil {
 		return
@@ -465,41 +559,50 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 
 	for {
 		select {
+		case <-t.done:
+			t.drainQueueOnStop()
+			return
 		case <-t.Ctx.Done():
-			// Best-effort drain to keep global pending counter consistent on cancel.
-			for {
-				select {
-				case _, ok := <-t.queue:
-					if !ok {
-						return
-					}
-					if global.Stats != nil {
-						global.Stats.AddPending(-1)
-					}
-				default:
-					return
-				}
-			}
+			t.drainQueueOnStop()
+			return
 		case job, ok := <-t.queue:
 			if !ok {
+				t.releaseAllAlbumPullReserved()
 				return
 			}
 			if global.Stats != nil {
 				global.Stats.AddPending(-1)
 			}
+
 			if err := t.Ctx.Err(); err != nil {
+				t.releasePullReservationForJob(job)
+				t.drainQueueOnStop()
 				return
+			}
+			select {
+			case <-t.done:
+				t.releasePullReservationForJob(job)
+				t.drainQueueOnStop()
+				return
+			default:
 			}
 
 			switch job.kind {
 			case realtimeJobAlbum:
 				var batch []*tg.Message
 				select {
+				case <-t.done:
+					t.releasePullReservationForJob(job)
+					t.drainQueueOnStop()
+					return
 				case <-t.Ctx.Done():
+					t.releasePullReservationForJob(job)
+					t.drainQueueOnStop()
 					return
 				case batch = <-job.albumCh:
 				}
 				if len(batch) == 0 {
+					t.releasePullReservationForJob(job)
 					continue
 				}
 
@@ -577,6 +680,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 			case realtimeJobSingle:
 				msg := job.msg
 				if msg == nil || msg.ID <= 0 {
+					t.releasePullReservationForJob(job)
 					continue
 				}
 
@@ -1077,6 +1181,11 @@ func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Mess
 	if rt.Ctx.Err() != nil {
 		return false
 	}
+	select {
+	case <-rt.done:
+		return false
+	default:
+	}
 	if !m.isActiveRun(rt.Task.ID, rt.RunID) {
 		return false
 	}
@@ -1086,35 +1195,42 @@ func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Mess
 	if order != model.HistoryOrderNewToOld && cursor > 0 && msg.ID <= cursor {
 		return false
 	}
-	if m.dedup != nil && m.dedup.Seen(rt.Task.ID, msg.ID) {
-		return false
+	dedupMarked := false
+	if m.dedup != nil {
+		if m.dedup.Seen(rt.Task.ID, msg.ID) {
+			return false
+		}
+		dedupMarked = true
 	}
 
 	if msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil {
 		groupedID := msg.GroupedID
-		ch, first := rt.ensureAlbumWaiter(groupedID)
+		ch, _ := rt.ensureAlbumWaiter(groupedID, fromPull)
+		if ch == nil {
+			if dedupMarked && m.dedup != nil {
+				m.dedup.Forget(rt.Task.ID, msg.ID)
+			}
+			return false
+		}
 		if fromPull {
 			rt.addAlbumPullReserved(groupedID, 1)
 		}
 		m.grouper.Add(rt.Task.ID, groupedID, msg, func(batch []*tg.Message) {
 			rt.deliverAlbum(groupedID, batch)
 		})
-		if first {
-			rt.enqueue(realtimeJob{
-				kind:      realtimeJobAlbum,
-				fromPull:  fromPull,
-				groupedID: groupedID,
-				albumCh:   ch,
-			})
-		}
 		return true
 	}
 
-	rt.enqueue(realtimeJob{
+	if ok := rt.enqueue(realtimeJob{
 		kind:     realtimeJobSingle,
 		fromPull: fromPull,
 		msg:      msg,
-	})
+	}); !ok {
+		if dedupMarked && m.dedup != nil {
+			m.dedup.Forget(rt.Task.ID, msg.ID)
+		}
+		return false
+	}
 	return true
 }
 

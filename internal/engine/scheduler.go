@@ -344,7 +344,9 @@ func (s *SchedulerEngine) refresh() {
 			updates["current_slot_key"] = slotReset.SlotKey
 			updates["current_slot_count"] = 0
 		}
-		_ = global.DB.Model(&model.Task{}).Where("id = ?", r.TaskID).Updates(updates).Error
+		if err := global.DB.Model(&model.Task{}).Where("id = ?", r.TaskID).Updates(updates).Error; err != nil && global.Logger != nil {
+			global.Logger.Warn("scheduler refresh update task failed", zap.Uint("task_id", r.TaskID), zap.Error(err))
+		}
 	}
 
 	s.mu.Lock()

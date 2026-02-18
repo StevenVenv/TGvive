@@ -84,6 +84,22 @@ func (d *Deduper) DropTask(taskID uint) {
 	d.mu.Unlock()
 }
 
+// Forget removes a previously-seen key so it may be processed again.
+// It is safe to call even if the key does not exist.
+func (d *Deduper) Forget(taskID uint, msgID int) {
+	if d == nil {
+		return
+	}
+	if taskID == 0 || msgID <= 0 {
+		return
+	}
+
+	key := dedupKey{TaskID: taskID, MsgID: msgID}
+	d.mu.Lock()
+	delete(d.entries, key)
+	d.mu.Unlock()
+}
+
 func (d *Deduper) pruneLocked(now int64) {
 	for d.head < len(d.order) {
 		ent := d.order[d.head]
@@ -118,4 +134,3 @@ func (d *Deduper) evictLocked(now int64) {
 
 	d.pruneLocked(now)
 }
-
