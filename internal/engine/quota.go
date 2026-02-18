@@ -378,6 +378,9 @@ func quotaSendableCount(m *TaskManager, msg *tg.Message, allowedTypes map[string
 	}
 
 	if _, err := convertMessageMediaToInput(msg.Media); err != nil {
+		if errors.Is(err, ErrUnsupportedMedia) && strings.TrimSpace(msg.Message) != "" {
+			return 1
+		}
 		return 0
 	}
 	return 1

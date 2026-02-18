@@ -58,6 +58,89 @@ type mediaMeta struct {
 	Filename   string
 }
 
+func detectDocumentContentType(doc *tg.Document) string {
+	if doc == nil {
+		return "file"
+	}
+
+	for _, attr := range doc.Attributes {
+		switch attr.(type) {
+		case *tg.DocumentAttributeVideo, *tg.DocumentAttributeAnimated:
+			return "video"
+		case *tg.DocumentAttributeAudio:
+			return "audio"
+		}
+	}
+
+	mt := strings.ToLower(strings.TrimSpace(doc.MimeType))
+	if strings.HasPrefix(mt, "image/") {
+		return "image"
+	}
+	if strings.HasPrefix(mt, "video/") {
+		return "video"
+	}
+	if strings.HasPrefix(mt, "audio/") {
+		return "audio"
+	}
+
+	if name, ok := findDocumentFilename(doc.Attributes); ok {
+		switch strings.ToLower(filepath.Ext(name)) {
+		case ".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v", ".3gp", ".3g2", ".wmv", ".mpeg", ".mpg", ".m2ts", ".mts", ".ts", ".vob", ".ogv", ".f4v", ".rm", ".rmvb":
+			return "video"
+		case ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".wma", ".amr":
+			return "audio"
+		}
+	}
+
+	return "file"
+}
+
+func detectWebPageContentType(msg *tg.Message, media *tg.MessageMediaWebPage) string {
+	if msg == nil || media == nil {
+		return "other"
+	}
+
+	switch wp := media.Webpage.(type) {
+	case *tg.WebPage:
+		if wp.Document != nil {
+			if doc, ok := wp.Document.AsNotEmpty(); ok && doc != nil {
+				if ct := detectDocumentContentType(doc); ct != "file" {
+					return ct
+				}
+			}
+		}
+
+		switch strings.ToLower(strings.TrimSpace(wp.Type)) {
+		case "video", "gif":
+			return "video"
+		case "photo":
+			return "image"
+		case "document":
+			return "file"
+		}
+
+		et := strings.ToLower(strings.TrimSpace(wp.EmbedType))
+		if strings.HasPrefix(et, "video/") {
+			return "video"
+		}
+		if strings.HasPrefix(et, "image/") {
+			return "image"
+		}
+		if strings.HasPrefix(et, "audio/") {
+			return "audio"
+		}
+
+		if wp.Photo != nil {
+			return "image"
+		}
+	}
+
+	if strings.TrimSpace(msg.Message) != "" {
+		return "text"
+	}
+	return "other"
+}
+
 // DetectContentType detects message content type for filtering.
 // Returns: text|image|video|audio|file|other
 func (m *TaskManager) DetectContentType(msg *tg.Message) string {
@@ -75,35 +158,21 @@ func (m *TaskManager) DetectContentType(msg *tg.Message) string {
 	case *tg.MessageMediaPhoto:
 		return "image"
 	case *tg.MessageMediaDocument:
-		if media.Video || media.Round {
-			return "video"
-		}
 		if media.Voice {
 			return "audio"
 		}
-
-		if media.Document != nil {
-			if doc, ok := media.Document.AsNotEmpty(); ok {
-				for _, attr := range doc.Attributes {
-					switch attr.(type) {
-					case *tg.DocumentAttributeVideo, *tg.DocumentAttributeAnimated:
-						return "video"
-					case *tg.DocumentAttributeAudio:
-						return "audio"
-					}
-				}
-
-				mt := strings.ToLower(strings.TrimSpace(doc.MimeType))
-				if strings.HasPrefix(mt, "image/") {
-					return "image"
-				}
-				if strings.HasPrefix(mt, "audio/") {
-					return "audio"
-				}
-			}
+		if media.Video || media.Round {
+			return "video"
 		}
 
+		if media.Document != nil {
+			if doc, ok := media.Document.AsNotEmpty(); ok && doc != nil {
+				return detectDocumentContentType(doc)
+			}
+		}
 		return "file"
+	case *tg.MessageMediaWebPage:
+		return detectWebPageContentType(msg, media)
 	default:
 		return "other"
 	}

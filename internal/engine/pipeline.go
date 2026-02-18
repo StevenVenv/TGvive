@@ -111,6 +111,13 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 		return m.SendText(ctx, api, peer, msgToSend)
 	}
 
+	if _, err := convertMessageMediaToInput(msgToSend.Media); err != nil {
+		if errors.Is(err, ErrUnsupportedMedia) {
+			return m.SendText(ctx, api, peer, msgToSend)
+		}
+		return err
+	}
+
 	switch task.CloneMode {
 	case 2:
 		return m.SendMedia(ctx, api, msgToSend, task, peer)

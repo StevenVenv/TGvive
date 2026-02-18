@@ -321,6 +321,34 @@ async function removeTask(task: Task) {
   }
 }
 
+type TaskCommand = 'start' | 'pause' | 'stop' | 'edit' | 'log' | 'delete'
+
+function handleTaskCommand(task: Task, cmd: string) {
+  const c = String(cmd || '') as TaskCommand
+  switch (c) {
+    case 'start':
+    case 'pause':
+    case 'stop':
+      void doAction(task, c)
+      return
+    case 'edit':
+      openEdit(task)
+      return
+    case 'log':
+      selectTask(task)
+      return
+    case 'delete':
+      void removeTask(task)
+      return
+  }
+}
+
+function handleSelectedTaskCommand(cmd: TaskCommand | string) {
+  const task = selectedTask.value
+  if (!task) return
+  handleTaskCommand(task, String(cmd || ''))
+}
+
 function selectTask(task: Task) {
   if (!task?.ID) return
   selectedTaskId.value = task.ID
@@ -441,7 +469,31 @@ defineExpose({
                 <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动" />
               </div>
               <div class="toolbar-right">
-                <el-text type="info">点击任务行查看右侧日志</el-text>
+                <el-space size="small" wrap>
+                  <el-text type="info">点击任务行查看右侧日志</el-text>
+                  <el-text v-if="selectedTask" type="success">已选中 #{{ selectedTask.ID }}</el-text>
+                  <el-dropdown
+                    trigger="click"
+                    placement="bottom-end"
+                    :disabled="!selectedTask"
+                    @command="handleSelectedTaskCommand"
+                  >
+                    <el-button size="small" :disabled="!selectedTask">
+                      操作
+                      <i class="ri-arrow-down-s-line" />
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="start">启动</el-dropdown-item>
+                        <el-dropdown-item command="pause">暂停</el-dropdown-item>
+                        <el-dropdown-item command="stop">停止</el-dropdown-item>
+                        <el-dropdown-item divided command="edit">编辑</el-dropdown-item>
+                        <el-dropdown-item command="log">日志</el-dropdown-item>
+                        <el-dropdown-item divided command="delete" class="danger-item">删除</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </el-space>
               </div>
             </div>
 
@@ -509,25 +561,6 @@ defineExpose({
                       </el-text>
                       <el-text type="info">{{ row.run_window || '全天' }}</el-text>
                     </div>
-                  </template>
-                </el-table-column>
-
-                <el-table-column label="操作" width="340" fixed="right">
-                  <template #default="{ row }">
-                    <el-space size="small" wrap>
-                      <el-button size="small" type="success" @click.stop="doAction(row, 'start')">启动</el-button>
-                      <el-button size="small" type="warning" @click.stop="doAction(row, 'pause')">暂停</el-button>
-                      <el-button size="small" type="danger" @click.stop="doAction(row, 'stop')">停止</el-button>
-                      <el-button link type="primary" @click.stop="openEdit(row)">
-                        <i class="ri-edit-line" />
-                        编辑
-                      </el-button>
-                      <el-button link type="primary" @click.stop="selectTask(row)">日志</el-button>
-                      <el-button link type="danger" @click.stop="removeTask(row)">
-                        <i class="ri-delete-bin-line" />
-                        删除
-                      </el-button>
-                    </el-space>
                   </template>
                 </el-table-column>
               </el-table>
@@ -898,6 +931,10 @@ defineExpose({
 
 .muted {
   color: var(--el-text-color-secondary);
+}
+
+:deep(.danger-item) {
+  color: var(--el-color-danger);
 }
 
 .opt {
