@@ -119,7 +119,7 @@ type CommentAllowedTypeKey = 'text' | 'image' | 'file' | 'video'
 const commentAllowedTypeOptions: Array<{ key: CommentAllowedTypeKey; label: string; icon: string }> = [
   { key: 'text', label: '文本', icon: 'ri-file-text-line' },
   { key: 'image', label: '图片', icon: 'ri-image-line' },
-  { key: 'file', label: '文件', icon: 'ri-file-3-line' },
+  { key: 'file', label: '文件(音频/文档)', icon: 'ri-file-3-line' },
   { key: 'video', label: '视频', icon: 'ri-video-line' },
 ]
 
@@ -131,7 +131,7 @@ function defaultCommentRule(enable: boolean): CommentRule {
     filter_mode: 'owner_only',
     trusted_user_ids: [],
     allow_anonymous: false,
-    allowed_types: ['text', 'file'],
+    allowed_types: ['text', 'file', 'audio'],
     block_keywords: [],
   }
 }
@@ -166,7 +166,7 @@ const commentEnable = computed<boolean>({
     form.value.clone_comment = on // legacy sync
 
     if (on && (!Array.isArray(r.allowed_types) || r.allowed_types.length === 0)) {
-      r.allowed_types = ['text', 'file']
+      r.allowed_types = ['text', 'file', 'audio']
     }
   },
 })
@@ -203,6 +203,8 @@ function normalizeCommentAllowedTypes(input: any): CommentAllowedTypeKey[] {
     if (!k) continue
     set.add(k)
   }
+  // Backend may store "audio" separately; UI merges it into "file".
+  if (set.has('audio')) set.add('file')
   const out: CommentAllowedTypeKey[] = []
   for (const k of commentAllowedTypeKeys) {
     if (set.has(k)) out.push(k)
@@ -210,12 +212,20 @@ function normalizeCommentAllowedTypes(input: any): CommentAllowedTypeKey[] {
   return out
 }
 
+function buildCommentAllowedTypesPayload(input: any): string[] {
+  const keys = normalizeCommentAllowedTypes(input)
+  const out = new Set<string>(keys)
+  // UI "file" covers both file + audio.
+  if (out.has('file')) out.add('audio')
+  return Array.from(out)
+}
+
 const commentAllowedTypes = computed<CommentAllowedTypeKey[]>({
   get() {
     return normalizeCommentAllowedTypes(ensureCommentRule().allowed_types)
   },
   set(v) {
-    ensureCommentRule().allowed_types = normalizeCommentAllowedTypes(v)
+    ensureCommentRule().allowed_types = buildCommentAllowedTypesPayload(v)
   },
 })
 
@@ -495,12 +505,12 @@ async function submit() {
     r.enable = Boolean(commentEnable.value)
     r.filter_mode = commentFilterMode.value
     r.trusted_user_ids = parseTrustedUserIDs(commentTrustedUserIDsText.value)
-    r.allowed_types = normalizeCommentAllowedTypes(r.allowed_types)
+    r.allowed_types = buildCommentAllowedTypesPayload(r.allowed_types)
     r.allow_anonymous = Boolean(r.allow_anonymous)
     r.block_keywords = parseBlockKeywords(commentBlockKeywordsText.value)
 
     if (r.enable && (!Array.isArray(r.allowed_types) || r.allowed_types.length === 0)) {
-      r.allowed_types = ['text', 'file']
+      r.allowed_types = ['text', 'file', 'audio']
     }
     form.value.clone_comment = Boolean(r.enable)
     ;(form.value as any).comment_rule = r
@@ -781,11 +791,11 @@ defineExpose<StrategyFormExpose>({
           </div>
 
           <div class="sub-split">
-            <span>评论区复刻</span>
+            <span>评论区设置</span>
           </div>
 
           <el-collapse v-model="commentCollapse" class="comment-collapse">
-            <el-collapse-item name="comment" title="评论区复刻">
+            <el-collapse-item name="comment" title="评论区设置">
               <el-row :gutter="12">
                 <el-col :xs="24" :sm="8">
                   <el-form-item label="启用评论克隆">
@@ -795,10 +805,10 @@ defineExpose<StrategyFormExpose>({
                 <el-col :xs="24" :sm="16">
                   <el-form-item label="模式">
                     <el-radio-group v-model="commentFilterMode" class="radio-dense" :disabled="!commentEnable">
-                      <el-radio label="owner_only">仅楼主/白名单（推荐）</el-radio>
+                      <el-radio label="owner_only">仅官方/白名单（推荐）</el-radio>
                       <el-radio label="all">所有人（慎用）</el-radio>
                     </el-radio-group>
-                    <div class="hint compact">为了防止广告，建议仅允许【文本+文件】，并开启白名单模式</div>
+                    <div class="hint compact">采用任务级独立本地库缓存机制，主频道配额不受评论影响。支持 FloodWait 断点续传。</div>
                   </el-form-item>
                 </el-col>
               </el-row>

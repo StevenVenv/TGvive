@@ -371,7 +371,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				}
 
 				if len(group) > 0 {
-					commentEnabled := commentCfg != nil && commentCfg.Enabled
+					commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 					sentIDs := []int(nil)
 					minInGroup := 0
 					if commentEnabled {
@@ -472,7 +472,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						if commentEnabled && minInGroup > 0 {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, minInGroup, targetID)
+								m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
 							}
 						}
 					}
@@ -535,7 +535,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
-			commentEnabled := commentCfg != nil && commentCfg.Enabled
+			commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 			sentIDs := []int(nil)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
@@ -588,7 +588,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, msg.ID, targetID)
+					m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
 				}
 			}
 
@@ -789,7 +789,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 
 				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
 				if len(group) > 0 {
-					commentEnabled := commentCfg != nil && commentCfg.Enabled
+					commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 					sentIDs := []int(nil)
 					minInGroup := 0
 					if commentEnabled {
@@ -889,7 +889,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						if commentEnabled && minInGroup > 0 {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, minInGroup, targetID)
+								m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
 							}
 						}
 					}
@@ -953,7 +953,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
-			commentEnabled := commentCfg != nil && commentCfg.Enabled
+			commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 			sentIDs := []int(nil)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
@@ -1006,7 +1006,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, msg.ID, targetID)
+					m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
 				}
 			}
 
@@ -1208,7 +1208,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 
 				if len(group) > 0 {
-					commentEnabled := commentCfg != nil && commentCfg.Enabled
+					commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 					sentIDs := []int(nil)
 
 					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
@@ -1297,7 +1297,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						if commentEnabled {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, minInGroup, targetID)
+								m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
 							}
 						}
 					}
@@ -1359,7 +1359,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
-			commentEnabled := commentCfg != nil && commentCfg.Enabled
+			commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 			sentIDs := []int(nil)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
@@ -1412,7 +1412,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, msg.ID, targetID)
+					m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
 				}
 			}
 

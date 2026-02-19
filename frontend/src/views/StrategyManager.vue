@@ -70,7 +70,7 @@ function emptyModel(): StrategyFormModel {
       filter_mode: 'owner_only',
       trusted_user_ids: [],
       allow_anonymous: false,
-      allowed_types: ['text', 'file'],
+      allowed_types: ['text', 'file', 'audio'],
       block_keywords: [],
     },
 
@@ -261,7 +261,7 @@ function normalizeCommentRule(input: any, enable: boolean) {
     block_keywords,
   }
 
-  if (out.enable && out.allowed_types.length === 0) out.allowed_types = ['text', 'file']
+  if (out.enable && out.allowed_types.length === 0) out.allowed_types = ['text', 'file', 'audio']
   return out
 }
 

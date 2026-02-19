@@ -652,7 +652,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					global.AddFiltered(uint64(plan.Skipped))
 				}
 
-				commentEnabled := t.comment != nil && t.comment.Enabled
+				commentEnabled := t.comment != nil && t.comment.Enabled && t.comment.LocalDB != nil
 				sentIDs := []int(nil)
 
 				minID := 0
@@ -748,9 +748,9 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if commentEnabled && minID > 0 {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {
-							if werr := m.writeMessageMapping(t.Ctx, api, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID); werr != nil && global.Logger != nil {
+							if _, _, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID); werr != nil && global.Logger != nil {
 								global.Logger.Warn(
-									"write message mapping failed",
+									"store local mapping failed",
 									zap.Uint("task_id", t.Task.ID),
 									zap.Int("source_msg_id", minID),
 									zap.Int("target_msg_id", targetID),
@@ -833,7 +833,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				need := quotaSendableCount(m, msgToSend, nil)
-				commentEnabled := t.comment != nil && t.comment.Enabled
+				commentEnabled := t.comment != nil && t.comment.Enabled && t.comment.LocalDB != nil
 				sentIDs := []int(nil)
 
 				err := processWithRetry(t.Ctx, func() error {
@@ -868,9 +868,9 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if commentEnabled {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {
-							if werr := m.writeMessageMapping(t.Ctx, api, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID); werr != nil && global.Logger != nil {
+							if _, _, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID); werr != nil && global.Logger != nil {
 								global.Logger.Warn(
-									"write message mapping failed",
+									"store local mapping failed",
 									zap.Uint("task_id", t.Task.ID),
 									zap.Int("source_msg_id", msg.ID),
 									zap.Int("target_msg_id", targetID),
@@ -920,8 +920,8 @@ type telegramRuntime struct {
 	linkedMu    sync.Mutex
 	linkedChats map[int64]*linkedChatInfo // key: channelID
 
-	commentTasksByID    map[uint]*commentRuntimeTask
-	commentByLinkedChat map[int64]map[uint]*commentRuntimeTask // key: linked chat channelID
+	commentTasksByID    map[uint]*commentProducerTask
+	commentByLinkedChat map[int64]map[uint]*commentProducerTask // key: linked chat channelID
 }
 
 func newTelegramRuntime(sessionPath string) *telegramRuntime {
@@ -930,8 +930,8 @@ func newTelegramRuntime(sessionPath string) *telegramRuntime {
 		tasksByID:           make(map[uint]*runtimeTask),
 		bySource:            make(map[int64]map[uint]*runtimeTask),
 		linkedChats:         make(map[int64]*linkedChatInfo),
-		commentTasksByID:    make(map[uint]*commentRuntimeTask),
-		commentByLinkedChat: make(map[int64]map[uint]*commentRuntimeTask),
+		commentTasksByID:    make(map[uint]*commentProducerTask),
+		commentByLinkedChat: make(map[int64]map[uint]*commentProducerTask),
 	}
 }
 
@@ -953,8 +953,8 @@ func (rt *telegramRuntime) shutdown() {
 	}
 	rt.tasksByID = make(map[uint]*runtimeTask)
 	rt.bySource = make(map[int64]map[uint]*runtimeTask)
-	rt.commentTasksByID = make(map[uint]*commentRuntimeTask)
-	rt.commentByLinkedChat = make(map[int64]map[uint]*commentRuntimeTask)
+	rt.commentTasksByID = make(map[uint]*commentProducerTask)
+	rt.commentByLinkedChat = make(map[int64]map[uint]*commentProducerTask)
 	rt.tasksMu.Unlock()
 
 	rt.mu.Lock()
@@ -1266,7 +1266,7 @@ func (m *TaskManager) unregisterTask(taskID uint, sourceChannelID int64) {
 		}
 
 		var removed *runtimeTask
-		var removedComment *commentRuntimeTask
+		var removedComment *commentProducerTask
 		tgRT.tasksMu.Lock()
 		if cur := tgRT.tasksByID[taskID]; cur != nil {
 			removed = cur
@@ -1275,10 +1275,12 @@ func (m *TaskManager) unregisterTask(taskID uint, sourceChannelID int64) {
 		if cur := tgRT.commentTasksByID[taskID]; cur != nil {
 			removedComment = cur
 			delete(tgRT.commentTasksByID, taskID)
-			if mm := tgRT.commentByLinkedChat[cur.SourceLinkedChatID]; mm != nil {
-				delete(mm, taskID)
-				if len(mm) == 0 {
-					delete(tgRT.commentByLinkedChat, cur.SourceLinkedChatID)
+			if cur.comment != nil {
+				if mm := tgRT.commentByLinkedChat[cur.comment.SourceLinkedChatID]; mm != nil {
+					delete(mm, taskID)
+					if len(mm) == 0 {
+						delete(tgRT.commentByLinkedChat, cur.comment.SourceLinkedChatID)
+					}
 				}
 			}
 		}

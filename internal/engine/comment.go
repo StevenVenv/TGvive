@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
+	"my-go-server/internal/engine/localdb"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
@@ -15,11 +17,13 @@ import (
 	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-const groupAnonymousBotID int64 = 1087968824
-
-const muteForeverUnix = 2147483647
+const (
+	groupAnonymousBotID int64 = 1087968824
+	muteForeverUnix     int   = 2147483647
+)
 
 type linkedChatInfo struct {
 	LinkedChatID int64
@@ -37,38 +41,28 @@ type commentPipelineConfig struct {
 
 	SourceLinkedPeer *tg.InputPeerChannel
 	TargetLinkedPeer *tg.InputPeerChannel
+
+	// LocalDB is the task-scoped SQLite handle used by Producer/Consumer.
+	// It is nil when comment mirroring is disabled or localdb init failed.
+	LocalDB *gorm.DB
 }
 
-type commentRuntimeTaskConfig struct {
+type commentProducerTaskConfig struct {
 	Task model.Task
 
 	RunID uint64
 	Ctx   context.Context
 
-	SourceChannelID int64
-	TargetChannelID int64
-
-	SourceLinkedChatID int64
-	TargetLinkedChatID int64
-
-	SourceLinkedPeer *tg.InputPeerChannel
-	TargetLinkedPeer *tg.InputPeerChannel
+	Comment *commentPipelineConfig
 }
 
-type commentRuntimeTask struct {
+type commentProducerTask struct {
 	Task model.Task
 
 	RunID uint64
 	Ctx   context.Context
 
-	SourceChannelID int64
-	TargetChannelID int64
-
-	SourceLinkedChatID int64
-	TargetLinkedChatID int64
-
-	SourceLinkedPeer *tg.InputPeerChannel
-	TargetLinkedPeer *tg.InputPeerChannel
+	comment *commentPipelineConfig
 
 	mu          sync.Mutex
 	ruleKey     string
@@ -86,21 +80,14 @@ type commentRuntimeTask struct {
 	stopOnce sync.Once
 }
 
-func newCommentRuntimeTask(cfg commentRuntimeTaskConfig) *commentRuntimeTask {
-	t := &commentRuntimeTask{
+func newCommentProducerTask(cfg commentProducerTaskConfig) *commentProducerTask {
+	t := &commentProducerTask{
 		Task: cfg.Task,
 
 		RunID: cfg.RunID,
 		Ctx:   cfg.Ctx,
 
-		SourceChannelID: cfg.SourceChannelID,
-		TargetChannelID: cfg.TargetChannelID,
-
-		SourceLinkedChatID: cfg.SourceLinkedChatID,
-		TargetLinkedChatID: cfg.TargetLinkedChatID,
-
-		SourceLinkedPeer: cfg.SourceLinkedPeer,
-		TargetLinkedPeer: cfg.TargetLinkedPeer,
+		comment: cfg.Comment,
 
 		queue: make(chan *tg.Message, 512),
 		done:  make(chan struct{}),
@@ -110,7 +97,7 @@ func newCommentRuntimeTask(cfg commentRuntimeTaskConfig) *commentRuntimeTask {
 	return t
 }
 
-func (t *commentRuntimeTask) stop() {
+func (t *commentProducerTask) stop() {
 	if t == nil {
 		return
 	}
@@ -119,7 +106,7 @@ func (t *commentRuntimeTask) stop() {
 	})
 }
 
-func (t *commentRuntimeTask) enqueue(msg *tg.Message) bool {
+func (t *commentProducerTask) enqueue(msg *tg.Message) bool {
 	if t == nil || msg == nil {
 		return false
 	}
@@ -140,7 +127,7 @@ func (t *commentRuntimeTask) enqueue(msg *tg.Message) bool {
 	}
 }
 
-func (t *commentRuntimeTask) refreshRuleSnapshot() {
+func (t *commentProducerTask) refreshRuleSnapshot() {
 	if t == nil {
 		return
 	}
@@ -208,8 +195,11 @@ func (t *commentRuntimeTask) refreshRuleSnapshot() {
 	}
 }
 
-func (t *commentRuntimeTask) run(m *TaskManager, api *tg.Client) {
+func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 	if t == nil || m == nil || api == nil || t.Ctx == nil {
+		return
+	}
+	if t.comment == nil || t.comment.LocalDB == nil {
 		return
 	}
 
@@ -251,27 +241,7 @@ func (t *commentRuntimeTask) run(m *TaskManager, api *tg.Client) {
 				continue
 			}
 
-			var mapping model.MessageMapping
-			if global.DB == nil {
-				continue
-			}
-			err := global.DB.
-				Where("source_channel_id = ? AND source_msg_id = ? AND target_channel_id = ?", t.SourceChannelID, rootID, t.TargetChannelID).
-				First(&mapping).Error
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					continue
-				}
-				if global.Logger != nil {
-					global.Logger.Warn("query message mapping failed", zap.Uint("task_id", t.Task.ID), zap.Error(err))
-				}
-				continue
-			}
-			if mapping.TargetMsgID <= 0 {
-				continue
-			}
-
-			if !shouldCloneCommentByIdentity(msg, t.SourceChannelID, filterMode, trusted, allowAnonymous) {
+			if !shouldCloneCommentByIdentity(msg, t.comment.SourceChannelID, filterMode, trusted, allowAnonymous) {
 				continue
 			}
 
@@ -288,15 +258,30 @@ func (t *commentRuntimeTask) run(m *TaskManager, api *tg.Client) {
 				continue
 			}
 
-			if err := m.sendCommentWithFallback(t.Ctx, api, t.SourceLinkedPeer, t.TargetLinkedPeer, msg, mapping.TargetMsgID, t.Task.ID); err != nil {
-				if global.Logger != nil {
-					global.Logger.Warn(
-						"send mirrored comment failed",
-						zap.Uint("task_id", t.Task.ID),
-						zap.Int("msg_id", msg.ID),
-						zap.Error(err),
-					)
-				}
+			payload, err := localdb.WashMessage(msg, m.DetectContentType)
+			if err != nil || payload == nil {
+				continue
+			}
+			b, err := json.Marshal(payload)
+			if err != nil {
+				continue
+			}
+
+			rec := localdb.LocalComment{
+				MsgID:         msg.ID,
+				ReplyToRootID: rootID,
+				Status:        "pending",
+				Attempts:      0,
+				NextAttemptAt: time.Now(),
+				LightPayload:  b,
+			}
+			if err := t.comment.LocalDB.
+				Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "msg_id"}},
+					DoNothing: true,
+				}).
+				Create(&rec).Error; err != nil && global.Logger != nil {
+				global.Logger.Warn("store local comment failed", zap.Uint("task_id", t.Task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
 			}
 		}
 	}
@@ -576,24 +561,27 @@ func (rt *telegramRuntime) ensureLinkedChat(ctx context.Context, api *tg.Client,
 	return info, nil
 }
 
-func (m *TaskManager) registerCommentTask(tgRT *telegramRuntime, cfg commentRuntimeTaskConfig) error {
+func (m *TaskManager) registerCommentProducerTask(tgRT *telegramRuntime, cfg commentProducerTaskConfig) error {
 	if m == nil || tgRT == nil {
 		return errors.New("telegram runtime not initialized")
 	}
 	if cfg.Task.ID == 0 {
 		return errors.New("task id is required")
 	}
-	if cfg.SourceChannelID == 0 {
+	if cfg.Comment == nil || !cfg.Comment.Enabled {
+		return errors.New("comment config is required")
+	}
+	if cfg.Comment.SourceChannelID == 0 {
 		return errors.New("source_channel_id is required")
 	}
-	if cfg.TargetChannelID == 0 {
-		return errors.New("target_channel_id is required")
+	if cfg.Comment.SourceLinkedChatID == 0 {
+		return errors.New("source_linked_chat_id is required")
 	}
-	if cfg.SourceLinkedChatID == 0 || cfg.TargetLinkedChatID == 0 {
-		return errors.New("linked_chat_id is required")
+	if cfg.Comment.SourceLinkedPeer == nil {
+		return errors.New("source linked peer is nil")
 	}
-	if cfg.SourceLinkedPeer == nil || cfg.TargetLinkedPeer == nil {
-		return errors.New("linked peer is nil")
+	if cfg.Comment.LocalDB == nil {
+		return errors.New("localdb is nil")
 	}
 	if cfg.Ctx == nil {
 		return errors.New("task context is nil")
@@ -601,25 +589,25 @@ func (m *TaskManager) registerCommentTask(tgRT *telegramRuntime, cfg commentRunt
 
 	taskID := cfg.Task.ID
 
-	var toStop *commentRuntimeTask
+	var toStop *commentProducerTask
 	tgRT.tasksMu.Lock()
 	if prev := tgRT.commentTasksByID[taskID]; prev != nil {
 		toStop = prev
 		prev.stop()
 	}
-	taskPtr := newCommentRuntimeTask(cfg)
+	taskPtr := newCommentProducerTask(cfg)
 	if tgRT.commentTasksByID == nil {
-		tgRT.commentTasksByID = make(map[uint]*commentRuntimeTask)
+		tgRT.commentTasksByID = make(map[uint]*commentProducerTask)
 	}
 	tgRT.commentTasksByID[taskID] = taskPtr
 
-	mm := tgRT.commentByLinkedChat[cfg.SourceLinkedChatID]
+	mm := tgRT.commentByLinkedChat[cfg.Comment.SourceLinkedChatID]
 	if mm == nil {
 		if tgRT.commentByLinkedChat == nil {
-			tgRT.commentByLinkedChat = make(map[int64]map[uint]*commentRuntimeTask)
+			tgRT.commentByLinkedChat = make(map[int64]map[uint]*commentProducerTask)
 		}
-		mm = make(map[uint]*commentRuntimeTask)
-		tgRT.commentByLinkedChat[cfg.SourceLinkedChatID] = mm
+		mm = make(map[uint]*commentProducerTask)
+		tgRT.commentByLinkedChat[cfg.Comment.SourceLinkedChatID] = mm
 	}
 	mm[taskID] = taskPtr
 	api := tgRT.api
@@ -646,7 +634,7 @@ func (m *TaskManager) dispatchCommentMessage(tgRT *telegramRuntime, channelID in
 		tgRT.tasksMu.RUnlock()
 		return
 	}
-	tasks := make([]*commentRuntimeTask, 0, len(mm))
+	tasks := make([]*commentProducerTask, 0, len(mm))
 	for _, rt := range mm {
 		if rt != nil {
 			tasks = append(tasks, rt)

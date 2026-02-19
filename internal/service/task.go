@@ -146,5 +146,8 @@ func DeleteTask(userID uint, taskID uint) error {
 	}
 
 	engine.Manager.StopTask(task.ID)
+	if err := engine.Manager.DestroyLocalDB(task.ID); err != nil && global.Logger != nil {
+		global.Logger.Warn("destroy task localdb failed: " + err.Error())
+	}
 	return global.DB.Delete(&task).Error
 }

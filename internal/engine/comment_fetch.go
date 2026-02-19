@@ -6,10 +6,11 @@ import (
 	"sort"
 
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 const (
-	commentFetchPageSize = 50
+	commentFetchPageSize = 200
 	commentFetchMaxTotal = 200
 )
 
@@ -40,6 +41,7 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 	seen := make(map[int]struct{}, maxTotal)
 	out := make([]*tg.Message, 0, maxTotal)
 
+	didFallbackLimit := false
 	offsetID := 0
 	for len(out) < maxTotal {
 		if err := ctx.Err(); err != nil {
@@ -59,6 +61,12 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 			Limit:    pageLimit,
 		})
 		if err != nil {
+			// Some Telegram backends reject large limits; fallback to a smaller page size.
+			if !didFallbackLimit && offsetID == 0 && limit > 50 && tgerr.Is(err, "LIMIT_INVALID") {
+				limit = 50
+				didFallbackLimit = true
+				continue
+			}
 			return nil, err
 		}
 

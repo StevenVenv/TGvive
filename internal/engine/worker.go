@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"my-go-server/internal/engine/localdb"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
@@ -96,11 +97,25 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 							SourceLinkedPeer: srcLinked.Peer,
 							TargetLinkedPeer: dstLinked.Peer,
 						}
-						m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区复刻已启用: source_linked=%d target_linked=%d", srcLinked.LinkedChatID, dstLinked.LinkedChatID))
+
+						// Open task localdb (SQLite) for comment mirroring v2.
+						if db, path, err := localdb.Default.Open(taskID); err != nil {
+							commentCfg = nil
+							m.record(taskID, runID, 0, 0, 0, 0, "评论区设置初始化失败: 打开本地缓存库失败: "+err.Error()+" (已忽略)")
+						} else {
+							commentCfg.LocalDB = db
+							m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, path))
+
+							// Start consumer (async sender).
+							m.startCommentConsumer(ctx, api, task, commentCfg)
+						}
 					}
 				}
 			}
 		}
+	}
+	if commentCfg != nil && commentCfg.LocalDB != nil {
+		defer func() { _ = localdb.Default.Close(taskID) }()
 	}
 
 	m.record(taskID, runID, 0, 0, 0, 0, "开始克隆历史消息")
@@ -147,24 +162,15 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		task.Realtime = enablePush
 		_ = Scheduler.RegisterTask(task)
 
-		if commentCfg != nil && commentCfg.Enabled {
-			if err := m.registerCommentTask(tgRT, commentRuntimeTaskConfig{
-				Task: task,
-
-				RunID: runID,
-				Ctx:   ctx,
-
-				SourceChannelID: commentCfg.SourceChannelID,
-				TargetChannelID: commentCfg.TargetChannelID,
-
-				SourceLinkedChatID: commentCfg.SourceLinkedChatID,
-				TargetLinkedChatID: commentCfg.TargetLinkedChatID,
-
-				SourceLinkedPeer: commentCfg.SourceLinkedPeer,
-				TargetLinkedPeer: commentCfg.TargetLinkedPeer,
+		if commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil {
+			if err := m.registerCommentProducerTask(tgRT, commentProducerTaskConfig{
+				Task:    task,
+				RunID:   runID,
+				Ctx:     ctx,
+				Comment: commentCfg,
 			}); err != nil {
 				commentCfg = nil
-				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 注册监听失败: "+err.Error()+" (已忽略)")
+				m.record(taskID, runID, 0, 0, 0, 0, "评论区设置初始化失败: 注册监听失败: "+err.Error()+" (已忽略)")
 			}
 		}
 

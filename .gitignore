@@ -1,5 +1,6 @@
 logs/
 sessions/
 tmp/
+data/
 .DS_Store
 test/
