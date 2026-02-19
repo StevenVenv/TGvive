@@ -323,28 +323,33 @@ func (m *TaskManager) SendAlbum(ctx context.Context, api *tg.Client, msgs []*tg.
 
 // SendUploadedMedia sends a single media message by downloading to local disk and uploading back (CloneMode=3).
 func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, task model.Task, peer tg.InputPeerClass) error {
+	_, err := m.sendUploadedMediaUpdates(ctx, api, sourcePeer, msg, task, peer)
+	return err
+}
+
+func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, task model.Task, peer tg.InputPeerClass) (tg.UpdatesClass, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if api == nil {
-		return errors.New("tg api is nil")
+		return nil, errors.New("tg api is nil")
 	}
 	if peer == nil {
-		return errors.New("tg peer is nil")
+		return nil, errors.New("tg peer is nil")
 	}
 	if msg == nil || msg.Media == nil {
-		return nil
+		return nil, nil
 	}
 
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
 		if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
-			if serr := m.SendMedia(ctx, api, msg, task, peer); serr == nil {
+			if upd, serr := sendMediaUpdates(ctx, api, peer, msg); serr == nil {
 				global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msg.ID))
-				return nil
+				return upd, nil
 			}
 		}
-		return err
+		return nil, err
 	}
 	if cleanup != nil {
 		defer func() { _ = cleanup() }()
@@ -400,7 +405,7 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 
 						if task.ChangeMD5 {
 							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
-								return err
+								return nil, err
 							}
 						}
 						if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
@@ -431,20 +436,20 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 
 	if task.ChangeMD5 {
 		if err := processor.ModifyFileMD5(uploadPath); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	inputFile, err := m.UploadFile(ctx, api, uploadPath)
 	if err != nil {
-		return fmt.Errorf("upload file %q: %w", uploadPath, err)
+		return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 	}
 
 	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if uploaded == nil {
-		return ErrUnsupportedMedia
+		return nil, ErrUnsupportedMedia
 	}
 	if thumb != nil {
 		if doc, ok := uploaded.(*tg.InputMediaUploadedDocument); ok {
@@ -453,7 +458,7 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 	}
 	rid, err := randomID()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req := &tg.MessagesSendMediaRequest{
@@ -466,24 +471,30 @@ func (m *TaskManager) SendUploadedMedia(ctx context.Context, api *tg.Client, sou
 		req.Entities = msg.Entities
 	}
 
-	if _, err := api.MessagesSendMedia(ctx, req); err != nil {
-		return fmt.Errorf("send uploaded media failed (path=%q): %w", uploadPath, err)
+	upd, err := api.MessagesSendMedia(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("send uploaded media failed (path=%q): %w", uploadPath, err)
 	}
 
-	return nil
+	return upd, nil
 }
 
 // SendUploadedAlbum sends grouped media by downloading and re-uploading (CloneMode=3).
 // Only the first item keeps caption/entities.
 func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) error {
+	_, err := m.sendUploadedAlbumUpdates(ctx, api, sourcePeer, msgs, task, peer)
+	return err
+}
+
+func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) (tg.UpdatesClass, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if api == nil {
-		return errors.New("tg api is nil")
+		return nil, errors.New("tg api is nil")
 	}
 	if peer == nil {
-		return errors.New("tg peer is nil")
+		return nil, errors.New("tg peer is nil")
 	}
 
 	var mediaMsgs []*tg.Message
@@ -499,9 +510,9 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 
 	switch len(mediaMsgs) {
 	case 0:
-		return nil
+		return nil, nil
 	case 1:
-		return m.SendUploadedMedia(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
+		return m.sendUploadedMediaUpdates(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
 	}
 
 	ups := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
@@ -523,12 +534,12 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
 			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
-				if serr := m.SendAlbum(ctx, api, mediaMsgs, task, peer); serr == nil {
+				if upd, serr := sendAlbumUpdates(ctx, api, peer, mediaMsgs); serr == nil {
 					global.BroadcastLog(fmt.Sprintf("[WARN] Album download failed, fallback to send by reference (grouped_id=%d)", msg.GroupedID))
-					return nil
+					return upd, nil
 				}
 			}
-			return err
+			return nil, err
 		}
 		cleanups = append(cleanups, cleanup)
 		localPaths = append(localPaths, localPath)
@@ -581,7 +592,7 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 
 							if task.ChangeMD5 {
 								if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
-									return err
+									return nil, err
 								}
 							}
 							if inputThumb, err := m.UploadFile(ctx, api, coverUploadPath); err != nil {
@@ -612,20 +623,20 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 
 		if task.ChangeMD5 {
 			if err := processor.ModifyFileMD5(uploadPath); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		inputFile, err := m.UploadFile(ctx, api, uploadPath)
 		if err != nil {
-			return fmt.Errorf("upload file %q: %w", uploadPath, err)
+			return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 		}
 
 		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if uploaded == nil {
-			return ErrUnsupportedMedia
+			return nil, ErrUnsupportedMedia
 		}
 		if thumb != nil {
 			if doc, ok := uploaded.(*tg.InputMediaUploadedDocument); ok {
@@ -634,12 +645,12 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 		}
 		inputMedia, err := uploadMediaForAlbum(ctx, api, peer, uploaded)
 		if err != nil {
-			return fmt.Errorf("upload media for album failed (path=%q): %w", uploadPath, err)
+			return nil, fmt.Errorf("upload media for album failed (path=%q): %w", uploadPath, err)
 		}
 
 		rid, err := randomID()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		ups = append(ups, tg.InputSingleMedia{
@@ -649,10 +660,10 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 	}
 
 	if len(ups) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(ups) == 1 {
-		return m.SendUploadedMedia(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
+		return m.sendUploadedMediaUpdates(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
 	}
 
 	// Caption/entities only on the first item.
@@ -661,14 +672,15 @@ func (m *TaskManager) SendUploadedAlbum(ctx context.Context, api *tg.Client, sou
 		ups[0].Entities = mediaMsgs[0].Entities
 	}
 
-	if _, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+	upd, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
 		Peer:       peer,
 		MultiMedia: ups,
-	}); err != nil {
-		return fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)
 	}
 
-	return nil
+	return upd, nil
 }
 
 func convertMessageMediaToInput(m tg.MessageMediaClass) (tg.InputMediaClass, error) {

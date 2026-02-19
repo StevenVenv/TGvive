@@ -65,6 +65,15 @@ function emptyModel(): StrategyFormModel {
     enable_realtime: false,
     schedule_rules: [],
 
+    comment_rule: {
+      enable: false,
+      filter_mode: 'owner_only',
+      trusted_user_ids: [],
+      allow_anonymous: false,
+      allowed_types: ['text', 'file'],
+      block_keywords: [],
+    },
+
     keep_reply: false,
     realtime: false,
     clone_comment: false,
@@ -199,12 +208,71 @@ function normalizeFileExtList(input: any): string[] {
   return out
 }
 
+function normalizeCommentRule(input: any, enable: boolean) {
+  const raw = input && typeof input === 'object' ? input : {}
+  const filter_mode = String((raw as any).filter_mode ?? 'owner_only')
+    .trim()
+    .toLowerCase()
+
+  const seenIDs = new Set<number>()
+  const trusted_user_ids: number[] = []
+  const ids = Array.isArray((raw as any).trusted_user_ids) ? ((raw as any).trusted_user_ids as any[]) : []
+  for (const v of ids) {
+    const n = Number(v)
+    if (!Number.isFinite(n) || n <= 0) continue
+    const id = Math.floor(n)
+    if (!Number.isFinite(id) || id <= 0) continue
+    if (seenIDs.has(id)) continue
+    seenIDs.add(id)
+    trusted_user_ids.push(id)
+  }
+
+  const seenTypes = new Set<string>()
+  const allowed_types: string[] = []
+  const types = Array.isArray((raw as any).allowed_types) ? ((raw as any).allowed_types as any[]) : []
+  for (const v of types) {
+    const k = String(v || '')
+      .trim()
+      .toLowerCase()
+    if (!k) continue
+    if (seenTypes.has(k)) continue
+    seenTypes.add(k)
+    allowed_types.push(k)
+  }
+
+  const seenWords = new Set<string>()
+  const block_keywords: string[] = []
+  const words = Array.isArray((raw as any).block_keywords) ? ((raw as any).block_keywords as any[]) : []
+  for (const v of words) {
+    const w = String(v || '').trim()
+    if (!w) continue
+    const key = w.toLowerCase()
+    if (seenWords.has(key)) continue
+    seenWords.add(key)
+    block_keywords.push(w)
+  }
+
+  const out = {
+    enable: Boolean(enable),
+    filter_mode: filter_mode === 'all' ? 'all' : 'owner_only',
+    trusted_user_ids,
+    allow_anonymous: Boolean((raw as any).allow_anonymous),
+    allowed_types,
+    block_keywords,
+  }
+
+  if (out.enable && out.allowed_types.length === 0) out.allowed_types = ['text', 'file']
+  return out
+}
+
 function buildPayload(m: StrategyFormModel): Partial<Strategy> {
   const poll = Number(m.poll_interval ?? 0)
   const enable = Boolean((m as any).enable_realtime ?? m.realtime)
   const types = Array.isArray(m.allowed_types) ? m.allowed_types : Array.isArray(m.content_types) ? m.content_types : []
   const blockExts = normalizeFileExtList((m as any).block_file_exts)
   const allowExts = normalizeFileExtList((m as any).allow_file_exts)
+  const commentEnable = Boolean((m as any)?.comment_rule?.enable ?? m.clone_comment)
+  const comment_rule = normalizeCommentRule((m as any).comment_rule, commentEnable)
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
@@ -227,7 +295,8 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     schedule_rules: normalizeScheduleRules((m as any).schedule_rules),
 
     keep_reply: Boolean(m.keep_reply),
-    clone_comment: Boolean(m.clone_comment),
+    clone_comment: commentEnable,
+    comment_rule,
     gpu_accel: Boolean(m.gpu_accel),
     change_md5: Boolean(m.change_md5),
     enable_media_edit: Boolean((m as any).enable_media_edit),
@@ -250,6 +319,9 @@ function fillEdit(row: Strategy) {
         : []
   const blockExts = Array.isArray((row as any).block_file_exts) ? ([...(row as any).block_file_exts] as string[]) : []
   const allowExts = Array.isArray((row as any).allow_file_exts) ? ([...(row as any).allow_file_exts] as string[]) : []
+  const rawComment = (row as any).comment_rule
+  const commentEnable = Boolean((rawComment as any)?.enable ?? row.clone_comment)
+  const comment_rule = normalizeCommentRule(rawComment, commentEnable)
   Object.assign(editModel, emptyModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
@@ -268,9 +340,11 @@ function fillEdit(row: Strategy) {
     enable_realtime: enable,
     schedule_rules: normalizeScheduleRules((row as any).schedule_rules),
 
+    comment_rule,
+
     keep_reply: Boolean(row.keep_reply),
     realtime: enable,
-    clone_comment: Boolean(row.clone_comment),
+    clone_comment: commentEnable,
     gpu_accel: Boolean(row.gpu_accel),
     change_md5: Boolean(row.change_md5),
     enable_media_edit: Boolean((row as any).enable_media_edit),

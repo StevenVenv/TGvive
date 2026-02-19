@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
+import type { CommentRule } from '../../api'
 
 export type ScheduleRule = {
   start: string
@@ -25,6 +26,8 @@ export type StrategyFormModel = {
   poll_interval: number
   enable_realtime: boolean
   schedule_rules: ScheduleRule[]
+
+  comment_rule: CommentRule
 
   keep_reply: boolean
   realtime: boolean
@@ -108,6 +111,177 @@ const enablePull = computed<boolean>({
     if (!Number.isFinite(cur) || cur <= 0) form.value.poll_interval = 60
   },
 })
+
+const commentCollapse = ref<string[]>(['comment'])
+
+type CommentAllowedTypeKey = 'text' | 'image' | 'file' | 'video'
+
+const commentAllowedTypeOptions: Array<{ key: CommentAllowedTypeKey; label: string; icon: string }> = [
+  { key: 'text', label: '文本', icon: 'ri-file-text-line' },
+  { key: 'image', label: '图片', icon: 'ri-image-line' },
+  { key: 'file', label: '文件', icon: 'ri-file-3-line' },
+  { key: 'video', label: '视频', icon: 'ri-video-line' },
+]
+
+const commentAllowedTypeKeys = commentAllowedTypeOptions.map((x) => x.key)
+
+function defaultCommentRule(enable: boolean): CommentRule {
+  return {
+    enable,
+    filter_mode: 'owner_only',
+    trusted_user_ids: [],
+    allow_anonymous: false,
+    allowed_types: ['text', 'file'],
+    block_keywords: [],
+  }
+}
+
+function ensureCommentRule(): CommentRule {
+  const f = form.value as any
+  let r = f.comment_rule as CommentRule | undefined
+  if (!r || typeof r !== 'object') {
+    r = defaultCommentRule(Boolean(f.clone_comment))
+    f.comment_rule = r
+  }
+
+  r.enable = Boolean((r as any).enable)
+  r.filter_mode = String((r as any).filter_mode || 'owner_only')
+  r.allow_anonymous = Boolean((r as any).allow_anonymous)
+
+  r.trusted_user_ids = Array.isArray((r as any).trusted_user_ids) ? ((r as any).trusted_user_ids as number[]) : []
+  r.allowed_types = Array.isArray((r as any).allowed_types) ? ((r as any).allowed_types as string[]) : []
+  r.block_keywords = Array.isArray((r as any).block_keywords) ? ((r as any).block_keywords as string[]) : []
+
+  return r
+}
+
+const commentEnable = computed<boolean>({
+  get() {
+    return Boolean(ensureCommentRule().enable)
+  },
+  set(v) {
+    const on = Boolean(v)
+    const r = ensureCommentRule()
+    r.enable = on
+    form.value.clone_comment = on // legacy sync
+
+    if (on && (!Array.isArray(r.allowed_types) || r.allowed_types.length === 0)) {
+      r.allowed_types = ['text', 'file']
+    }
+  },
+})
+
+watch(
+  () => Boolean(form.value.clone_comment),
+  (v) => {
+    const r = ensureCommentRule()
+    if (r.enable !== v) r.enable = v
+  },
+  { immediate: true },
+)
+
+const commentFilterMode = computed<'owner_only' | 'all'>({
+  get() {
+    const raw = String(ensureCommentRule().filter_mode || '')
+      .trim()
+      .toLowerCase()
+    if (raw === 'all') return 'all'
+    return 'owner_only'
+  },
+  set(v) {
+    ensureCommentRule().filter_mode = v
+  },
+})
+
+function normalizeCommentAllowedTypes(input: any): CommentAllowedTypeKey[] {
+  const raw = Array.isArray(input) ? input : []
+  const set = new Set<string>()
+  for (const v of raw) {
+    const k = String(v || '')
+      .trim()
+      .toLowerCase()
+    if (!k) continue
+    set.add(k)
+  }
+  const out: CommentAllowedTypeKey[] = []
+  for (const k of commentAllowedTypeKeys) {
+    if (set.has(k)) out.push(k)
+  }
+  return out
+}
+
+const commentAllowedTypes = computed<CommentAllowedTypeKey[]>({
+  get() {
+    return normalizeCommentAllowedTypes(ensureCommentRule().allowed_types)
+  },
+  set(v) {
+    ensureCommentRule().allowed_types = normalizeCommentAllowedTypes(v)
+  },
+})
+
+const commentAllowAnonymous = computed<boolean>({
+  get() {
+    return Boolean(ensureCommentRule().allow_anonymous)
+  },
+  set(v) {
+    ensureCommentRule().allow_anonymous = Boolean(v)
+  },
+})
+
+const commentTrustedUserIDsText = ref('')
+const commentBlockKeywordsText = ref('')
+
+watch(
+  () => ensureCommentRule().trusted_user_ids.join(','),
+  (v) => {
+    commentTrustedUserIDsText.value = v
+  },
+  { immediate: true },
+)
+
+watch(
+  () => ensureCommentRule().block_keywords.join('\n'),
+  (v) => {
+    commentBlockKeywordsText.value = v
+  },
+  { immediate: true },
+)
+
+function parseTrustedUserIDs(input: string): number[] {
+  const raw = String(input || '')
+    .trim()
+    .split(/[\s,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+  const out: number[] = []
+  const seen = new Set<number>()
+  for (const part of raw) {
+    const n = Number(part)
+    if (!Number.isFinite(n) || n <= 0) continue
+    const id = Math.floor(n)
+    if (!Number.isFinite(id) || id <= 0) continue
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+function parseBlockKeywords(input: string): string[] {
+  const raw = String(input || '')
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const w of raw) {
+    const k = w.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(w)
+  }
+  return out
+}
 
 function normalizeScheduleRules(input: any): ScheduleRule[] {
   const raw = Array.isArray(input) ? input : []
@@ -314,6 +488,24 @@ async function submit() {
   ;(form.value as any).block_file_exts = normalizeFileExtList((form.value as any).block_file_exts)
   ;(form.value as any).allow_file_exts = normalizeFileExtList((form.value as any).allow_file_exts)
   form.value.schedule_rules = normalizeScheduleRules(form.value.schedule_rules)
+
+  // normalize comment_rule + sync legacy flag
+  {
+    const r = ensureCommentRule()
+    r.enable = Boolean(commentEnable.value)
+    r.filter_mode = commentFilterMode.value
+    r.trusted_user_ids = parseTrustedUserIDs(commentTrustedUserIDsText.value)
+    r.allowed_types = normalizeCommentAllowedTypes(r.allowed_types)
+    r.allow_anonymous = Boolean(r.allow_anonymous)
+    r.block_keywords = parseBlockKeywords(commentBlockKeywordsText.value)
+
+    if (r.enable && (!Array.isArray(r.allowed_types) || r.allowed_types.length === 0)) {
+      r.allowed_types = ['text', 'file']
+    }
+    form.value.clone_comment = Boolean(r.enable)
+    ;(form.value as any).comment_rule = r
+  }
+
   const ok = await validate()
   if (!ok) return
   emit('submit')
@@ -589,12 +781,76 @@ defineExpose<StrategyFormExpose>({
           </div>
 
           <div class="sub-split">
+            <span>评论区复刻</span>
+          </div>
+
+          <el-collapse v-model="commentCollapse" class="comment-collapse">
+            <el-collapse-item name="comment" title="评论区复刻">
+              <el-row :gutter="12">
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="启用评论克隆">
+                    <el-switch v-model="commentEnable" inline-prompt active-text="开" inactive-text="关" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="16">
+                  <el-form-item label="模式">
+                    <el-radio-group v-model="commentFilterMode" class="radio-dense" :disabled="!commentEnable">
+                      <el-radio label="owner_only">仅楼主/白名单（推荐）</el-radio>
+                      <el-radio label="all">所有人（慎用）</el-radio>
+                    </el-radio-group>
+                    <div class="hint compact">为了防止广告，建议仅允许【文本+文件】，并开启白名单模式</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row :gutter="12">
+                <el-col :xs="24" :sm="16">
+                  <el-form-item label="白名单 UserID（逗号/空格分隔）">
+                    <el-input
+                      v-model="commentTrustedUserIDsText"
+                      type="textarea"
+                      :rows="2"
+                      :disabled="!commentEnable"
+                      placeholder="例如：123456789, 987654321"
+                    />
+                    <div class="hint compact">仅搬运这些账号或楼主本人在评论区的发言</div>
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="匿名管理员">
+                    <el-switch v-model="commentAllowAnonymous" inline-prompt active-text="允" inactive-text="拒" :disabled="!commentEnable" />
+                    <div class="hint compact">允许 GroupAnonymousBot</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-form-item label="评论区媒体类型（独立规则）">
+                <el-checkbox-group v-model="commentAllowedTypes" :disabled="!commentEnable" class="types-group">
+                  <el-checkbox v-for="opt in commentAllowedTypeOptions" :key="opt.key" :label="opt.key" class="type-item">
+                    <i :class="opt.icon" />
+                    <span class="type-label">{{ opt.label }}</span>
+                  </el-checkbox>
+                </el-checkbox-group>
+              </el-form-item>
+
+              <el-form-item label="垃圾词黑名单（每行一个）">
+                <el-input
+                  v-model="commentBlockKeywordsText"
+                  type="textarea"
+                  :rows="3"
+                  :disabled="!commentEnable"
+                  placeholder="例如：免费\n加群\n私聊"
+                />
+              </el-form-item>
+            </el-collapse-item>
+          </el-collapse>
+
+          <div class="sub-split">
             <span>处理开关</span>
           </div>
 
           <div class="switch-wrap">
             <el-switch v-model="form.keep_reply" active-text="保留回复" />
-            <el-switch v-model="form.clone_comment" active-text="克隆评论" />
             <el-tooltip effect="dark" placement="top" content="媒体编辑仅在‘上传模式’下可用" :disabled="!mediaEditDisabled">
               <span class="switch-tooltip">
                 <el-switch v-model="form.enable_media_edit" :disabled="mediaEditDisabled" active-text="媒体编辑" />

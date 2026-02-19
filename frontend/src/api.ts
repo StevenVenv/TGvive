@@ -67,6 +67,8 @@ export type Strategy = {
   enable_realtime?: boolean
   schedule_rules?: Array<{ start: string; end: string; limit: number }>
 
+  comment_rule?: CommentRule
+
   keep_reply?: boolean
   realtime?: boolean
   clone_comment?: boolean
@@ -79,6 +81,15 @@ export type Strategy = {
 
   daily_limit?: number
   run_window?: string
+}
+
+export type CommentRule = {
+  enable: boolean
+  filter_mode: 'owner_only' | 'all' | string
+  trusted_user_ids: number[]
+  allow_anonymous: boolean
+  allowed_types: string[]
+  block_keywords: string[]
 }
 
 export type ReplaceRule = {

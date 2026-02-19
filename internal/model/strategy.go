@@ -49,6 +49,9 @@ type Strategy struct {
 	// ScheduleRules stores slot based limits, e.g. [{start:"10:00",end:"11:00",limit:2}, ...]
 	ScheduleRules datatypes.JSON `gorm:"type:json" json:"schedule_rules"`
 
+	// CommentRule stores comment mirroring rules.
+	CommentRule datatypes.JSON `gorm:"type:json" json:"comment_rule"`
+
 	// 开关配置 (布尔值)
 	KeepReply bool `gorm:"default:false" json:"keep_reply"`
 	// Realtime is kept for backward compatibility (legacy field).

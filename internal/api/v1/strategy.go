@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -10,6 +12,7 @@ import (
 	"my-go-server/pkg/app"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -120,6 +123,154 @@ func syncStrategyFileSuffixes(s *model.Strategy) {
 	s.AllowFileExts = model.CSVStringSlice(strings.Join(allow, ","))
 }
 
+func isEmptyJSON(raw datatypes.JSON) bool {
+	if raw == nil {
+		return true
+	}
+	v := strings.TrimSpace(string(raw))
+	return v == "" || v == "null"
+}
+
+func defaultCommentRule() model.CommentRule {
+	return model.CommentRule{
+		Enable:         true,
+		FilterMode:     "owner_only",
+		AllowAnonymous: false,
+		AllowedTypes:   []string{"text", "file"},
+	}
+}
+
+func normalizeCommentRule(in model.CommentRule) model.CommentRule {
+	out := in
+	out.FilterMode = strings.ToLower(strings.TrimSpace(out.FilterMode))
+	switch out.FilterMode {
+	case "whitelist":
+		out.FilterMode = "owner_only"
+	case "owner_only", "all":
+	default:
+		out.FilterMode = "owner_only"
+	}
+
+	// Normalize trusted user IDs (unique, >0).
+	if len(out.TrustedUserIDs) > 0 {
+		seen := make(map[int64]struct{}, len(out.TrustedUserIDs))
+		list := make([]int64, 0, len(out.TrustedUserIDs))
+		for _, id := range out.TrustedUserIDs {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			list = append(list, id)
+		}
+		out.TrustedUserIDs = list
+	} else {
+		out.TrustedUserIDs = nil
+	}
+
+	// Normalize allowed types (reuse strategy normalization).
+	out.AllowedTypes = normalizeStrategyTypeList(out.AllowedTypes)
+	if len(out.AllowedTypes) == 0 {
+		out.AllowedTypes = nil
+	}
+
+	// Normalize block keywords (trim, de-dup case-insensitive).
+	if len(out.BlockKeywords) > 0 {
+		seen := make(map[string]struct{}, len(out.BlockKeywords))
+		list := make([]string, 0, len(out.BlockKeywords))
+		for _, w := range out.BlockKeywords {
+			k := strings.TrimSpace(w)
+			if k == "" {
+				continue
+			}
+			lk := strings.ToLower(k)
+			if _, ok := seen[lk]; ok {
+				continue
+			}
+			seen[lk] = struct{}{}
+			list = append(list, k)
+		}
+		out.BlockKeywords = list
+	} else {
+		out.BlockKeywords = nil
+	}
+
+	return out
+}
+
+func normalizeAndSyncStrategyCommentRuleForCreate(s *model.Strategy) error {
+	if s == nil {
+		return nil
+	}
+
+	raw := s.CommentRule
+	if isEmptyJSON(raw) {
+		if s.CloneComment {
+			r := normalizeCommentRule(defaultCommentRule())
+			b, _ := json.Marshal(r)
+			s.CommentRule = b
+			s.CloneComment = true
+		} else {
+			s.CommentRule = nil
+			s.CloneComment = false
+		}
+		return nil
+	}
+
+	var r model.CommentRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("comment_rule 格式错误: " + err.Error())
+	}
+	r = normalizeCommentRule(r)
+	b, _ := json.Marshal(r)
+	s.CommentRule = b
+	s.CloneComment = r.Enable
+	return nil
+}
+
+func normalizeAndSyncStrategyCommentRuleForUpdate(existing model.Strategy, payload *model.Strategy) error {
+	if payload == nil {
+		return nil
+	}
+
+	raw := payload.CommentRule
+	if raw == nil {
+		raw = existing.CommentRule
+	}
+
+	// If both are empty and clone_comment is false, keep it empty.
+	if isEmptyJSON(raw) {
+		if payload.CloneComment {
+			r := normalizeCommentRule(defaultCommentRule())
+			b, _ := json.Marshal(r)
+			payload.CommentRule = b
+			payload.CloneComment = true
+			return nil
+		}
+		payload.CommentRule = nil
+		payload.CloneComment = false
+		return nil
+	}
+
+	var r model.CommentRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("comment_rule 格式错误: " + err.Error())
+	}
+
+	// Sync enable with legacy flag if request did not include comment_rule explicitly.
+	if payload.CommentRule == nil {
+		r.Enable = payload.CloneComment
+	}
+
+	r = normalizeCommentRule(r)
+	b, _ := json.Marshal(r)
+	payload.CommentRule = b
+	payload.CloneComment = r.Enable
+	return nil
+}
+
 // CreateStrategy 创建策略模板
 func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	var s model.Strategy
@@ -174,6 +325,10 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 
 	syncStrategyTypes(&s)
 	syncStrategyFileSuffixes(&s)
+	if err := normalizeAndSyncStrategyCommentRuleForCreate(&s); err != nil {
+		app.FailWithMsg(err.Error(), c)
+		return
+	}
 
 	if err := service.CreateStrategy(&s); err != nil {
 		app.FailWithMsg("策略保存失败: "+err.Error(), c)
@@ -222,6 +377,12 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 		return
 	}
 
+	existing, err := service.GetStrategyByID(userID, uint(idU64))
+	if err != nil {
+		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
+		return
+	}
+
 	payload.Name = strings.TrimSpace(payload.Name)
 	if payload.Name == "" {
 		app.FailWithMsg("策略名称不能为空", c)
@@ -261,6 +422,10 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 
 	syncStrategyTypes(&payload)
 	syncStrategyFileSuffixes(&payload)
+	if err := normalizeAndSyncStrategyCommentRuleForUpdate(existing, &payload); err != nil {
+		app.FailWithMsg(err.Error(), c)
+		return
+	}
 
 	updated, err := service.UpdateStrategy(userID, uint(idU64), &payload)
 	if err != nil {

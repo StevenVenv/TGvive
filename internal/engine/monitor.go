@@ -104,6 +104,7 @@ type runtimeTaskConfig struct {
 	TargetPeer      tg.InputPeerClass
 	Keyword         *keywordPolicy
 	PollIntervalSec int
+	Comment         *commentPipelineConfig
 }
 
 type runtimeTask struct {
@@ -122,6 +123,8 @@ type runtimeTask struct {
 	delayMax          time.Duration
 	keyword           *keywordPolicy
 	pollInterval      time.Duration
+
+	comment *commentPipelineConfig
 
 	queue    chan realtimeJob
 	done     chan struct{}
@@ -149,6 +152,7 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		delayMin:          defaultMsgDelayMin,
 		delayMax:          defaultMsgDelayMax,
 		keyword:           cfg.Keyword,
+		comment:           cfg.Comment,
 
 		queue:             make(chan realtimeJob, 512),
 		done:              make(chan struct{}),
@@ -648,10 +652,20 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					global.AddFiltered(uint64(plan.Skipped))
 				}
 
+				commentEnabled := t.comment != nil && t.comment.Enabled
+				sentIDs := []int(nil)
+
+				minID := 0
 				maxID := 0
 				for _, msg := range batch {
-					if msg != nil && msg.ID > maxID {
+					if msg == nil || msg.ID <= 0 {
+						continue
+					}
+					if maxID == 0 || msg.ID > maxID {
 						maxID = msg.ID
+					}
+					if minID == 0 || msg.ID < minID {
+						minID = msg.ID
 					}
 				}
 
@@ -688,7 +702,23 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				if plan.Need > 0 {
 					err = processWithRetry(t.Ctx, func() error {
 						if plan.Text != nil {
+							if commentEnabled {
+								ids, serr := m.processSingleMessageResult(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Text)
+								if serr != nil {
+									return serr
+								}
+								sentIDs = ids
+								return nil
+							}
 							return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Text)
+						}
+						if commentEnabled {
+							ids, serr := m.processAlbumBatchResult(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Media)
+							if serr != nil {
+								return serr
+							}
+							sentIDs = ids
+							return nil
 						}
 						return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Media, nil)
 					})
@@ -710,22 +740,42 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if pullReserved > 0 {
 						Scheduler.ReleasePull(t.Task.ID, pullReserved)
 					}
-				} else if plan.Need > 0 {
-					global.AddSuccess(uint64(plan.Need))
-					if pullReserved > 0 {
-						commit := plan.Need
-						if commit > pullReserved {
-							commit = pullReserved
-						}
-						if commit > 0 {
-							Scheduler.CommitPull(t.Task.ID, commit)
-						}
-						if extra := pullReserved - commit; extra > 0 {
-							Scheduler.ReleasePull(t.Task.ID, extra)
+				} else {
+					if plan.Need > 0 {
+						global.AddSuccess(uint64(plan.Need))
+					}
+
+					if commentEnabled && minID > 0 {
+						targetID := minPositiveInt(sentIDs)
+						if targetID > 0 {
+							if werr := m.writeMessageMapping(t.Ctx, api, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID); werr != nil && global.Logger != nil {
+								global.Logger.Warn(
+									"write message mapping failed",
+									zap.Uint("task_id", t.Task.ID),
+									zap.Int("source_msg_id", minID),
+									zap.Int("target_msg_id", targetID),
+									zap.Error(werr),
+								)
+							}
 						}
 					}
-				} else if pullReserved > 0 {
-					Scheduler.ReleasePull(t.Task.ID, pullReserved)
+
+					if pullReserved > 0 {
+						if plan.Need > 0 {
+							commit := plan.Need
+							if commit > pullReserved {
+								commit = pullReserved
+							}
+							if commit > 0 {
+								Scheduler.CommitPull(t.Task.ID, commit)
+							}
+							if extra := pullReserved - commit; extra > 0 {
+								Scheduler.ReleasePull(t.Task.ID, extra)
+							}
+						} else {
+							Scheduler.ReleasePull(t.Task.ID, pullReserved)
+						}
+					}
 				}
 				if maxID > 0 {
 					t.advanceCursor(maxID)
@@ -783,8 +833,18 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				need := quotaSendableCount(m, msgToSend, nil)
+				commentEnabled := t.comment != nil && t.comment.Enabled
+				sentIDs := []int(nil)
 
 				err := processWithRetry(t.Ctx, func() error {
+					if commentEnabled {
+						ids, serr := m.processSingleMessageResult(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, msgToSend)
+						if serr != nil {
+							return serr
+						}
+						sentIDs = ids
+						return nil
+					}
 					return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, msgToSend)
 				})
 				if err != nil {
@@ -801,8 +861,24 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							zap.Error(err),
 						)
 					}
-				} else if need > 0 {
-					global.AddSuccess(uint64(need))
+				} else {
+					if need > 0 {
+						global.AddSuccess(uint64(need))
+					}
+					if commentEnabled {
+						targetID := minPositiveInt(sentIDs)
+						if targetID > 0 {
+							if werr := m.writeMessageMapping(t.Ctx, api, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID); werr != nil && global.Logger != nil {
+								global.Logger.Warn(
+									"write message mapping failed",
+									zap.Uint("task_id", t.Task.ID),
+									zap.Int("source_msg_id", msg.ID),
+									zap.Int("target_msg_id", targetID),
+									zap.Error(werr),
+								)
+							}
+						}
+					}
 				}
 
 				if job.fromPull && reservedTotal > 0 {
@@ -840,13 +916,22 @@ type telegramRuntime struct {
 	tasksMu   sync.RWMutex
 	tasksByID map[uint]*runtimeTask
 	bySource  map[int64]map[uint]*runtimeTask
+
+	linkedMu    sync.Mutex
+	linkedChats map[int64]*linkedChatInfo // key: channelID
+
+	commentTasksByID    map[uint]*commentRuntimeTask
+	commentByLinkedChat map[int64]map[uint]*commentRuntimeTask // key: linked chat channelID
 }
 
 func newTelegramRuntime(sessionPath string) *telegramRuntime {
 	return &telegramRuntime{
-		sessionPath: sessionPath,
-		tasksByID:   make(map[uint]*runtimeTask),
-		bySource:    make(map[int64]map[uint]*runtimeTask),
+		sessionPath:         sessionPath,
+		tasksByID:           make(map[uint]*runtimeTask),
+		bySource:            make(map[int64]map[uint]*runtimeTask),
+		linkedChats:         make(map[int64]*linkedChatInfo),
+		commentTasksByID:    make(map[uint]*commentRuntimeTask),
+		commentByLinkedChat: make(map[int64]map[uint]*commentRuntimeTask),
 	}
 }
 
@@ -861,8 +946,15 @@ func (rt *telegramRuntime) shutdown() {
 			t.stop()
 		}
 	}
+	for _, t := range rt.commentTasksByID {
+		if t != nil {
+			t.stop()
+		}
+	}
 	rt.tasksByID = make(map[uint]*runtimeTask)
 	rt.bySource = make(map[int64]map[uint]*runtimeTask)
+	rt.commentTasksByID = make(map[uint]*commentRuntimeTask)
+	rt.commentByLinkedChat = make(map[int64]map[uint]*commentRuntimeTask)
 	rt.tasksMu.Unlock()
 
 	rt.mu.Lock()
@@ -971,6 +1063,7 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 		}
 		if chID, ok := peerToChannelID(msg.PeerID); ok {
 			m.dispatchChannelMessage(rt, chID, msg)
+			m.dispatchCommentMessage(rt, chID, msg)
 		}
 		return nil
 	})
@@ -981,6 +1074,7 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 		}
 		if chID, ok := peerToChannelID(msg.PeerID); ok {
 			m.dispatchChannelMessage(rt, chID, msg)
+			m.dispatchCommentMessage(rt, chID, msg)
 		}
 		return nil
 	})
@@ -1172,10 +1266,21 @@ func (m *TaskManager) unregisterTask(taskID uint, sourceChannelID int64) {
 		}
 
 		var removed *runtimeTask
+		var removedComment *commentRuntimeTask
 		tgRT.tasksMu.Lock()
 		if cur := tgRT.tasksByID[taskID]; cur != nil {
 			removed = cur
 			delete(tgRT.tasksByID, taskID)
+		}
+		if cur := tgRT.commentTasksByID[taskID]; cur != nil {
+			removedComment = cur
+			delete(tgRT.commentTasksByID, taskID)
+			if mm := tgRT.commentByLinkedChat[cur.SourceLinkedChatID]; mm != nil {
+				delete(mm, taskID)
+				if len(mm) == 0 {
+					delete(tgRT.commentByLinkedChat, cur.SourceLinkedChatID)
+				}
+			}
 		}
 		if sourceChannelID != 0 {
 			if mm := tgRT.bySource[sourceChannelID]; mm != nil {
@@ -1197,6 +1302,9 @@ func (m *TaskManager) unregisterTask(taskID uint, sourceChannelID int64) {
 
 		if removed != nil {
 			removed.stop()
+		}
+		if removedComment != nil {
+			removedComment.stop()
 		}
 	}
 
