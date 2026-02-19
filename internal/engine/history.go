@@ -66,10 +66,10 @@ func (m *TaskManager) CloneHistory(ctx context.Context, api *tg.Client, task mod
 		return fmt.Errorf("resolve target peer %q: %w", task.TargetURL, err)
 	}
 
-	return m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, nil, 0)
+	return m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, nil, 0, nil)
 }
 
-func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, task model.Task, kw *keywordPolicy, runID uint64) error {
+func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, task model.Task, kw *keywordPolicy, runID uint64, commentCfg *commentPipelineConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -107,16 +107,16 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 	// 追更: when using new->old mode, a completed task typically ends with history_cursor=1 and would not
 	// fetch new messages on restart. We use history_max_id as the boundary and catch up newest messages first.
 	if order == model.HistoryOrderNewToOld && (task.HistoryMaxID > 0 || task.HistoryCursor > 0) {
-		if err := m.catchUpNewMessagesNewToOld(ctx, api, sourcePeer, targetPeer, task, task.HistoryMaxID, bounds, allowedTypes, pageSize, kw, runID, quota); err != nil {
+		if err := m.catchUpNewMessagesNewToOld(ctx, api, sourcePeer, targetPeer, task, task.HistoryMaxID, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg); err != nil {
 			return err
 		}
 	}
 
 	cursor := task.HistoryCursor
 	if order == model.HistoryOrderOldToNew {
-		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota)
+		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg)
 	}
-	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota)
+	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg)
 }
 
 type historyBounds struct {
@@ -188,6 +188,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 	kw *keywordPolicy,
 	runID uint64,
 	quota *taskQuota,
+	commentCfg *commentPipelineConfig,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -370,6 +371,20 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				}
 
 				if len(group) > 0 {
+					commentEnabled := commentCfg != nil && commentCfg.Enabled
+					sentIDs := []int(nil)
+					minInGroup := 0
+					if commentEnabled {
+						for _, gm := range group {
+							if gm == nil || gm.ID <= 0 {
+								continue
+							}
+							if minInGroup == 0 || gm.ID < minInGroup {
+								minInGroup = gm.ID
+							}
+						}
+					}
+
 					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
 					if plan.Skipped > 0 {
 						global.AddFiltered(uint64(plan.Skipped))
@@ -410,7 +425,23 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						}
 						if err := processWithRetry(ctx, func() error {
 							if plan.Text != nil {
+								if commentEnabled {
+									ids, serr := m.processSingleMessageResult(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Text)
+									if serr != nil {
+										return serr
+									}
+									sentIDs = ids
+									return nil
+								}
 								return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Text)
+							}
+							if commentEnabled {
+								ids, serr := m.processAlbumBatchResult(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Media)
+								if serr != nil {
+									return serr
+								}
+								sentIDs = ids
+								return nil
 							}
 							return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Media, nil)
 						}); err != nil {
@@ -436,6 +467,13 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						global.AddSuccess(uint64(plan.Need))
 						if err := m.quotaAdd(ctx, task.ID, quota, plan.Need); err != nil {
 							return err
+						}
+
+						if commentEnabled && minInGroup > 0 {
+							targetID := minPositiveInt(sentIDs)
+							if targetID > 0 {
+								m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, minInGroup, targetID)
+							}
 						}
 					}
 					cursor = maxInGroup
@@ -497,12 +535,22 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
+			commentEnabled := commentCfg != nil && commentCfg.Enabled
+			sentIDs := []int(nil)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
 					return err
 				}
 			}
 			if err := processWithRetry(ctx, func() error {
+				if commentEnabled {
+					ids, serr := m.processSingleMessageResult(ctx, api, sourcePeer, targetPeer, runtimeTask, msgToSend)
+					if serr != nil {
+						return serr
+					}
+					sentIDs = ids
+					return nil
+				}
 				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, runtimeTask, msgToSend)
 			}); err != nil {
 				if need > 0 {
@@ -536,6 +584,14 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					return err
 				}
 			}
+
+			if commentEnabled {
+				targetID := minPositiveInt(sentIDs)
+				if targetID > 0 {
+					m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, msg.ID, targetID)
+				}
+			}
+
 			cursor = msg.ID
 			if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 				return err
@@ -571,6 +627,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 	kw *keywordPolicy,
 	runID uint64,
 	quota *taskQuota,
+	commentCfg *commentPipelineConfig,
 ) error {
 	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
 
@@ -732,6 +789,20 @@ func (m *TaskManager) cloneHistoryOldToNew(
 
 				// Even if filtered out by content types, we still advance cursor to avoid reprocessing.
 				if len(group) > 0 {
+					commentEnabled := commentCfg != nil && commentCfg.Enabled
+					sentIDs := []int(nil)
+					minInGroup := 0
+					if commentEnabled {
+						for _, gm := range group {
+							if gm == nil || gm.ID <= 0 {
+								continue
+							}
+							if minInGroup == 0 || gm.ID < minInGroup {
+								minInGroup = gm.ID
+							}
+						}
+					}
+
 					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
 					if plan.Skipped > 0 {
 						global.AddFiltered(uint64(plan.Skipped))
@@ -771,7 +842,23 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						}
 						if err := processWithRetry(ctx, func() error {
 							if plan.Text != nil {
+								if commentEnabled {
+									ids, serr := m.processSingleMessageResult(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Text)
+									if serr != nil {
+										return serr
+									}
+									sentIDs = ids
+									return nil
+								}
 								return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Text)
+							}
+							if commentEnabled {
+								ids, serr := m.processAlbumBatchResult(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Media)
+								if serr != nil {
+									return serr
+								}
+								sentIDs = ids
+								return nil
 							}
 							return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Media, nil)
 						}); err != nil {
@@ -797,6 +884,13 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						global.AddSuccess(uint64(plan.Need))
 						if err := m.quotaAdd(ctx, task.ID, quota, plan.Need); err != nil {
 							return err
+						}
+
+						if commentEnabled && minInGroup > 0 {
+							targetID := minPositiveInt(sentIDs)
+							if targetID > 0 {
+								m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, minInGroup, targetID)
+							}
 						}
 					}
 
@@ -859,12 +953,22 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
+			commentEnabled := commentCfg != nil && commentCfg.Enabled
+			sentIDs := []int(nil)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
 					return err
 				}
 			}
 			if err := processWithRetry(ctx, func() error {
+				if commentEnabled {
+					ids, serr := m.processSingleMessageResult(ctx, api, sourcePeer, targetPeer, runtimeTask, msgToSend)
+					if serr != nil {
+						return serr
+					}
+					sentIDs = ids
+					return nil
+				}
 				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, runtimeTask, msgToSend)
 			}); err != nil {
 				if need > 0 {
@@ -898,6 +1002,14 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					return err
 				}
 			}
+
+			if commentEnabled {
+				targetID := minPositiveInt(sentIDs)
+				if targetID > 0 {
+					m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, msg.ID, targetID)
+				}
+			}
+
 			cursor = msg.ID
 			if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 				return err
@@ -928,6 +1040,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 	kw *keywordPolicy,
 	runID uint64,
 	quota *taskQuota,
+	commentCfg *commentPipelineConfig,
 ) error {
 	reqDelayMin, reqDelayMax := defaultReqDelayMin, defaultReqDelayMax
 
@@ -1095,6 +1208,9 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				}
 
 				if len(group) > 0 {
+					commentEnabled := commentCfg != nil && commentCfg.Enabled
+					sentIDs := []int(nil)
+
 					plan := PlanMediaGroup(m, group, curAllowedTypes, curAllowFileSuffixes, curBlockFileSuffixes)
 					if plan.Skipped > 0 {
 						global.AddFiltered(uint64(plan.Skipped))
@@ -1134,7 +1250,23 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						}
 						if err := processWithRetry(ctx, func() error {
 							if plan.Text != nil {
+								if commentEnabled {
+									ids, serr := m.processSingleMessageResult(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Text)
+									if serr != nil {
+										return serr
+									}
+									sentIDs = ids
+									return nil
+								}
 								return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Text)
+							}
+							if commentEnabled {
+								ids, serr := m.processAlbumBatchResult(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Media)
+								if serr != nil {
+									return serr
+								}
+								sentIDs = ids
+								return nil
 							}
 							return m.processAlbumBatch(ctx, api, sourcePeer, targetPeer, runtimeTask, plan.Media, nil)
 						}); err != nil {
@@ -1160,6 +1292,13 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						global.AddSuccess(uint64(plan.Need))
 						if err := m.quotaAdd(ctx, task.ID, quota, plan.Need); err != nil {
 							return err
+						}
+
+						if commentEnabled {
+							targetID := minPositiveInt(sentIDs)
+							if targetID > 0 {
+								m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, minInGroup, targetID)
+							}
 						}
 					}
 					cursor = minInGroup
@@ -1220,12 +1359,22 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
+			commentEnabled := commentCfg != nil && commentCfg.Enabled
+			sentIDs := []int(nil)
 			if need > 0 {
 				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
 					return err
 				}
 			}
 			if err := processWithRetry(ctx, func() error {
+				if commentEnabled {
+					ids, serr := m.processSingleMessageResult(ctx, api, sourcePeer, targetPeer, runtimeTask, msgToSend)
+					if serr != nil {
+						return serr
+					}
+					sentIDs = ids
+					return nil
+				}
 				return m.processSingleMessage(ctx, api, sourcePeer, targetPeer, runtimeTask, msgToSend)
 			}); err != nil {
 				if need > 0 {
@@ -1259,6 +1408,14 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					return err
 				}
 			}
+
+			if commentEnabled {
+				targetID := minPositiveInt(sentIDs)
+				if targetID > 0 {
+					m.cloneCommentsForTrunk(ctx, api, task, sourcePeer, targetPeer, commentCfg, msg.ID, targetID)
+				}
+			}
+
 			cursor = msg.ID
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {
 				return err

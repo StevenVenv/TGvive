@@ -60,8 +60,51 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		m.record(taskID, runID, 0, 0, 0, 0, "加载关键词策略失败: "+kwErr.Error()+" (已忽略)")
 	}
 
+	var commentCfg *commentPipelineConfig
+	{
+		st := ResolveRuntimeStrategy(task)
+		_, enabled, _ := resolveCommentRule(task, st)
+		if enabled {
+			srcCh, okSrc := sourcePeer.(*tg.InputPeerChannel)
+			dstCh, okDst := targetPeer.(*tg.InputPeerChannel)
+			if !okSrc || srcCh == nil || srcCh.ChannelID == 0 {
+				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 源不是频道 (已忽略)")
+			} else if !okDst || dstCh == nil || dstCh.ChannelID == 0 {
+				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 目标不是频道 (已忽略)")
+			} else {
+				srcLinked, err := tgRT.ensureLinkedChat(ctx, api, srcCh)
+				if err != nil {
+					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取源关联群失败: "+err.Error()+" (已忽略)")
+				} else if srcLinked == nil || srcLinked.LinkedChatID == 0 || srcLinked.Peer == nil {
+					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 源频道未配置关联讨论组")
+				} else {
+					dstLinked, err := tgRT.ensureLinkedChat(ctx, api, dstCh)
+					if err != nil {
+						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取目标关联群失败: "+err.Error()+" (已忽略)")
+					} else if dstLinked == nil || dstLinked.LinkedChatID == 0 || dstLinked.Peer == nil {
+						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 目标频道未配置关联讨论组")
+					} else {
+						commentCfg = &commentPipelineConfig{
+							Enabled: true,
+
+							SourceChannelID: sourceChannelID,
+							TargetChannelID: dstCh.ChannelID,
+
+							SourceLinkedChatID: srcLinked.LinkedChatID,
+							TargetLinkedChatID: dstLinked.LinkedChatID,
+
+							SourceLinkedPeer: srcLinked.Peer,
+							TargetLinkedPeer: dstLinked.Peer,
+						}
+						m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区复刻已启用: source_linked=%d target_linked=%d", srcLinked.LinkedChatID, dstLinked.LinkedChatID))
+					}
+				}
+			}
+		}
+	}
+
 	m.record(taskID, runID, 0, 0, 0, 0, "开始克隆历史消息")
-	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, kw, runID); err != nil {
+	if err := m.CloneHistoryWithPeers(ctx, api, sourcePeer, targetPeer, task, kw, runID, commentCfg); err != nil {
 		if ctx.Err() != nil {
 			return
 		}
@@ -104,66 +147,24 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		task.Realtime = enablePush
 		_ = Scheduler.RegisterTask(task)
 
-		var commentCfg *commentPipelineConfig
-		{
-			st := ResolveRuntimeStrategy(task)
-			_, enabled, _ := resolveCommentRule(task, st)
-			if enabled {
-				srcCh, okSrc := sourcePeer.(*tg.InputPeerChannel)
-				dstCh, okDst := targetPeer.(*tg.InputPeerChannel)
-				if !okSrc || srcCh == nil || srcCh.ChannelID == 0 {
-					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 源不是频道 (已忽略)")
-				} else if !okDst || dstCh == nil || dstCh.ChannelID == 0 {
-					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 目标不是频道 (已忽略)")
-				} else {
-					srcLinked, err := tgRT.ensureLinkedChat(ctx, api, srcCh)
-					if err != nil {
-						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取源关联群失败: "+err.Error()+" (已忽略)")
-					} else if srcLinked == nil || srcLinked.LinkedChatID == 0 || srcLinked.Peer == nil {
-						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 源频道未配置关联讨论组")
-					} else {
-						dstLinked, err := tgRT.ensureLinkedChat(ctx, api, dstCh)
-						if err != nil {
-							m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取目标关联群失败: "+err.Error()+" (已忽略)")
-						} else if dstLinked == nil || dstLinked.LinkedChatID == 0 || dstLinked.Peer == nil {
-							m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 目标频道未配置关联讨论组")
-						} else {
-							commentCfg = &commentPipelineConfig{
-								Enabled: true,
+		if commentCfg != nil && commentCfg.Enabled {
+			if err := m.registerCommentTask(tgRT, commentRuntimeTaskConfig{
+				Task: task,
 
-								SourceChannelID: sourceChannelID,
-								TargetChannelID: dstCh.ChannelID,
+				RunID: runID,
+				Ctx:   ctx,
 
-								SourceLinkedChatID: srcLinked.LinkedChatID,
-								TargetLinkedChatID: dstLinked.LinkedChatID,
+				SourceChannelID: commentCfg.SourceChannelID,
+				TargetChannelID: commentCfg.TargetChannelID,
 
-								SourceLinkedPeer: srcLinked.Peer,
-								TargetLinkedPeer: dstLinked.Peer,
-							}
+				SourceLinkedChatID: commentCfg.SourceLinkedChatID,
+				TargetLinkedChatID: commentCfg.TargetLinkedChatID,
 
-							if err := m.registerCommentTask(tgRT, commentRuntimeTaskConfig{
-								Task: task,
-
-								RunID: runID,
-								Ctx:   ctx,
-
-								SourceChannelID: sourceChannelID,
-								TargetChannelID: dstCh.ChannelID,
-
-								SourceLinkedChatID: srcLinked.LinkedChatID,
-								TargetLinkedChatID: dstLinked.LinkedChatID,
-
-								SourceLinkedPeer: srcLinked.Peer,
-								TargetLinkedPeer: dstLinked.Peer,
-							}); err != nil {
-								commentCfg = nil
-								m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 注册监听失败: "+err.Error()+" (已忽略)")
-							} else {
-								m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区复刻已启用: source_linked=%d target_linked=%d", srcLinked.LinkedChatID, dstLinked.LinkedChatID))
-							}
-						}
-					}
-				}
+				SourceLinkedPeer: commentCfg.SourceLinkedPeer,
+				TargetLinkedPeer: commentCfg.TargetLinkedPeer,
+			}); err != nil {
+				commentCfg = nil
+				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 注册监听失败: "+err.Error()+" (已忽略)")
 			}
 		}
 

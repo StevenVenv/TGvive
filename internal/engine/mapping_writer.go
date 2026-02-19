@@ -29,30 +29,32 @@ func findDiscussionRootMsgID(res *tg.MessagesDiscussionMessage, linkedChatID int
 }
 
 func (m *TaskManager) writeMessageMapping(ctx context.Context, api *tg.Client, cfg *commentPipelineConfig, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, sourceChannelMsgID int, targetChannelMsgID int) error {
+	_, _, err := m.writeMessageMappingWithRoots(ctx, api, cfg, sourcePeer, targetPeer, sourceChannelMsgID, targetChannelMsgID)
+	return err
+}
+
+func (m *TaskManager) writeMessageMappingWithRoots(ctx context.Context, api *tg.Client, cfg *commentPipelineConfig, sourcePeer tg.InputPeerClass, targetPeer tg.InputPeerClass, sourceChannelMsgID int, targetChannelMsgID int) (int, int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, 0, err
 	}
 	if cfg == nil || !cfg.Enabled {
-		return nil
+		return 0, 0, nil
 	}
 	if api == nil {
-		return errors.New("tg api is nil")
-	}
-	if global.DB == nil {
-		return nil
+		return 0, 0, errors.New("tg api is nil")
 	}
 	if sourcePeer == nil || targetPeer == nil {
-		return errors.New("tg peer is nil")
+		return 0, 0, errors.New("tg peer is nil")
 	}
 	if sourceChannelMsgID <= 0 || targetChannelMsgID <= 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	// Only channels have linked discussions.
 	_, okSrc := sourcePeer.(*tg.InputPeerChannel)
 	_, okDst := targetPeer.(*tg.InputPeerChannel)
 	if !okSrc || !okDst {
-		return nil
+		return 0, 0, nil
 	}
 
 	srcRes, err := api.MessagesGetDiscussionMessage(ctx, &tg.MessagesGetDiscussionMessageRequest{
@@ -60,11 +62,11 @@ func (m *TaskManager) writeMessageMapping(ctx context.Context, api *tg.Client, c
 		MsgID: sourceChannelMsgID,
 	})
 	if err != nil {
-		return fmt.Errorf("get source discussion message: %w", err)
+		return 0, 0, fmt.Errorf("get source discussion message: %w", err)
 	}
 	srcRoot := findDiscussionRootMsgID(srcRes, cfg.SourceLinkedChatID)
 	if srcRoot <= 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	dstRes, err := api.MessagesGetDiscussionMessage(ctx, &tg.MessagesGetDiscussionMessageRequest{
@@ -72,11 +74,11 @@ func (m *TaskManager) writeMessageMapping(ctx context.Context, api *tg.Client, c
 		MsgID: targetChannelMsgID,
 	})
 	if err != nil {
-		return fmt.Errorf("get target discussion message: %w", err)
+		return srcRoot, 0, fmt.Errorf("get target discussion message: %w", err)
 	}
 	dstRoot := findDiscussionRootMsgID(dstRes, cfg.TargetLinkedChatID)
 	if dstRoot <= 0 {
-		return nil
+		return srcRoot, 0, nil
 	}
 
 	rec := model.MessageMapping{
@@ -86,7 +88,11 @@ func (m *TaskManager) writeMessageMapping(ctx context.Context, api *tg.Client, c
 		TargetMsgID:     dstRoot,
 	}
 
-	return global.DB.
+	if global.DB == nil {
+		return srcRoot, dstRoot, nil
+	}
+
+	return srcRoot, dstRoot, global.DB.
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{
 				{Name: "source_channel_id"},

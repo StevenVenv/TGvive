@@ -17,10 +17,9 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	groupAnonymousBotID int64 = 1087968824
-	muteForeverUnix     int   = 2147483647
-)
+const groupAnonymousBotID int64 = 1087968824
+
+const muteForeverUnix = 2147483647
 
 type linkedChatInfo struct {
 	LinkedChatID int64
