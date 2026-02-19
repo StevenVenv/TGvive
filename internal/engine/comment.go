@@ -19,7 +19,7 @@ import (
 
 const (
 	groupAnonymousBotID int64 = 1087968824
-	muteForeverUnix           = 2147483647
+	muteForeverUnix     int   = 2147483647
 )
 
 type linkedChatInfo struct {
