@@ -180,158 +180,21 @@ func (m *TaskManager) DetectContentType(msg *tg.Message) string {
 }
 
 // SendText sends a plain message (CloneMode=2 helper).
-func (m *TaskManager) SendText(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if api == nil {
-		return errors.New("tg api is nil")
-	}
-	if peer == nil {
-		return errors.New("tg peer is nil")
-	}
-	if msg == nil || strings.TrimSpace(msg.Message) == "" {
-		return nil
-	}
-
-	rid, err := randomID()
-	if err != nil {
-		return err
-	}
-
-	req := &tg.MessagesSendMessageRequest{
-		Peer:     peer,
-		Message:  msg.Message,
-		RandomID: rid,
-	}
-	if len(msg.Entities) > 0 {
-		req.Entities = msg.Entities
-	}
-
-	_, err = api.MessagesSendMessage(ctx, req)
+func (m *TaskManager) SendText(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) error {
+	_, err := m.SendTextResult(ctx, api, msg, task, peer)
 	return err
 }
 
 // SendMedia sends a single media message using InputMediaPhoto/InputMediaDocument (CloneMode=2).
 func (m *TaskManager) SendMedia(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) error {
-	_ = task
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if api == nil {
-		return errors.New("tg api is nil")
-	}
-	if peer == nil {
-		return errors.New("tg peer is nil")
-	}
-	if msg == nil || msg.Media == nil {
-		return nil
-	}
-
-	caption := msg.Message
-	entities := msg.Entities
-	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
-		caption = out
-		entities = nil
-	}
-
-	media, err := convertMessageMediaToInput(msg.Media)
-	if err != nil {
-		return err
-	}
-
-	rid, err := randomID()
-	if err != nil {
-		return err
-	}
-
-	req := &tg.MessagesSendMediaRequest{
-		Peer:     peer,
-		Media:    media,
-		Message:  caption,
-		RandomID: rid,
-	}
-	if len(entities) > 0 {
-		req.Entities = entities
-	}
-
-	_, err = api.MessagesSendMedia(ctx, req)
+	_, err := m.SendMediaResult(ctx, api, msg, task, peer)
 	return err
 }
 
 // SendAlbum sends grouped media (CloneMode=2).
 // Only the first item keeps caption/entities.
 func (m *TaskManager) SendAlbum(ctx context.Context, api *tg.Client, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) error {
-	_ = task
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if api == nil {
-		return errors.New("tg api is nil")
-	}
-	if peer == nil {
-		return errors.New("tg peer is nil")
-	}
-
-	var mediaMsgs []*tg.Message
-	for _, msg := range msgs {
-		if msg == nil || msg.Media == nil {
-			continue
-		}
-		if _, err := convertMessageMediaToInput(msg.Media); err != nil {
-			continue
-		}
-		mediaMsgs = append(mediaMsgs, msg)
-	}
-
-	switch len(mediaMsgs) {
-	case 0:
-		return nil
-	case 1:
-		return m.SendMedia(ctx, api, mediaMsgs[0], task, peer)
-	}
-
-	multi := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
-	for i, msg := range mediaMsgs {
-		inputMedia, err := convertMessageMediaToInput(msg.Media)
-		if err != nil {
-			continue
-		}
-		rid, err := randomID()
-		if err != nil {
-			return err
-		}
-
-		item := tg.InputSingleMedia{
-			Media:    inputMedia,
-			RandomID: rid,
-		}
-		if i == 0 {
-			caption := msg.Message
-			entities := msg.Entities
-			if out, truncated := sanitizeMediaCaptionText(caption); truncated {
-				caption = out
-				entities = nil
-			}
-			item.Message = caption
-			if len(entities) > 0 {
-				item.Entities = entities
-			}
-		}
-		multi = append(multi, item)
-	}
-
-	if len(multi) == 0 {
-		return nil
-	}
-	if len(multi) == 1 {
-		return m.SendMedia(ctx, api, mediaMsgs[0], task, peer)
-	}
-
-	_, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
-		Peer:       peer,
-		MultiMedia: multi,
-	})
+	_, err := m.SendAlbumResult(ctx, api, msgs, task, peer)
 	return err
 }
 
@@ -355,11 +218,14 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 		return nil, nil
 	}
 
+	replyTo := buildKeepReplyInput(task, msg)
+
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
 		if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
-			if upd, serr := sendMediaUpdates(ctx, api, peer, msg); serr == nil {
+			if upd, serr := sendMediaUpdates(ctx, api, peer, msg, replyTo); serr == nil {
 				global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msg.ID))
+				storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
 				return upd, nil
 			}
 		}
@@ -483,6 +349,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 
 					req := &tg.MessagesSendMediaRequest{
 						Peer:     peer,
+						ReplyTo:  replyTo,
 						Media:    uploaded,
 						Message:  caption,
 						RandomID: rid,
@@ -493,6 +360,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 
 					upd, err := api.MessagesSendMedia(ctx, req)
 					if err == nil {
+						storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
 						return upd, nil
 					}
 				}
@@ -536,6 +404,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
+		ReplyTo:  replyTo,
 		Media:    uploaded,
 		Message:  caption,
 		RandomID: rid,
@@ -548,6 +417,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	if err != nil {
 		return nil, fmt.Errorf("send uploaded media failed (path=%q): %w", uploadPath, err)
 	}
+	storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
 
 	return upd, nil
 }
@@ -588,6 +458,19 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 		return m.sendUploadedMediaUpdates(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
 	}
 
+	sort.Slice(mediaMsgs, func(i, j int) bool {
+		return mediaMsgs[i].ID < mediaMsgs[j].ID
+	})
+
+	replyCarrier := mediaMsgs[0]
+	for _, mm := range mediaMsgs {
+		if extractReplyToSourceMsgID(mm) > 0 {
+			replyCarrier = mm
+			break
+		}
+	}
+	replyTo := buildKeepReplyInput(task, replyCarrier)
+
 	ups := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
 	cleanups := make([]func() error, 0, len(mediaMsgs))
 	localPaths := make([]string, 0, len(mediaMsgs))
@@ -610,8 +493,9 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
 			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
-				if upd, serr := sendAlbumUpdates(ctx, api, peer, mediaMsgs); serr == nil {
+				if upd, serr := sendAlbumUpdates(ctx, api, peer, mediaMsgs, replyTo); serr == nil {
 					global.BroadcastLog(fmt.Sprintf("[WARN] Album download failed, fallback to send by reference (grouped_id=%d)", msg.GroupedID))
+					storeMsgMappingsInOrder(task, mediaMsgs, extractSentMsgIDs(upd))
 					return upd, nil
 				}
 			}
@@ -795,11 +679,13 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 
 	upd, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
 		Peer:       peer,
+		ReplyTo:    replyTo,
 		MultiMedia: ups,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)
 	}
+	storeMsgMappingsInOrder(task, mediaMsgs, extractSentMsgIDs(upd))
 
 	return upd, nil
 }

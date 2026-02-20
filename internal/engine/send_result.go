@@ -89,7 +89,7 @@ func minPositiveInt(ids []int) int {
 	return min
 }
 
-func sendTextUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message) (tg.UpdatesClass, error) {
+func sendTextUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message, replyTo tg.InputReplyToClass) (tg.UpdatesClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -110,6 +110,7 @@ func sendTextUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass
 
 	req := &tg.MessagesSendMessageRequest{
 		Peer:     peer,
+		ReplyTo:  replyTo,
 		Message:  msg.Message,
 		RandomID: rid,
 	}
@@ -120,7 +121,7 @@ func sendTextUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass
 	return api.MessagesSendMessage(ctx, req)
 }
 
-func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message) (tg.UpdatesClass, error) {
+func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message, replyTo tg.InputReplyToClass) (tg.UpdatesClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -153,6 +154,7 @@ func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
+		ReplyTo:  replyTo,
 		Media:    media,
 		Message:  caption,
 		RandomID: rid,
@@ -163,7 +165,7 @@ func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 	return api.MessagesSendMedia(ctx, req)
 }
 
-func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msgs []*tg.Message) (tg.UpdatesClass, error) {
+func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msgs []*tg.Message, replyTo tg.InputReplyToClass) (tg.UpdatesClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -189,7 +191,7 @@ func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 	case 0:
 		return nil, nil
 	case 1:
-		return sendMediaUpdates(ctx, api, peer, mediaMsgs[0])
+		return sendMediaUpdates(ctx, api, peer, mediaMsgs[0], replyTo)
 	}
 
 	multi := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
@@ -226,11 +228,12 @@ func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 		return nil, nil
 	}
 	if len(multi) == 1 {
-		return sendMediaUpdates(ctx, api, peer, mediaMsgs[0])
+		return sendMediaUpdates(ctx, api, peer, mediaMsgs[0], replyTo)
 	}
 
 	return api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
 		Peer:       peer,
+		ReplyTo:    replyTo,
 		MultiMedia: multi,
 	})
 }
@@ -308,7 +311,7 @@ func (m *TaskManager) ForwardMessagesWithFallbackResult(ctx context.Context, api
 			continue
 		}
 		if msg.Media == nil {
-			sent, serr := m.SendTextResult(ctx, api, peer, msg)
+			sent, serr := m.SendTextResult(ctx, api, msg, task, peer)
 			if serr != nil {
 				return nil, serr
 			}
@@ -339,34 +342,78 @@ func (m *TaskManager) ForwardMessagesWithFallbackResult(ctx context.Context, api
 	return ids, nil
 }
 
-func (m *TaskManager) SendTextResult(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message) ([]int, error) {
-	upd, err := sendTextUpdates(ctx, api, peer, msg)
+func (m *TaskManager) SendTextResult(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
+	replyTo := buildKeepReplyInput(task, msg)
+	upd, err := sendTextUpdates(ctx, api, peer, msg, replyTo)
 	if err != nil || upd == nil {
 		return nil, err
 	}
-	return extractSentMsgIDs(upd), nil
+
+	ids := extractSentMsgIDs(upd)
+	if msg != nil && msg.ID > 0 {
+		if sentID := minPositiveInt(ids); sentID > 0 {
+			storeMsgMapping(task, msg.ID, sentID)
+		}
+	}
+	return ids, nil
 }
 
-func (m *TaskManager) SendMediaResult(ctx context.Context, api *tg.Client, msg *tg.Message, peer tg.InputPeerClass) ([]int, error) {
-	upd, err := sendMediaUpdates(ctx, api, peer, msg)
+func (m *TaskManager) SendMediaResult(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
+	replyTo := buildKeepReplyInput(task, msg)
+	upd, err := sendMediaUpdates(ctx, api, peer, msg, replyTo)
 	if err != nil || upd == nil {
 		return nil, err
 	}
-	return extractSentMsgIDs(upd), nil
+
+	ids := extractSentMsgIDs(upd)
+	if msg != nil && msg.ID > 0 {
+		if sentID := minPositiveInt(ids); sentID > 0 {
+			storeMsgMapping(task, msg.ID, sentID)
+		}
+	}
+	return ids, nil
 }
 
-func (m *TaskManager) SendAlbumResult(ctx context.Context, api *tg.Client, msgs []*tg.Message, peer tg.InputPeerClass) ([]int, error) {
-	upd, err := sendAlbumUpdates(ctx, api, peer, msgs)
+func (m *TaskManager) SendAlbumResult(ctx context.Context, api *tg.Client, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
+	var mediaMsgs []*tg.Message
+	for _, msg := range msgs {
+		if msg == nil || msg.Media == nil {
+			continue
+		}
+		if _, err := convertMessageMediaToInput(msg.Media); err != nil {
+			continue
+		}
+		mediaMsgs = append(mediaMsgs, msg)
+	}
+	if len(mediaMsgs) == 0 {
+		return nil, nil
+	}
+	if len(mediaMsgs) == 1 {
+		return m.SendMediaResult(ctx, api, mediaMsgs[0], task, peer)
+	}
+
+	replyCarrier := mediaMsgs[0]
+	for _, mm := range mediaMsgs {
+		if extractReplyToSourceMsgID(mm) > 0 {
+			replyCarrier = mm
+			break
+		}
+	}
+	replyTo := buildKeepReplyInput(task, replyCarrier)
+
+	upd, err := sendAlbumUpdates(ctx, api, peer, mediaMsgs, replyTo)
 	if err != nil || upd == nil {
 		return nil, err
 	}
-	return extractSentMsgIDs(upd), nil
+	ids := extractSentMsgIDs(upd)
+	storeMsgMappingsInOrder(task, mediaMsgs, ids)
+	return ids, nil
 }
 
 func (m *TaskManager) SendMediaWithFallbackResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
-	upd, err := sendMediaUpdates(ctx, api, peer, msg)
+	ids, err := m.SendMediaResult(ctx, api, msg, task, peer)
 	if err == nil {
-		return extractSentMsgIDs(upd), nil
+		return ids, nil
 	}
 	if !isForwardOrCopyRestricted(err) {
 		return nil, err
@@ -382,9 +429,9 @@ func (m *TaskManager) SendMediaWithFallbackResult(ctx context.Context, api *tg.C
 }
 
 func (m *TaskManager) SendAlbumWithFallbackResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
-	upd, err := sendAlbumUpdates(ctx, api, peer, msgs)
+	ids, err := m.SendAlbumResult(ctx, api, msgs, task, peer)
 	if err == nil {
-		return extractSentMsgIDs(upd), nil
+		return ids, nil
 	}
 	if !isForwardOrCopyRestricted(err) {
 		return nil, err

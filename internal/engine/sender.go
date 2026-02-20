@@ -110,7 +110,7 @@ func (m *TaskManager) ForwardMessagesWithFallback(ctx context.Context, api *tg.C
 				continue
 			}
 			if msg.Media == nil {
-				if serr := m.SendText(ctx, api, peer, msg); serr != nil {
+				if serr := m.SendText(ctx, api, msg, task, peer); serr != nil {
 					return serr
 				}
 				continue

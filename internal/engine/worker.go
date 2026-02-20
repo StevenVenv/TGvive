@@ -71,6 +71,25 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		m.record(taskID, runID, 0, 0, 0, 0, "加载关键词策略失败: "+kwErr.Error()+" (已忽略)")
 	}
 
+	localDBOpened := false
+	localDBPath := ""
+	if task.KeepReply {
+		if _, path, err := localdb.Default.Open(taskID); err != nil {
+			task.KeepReply = false
+			m.record(taskID, runID, 0, 0, 0, 0, "保留回复初始化失败: 打开本地缓存库失败: "+err.Error()+" (已忽略)")
+		} else {
+			localDBOpened = true
+			localDBPath = path
+			if task.CloneMode == 1 {
+				m.record(taskID, runID, 0, 0, 0, 0, "保留回复已启用: 注意转发模式下无法保证完整保留回复关系")
+			} else if task.HistoryOrder == model.HistoryOrderNewToOld {
+				m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("保留回复已启用: localdb=%s (从新到旧模式下可能不完整)", path))
+			} else {
+				m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("保留回复已启用: localdb=%s", path))
+			}
+		}
+	}
+
 	var commentCfg *commentPipelineConfig
 	{
 		st := ResolveRuntimeStrategy(task)
@@ -109,20 +128,33 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 						}
 
 						// Open task localdb (SQLite) for comment mirroring v2.
-						if db, path, err := localdb.Default.Open(taskID); err != nil {
-							commentCfg = nil
-							m.record(taskID, runID, 0, 0, 0, 0, "评论区设置初始化失败: 打开本地缓存库失败: "+err.Error()+" (已忽略)")
+						db := localdb.Default.Get(taskID)
+						if db == nil {
+							if _, path, err := localdb.Default.Open(taskID); err != nil {
+								commentCfg = nil
+								m.record(taskID, runID, 0, 0, 0, 0, "评论区设置初始化失败: 打开本地缓存库失败: "+err.Error()+" (已忽略)")
+							} else {
+								localDBOpened = true
+								commentCfg.LocalDB = localdb.Default.Get(taskID)
+								m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, path))
+							}
 						} else {
 							commentCfg.LocalDB = db
-							m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, path))
+							if localDBPath == "" {
+								localDBPath = "(opened)"
+							}
+							m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, localDBPath))
 						}
 					}
 				}
 			}
 		}
 	}
-	if commentCfg != nil && commentCfg.LocalDB != nil {
-		defer func() { _ = localdb.Default.Close(taskID) }()
+	if localDBOpened {
+		defer func() {
+			_ = localdb.Default.Close(taskID)
+			clearMsgMappingCache(taskID)
+		}()
 	}
 
 	m.record(taskID, runID, 0, 0, 0, 0, "开始克隆历史消息")

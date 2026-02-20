@@ -37,12 +37,12 @@ func (m *TaskManager) processSingleMessageResult(ctx context.Context, api *tg.Cl
 	}
 
 	if msg.Media == nil {
-		return m.SendTextResult(ctx, api, peer, msgToSend)
+		return m.SendTextResult(ctx, api, msgToSend, task, peer)
 	}
 
 	if _, err := convertMessageMediaToInput(msgToSend.Media); err != nil {
 		if errors.Is(err, ErrUnsupportedMedia) {
-			return m.SendTextResult(ctx, api, peer, msgToSend)
+			return m.SendTextResult(ctx, api, msgToSend, task, peer)
 		}
 		return nil, err
 	}

@@ -139,6 +139,9 @@ func ensureSchema(db *gorm.DB) error {
 	if err := db.AutoMigrate(&LocalMapping{}); err != nil {
 		return err
 	}
+	if err := db.AutoMigrate(&LocalMsgMapping{}); err != nil {
+		return err
+	}
 
 	// local_comment had a legacy schema; rebuild it once when detected.
 	{
