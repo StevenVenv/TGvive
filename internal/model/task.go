@@ -77,6 +77,9 @@ type Task struct {
 	// 运行状态: 0-停止, 1-运行中, 2-暂停, 3-异常
 	Status int `gorm:"type:tinyint;default:0" json:"status"`
 
+	// LastError stores last fatal error message for debugging (persisted to DB).
+	LastError string `gorm:"type:varchar(255);default:''" json:"last_error,omitempty"`
+
 	// CurrentSlotCount/Key persist scheduler slot quota across restarts.
 	CurrentSlotCount int    `gorm:"type:int;default:0" json:"current_slot_count"`
 	CurrentSlotKey   string `gorm:"type:varchar(32);default:''" json:"current_slot_key"`

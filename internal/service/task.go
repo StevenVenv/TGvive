@@ -30,10 +30,20 @@ func UpdateTaskStatus(userID uint, taskID uint, status int) (model.Task, error) 
 	if err := global.DB.Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error; err != nil {
 		return task, err
 	}
-	if err := global.DB.Model(&task).Update("status", status).Error; err != nil {
+	updates := map[string]any{
+		"status": status,
+	}
+	// Clear last error on new start to avoid stale error messages in UI.
+	if status == model.TaskStatusRunning {
+		updates["last_error"] = ""
+	}
+	if err := global.DB.Model(&task).Updates(updates).Error; err != nil {
 		return task, err
 	}
 	task.Status = status
+	if status == model.TaskStatusRunning {
+		task.LastError = ""
+	}
 	return task, nil
 }
 

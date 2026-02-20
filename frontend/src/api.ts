@@ -37,6 +37,7 @@ export type Task = {
   run_window?: string
 
   status: number
+  last_error?: string
   next_run_time?: string | null
 
   current_slot_count?: number

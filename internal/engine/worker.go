@@ -31,25 +31,28 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 	tgRT, err := m.ensureTelegramForTask(ctx, t)
 	if err != nil {
-		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: "+err.Error())
+		msg := "初始化 Telegram 失败: " + err.Error()
+		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
 		return
 	}
 	api := tgRT.api
 	if api == nil {
-		m.record(taskID, runID, 0, 0, 0, 1, "初始化 Telegram 失败: tg api is nil")
+		msg := "初始化 Telegram 失败: tg api is nil"
+		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
 		return
 	}
 
 	task := t
 	sourcePeer, targetPeer, sourceChannelID, err := m.SetupTaskPeers(ctx, api, &task)
 	if err != nil {
-		m.record(taskID, runID, 0, 0, 0, 1, "解析频道/群组失败: "+err.Error())
+		msg := "解析频道/群组失败: " + err.Error()
+		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
 		return
 	}
 	if task.CloneMode != 3 {
@@ -123,9 +126,10 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		if ctx.Err() != nil {
 			return
 		}
-		m.record(taskID, runID, 0, 0, 0, 1, "历史克隆失败: "+err.Error())
+		msg := "历史克隆失败: " + err.Error()
+		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatus(taskID, model.TaskStatusError)
+		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
 		return
 	}
 
@@ -317,4 +321,25 @@ func updateTaskStatus(taskID uint, status int) error {
 		return nil
 	}
 	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).Update("status", status).Error
+}
+
+func updateTaskStatusWithError(taskID uint, status int, lastError string) error {
+	if taskID == 0 || global.DB == nil {
+		return nil
+	}
+	lastError = strings.TrimSpace(lastError)
+	if lastError != "" {
+		rs := []rune(lastError)
+		if len(rs) > 255 {
+			lastError = string(rs[:255])
+		}
+	}
+	if lastError != "" && global.Logger != nil {
+		global.Logger.Error("task fatal error", zap.Uint("task_id", taskID), zap.String("msg", lastError))
+	}
+	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+		Updates(map[string]any{
+			"status":     status,
+			"last_error": lastError,
+		}).Error
 }

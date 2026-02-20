@@ -115,8 +115,7 @@ func (m *TaskManager) StoreMappingForTrunk(
 		if global.Logger != nil {
 			global.Logger.Warn("store local mapping failed", zap.Uint("task_id", task.ID), zap.Error(err))
 		}
-		// Best-effort: still return roots.
-		return sourceRootID, targetRootID, nil
+		return sourceRootID, targetRootID, err
 	}
 
 	return sourceRootID, targetRootID, nil
@@ -133,20 +132,23 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 	targetChannelPeer tg.InputPeerClass,
 	sourceChannelMsgID int,
 	targetChannelMsgID int,
-) {
+) int {
 	if err := ctx.Err(); err != nil {
-		return
+		return 0
 	}
 	if m == nil || api == nil || cfg == nil || !cfg.Enabled || cfg.LocalDB == nil {
-		return
+		return 0
 	}
 	if cfg.SourceLinkedPeer == nil {
-		return
+		return 0
 	}
 
 	srcRoot, _, err := m.StoreMappingForTrunk(ctx, api, task, cfg, sourceChannelPeer, targetChannelPeer, sourceChannelMsgID, targetChannelMsgID)
 	if err != nil || srcRoot <= 0 {
-		return
+		if err != nil && global.Logger != nil {
+			global.Logger.Warn("store trunk mapping failed", zap.Uint("task_id", task.ID), zap.Int("source_msg_id", sourceChannelMsgID), zap.Error(err))
+		}
+		return 0
 	}
 
 	comments, err := fetchRepliesByRoot(ctx, api, cfg.SourceLinkedPeer, srcRoot, commentFetchPageSize, commentFetchMaxTotal)
@@ -154,16 +156,16 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 		if global.Logger != nil {
 			global.Logger.Warn("fetch replies failed", zap.Uint("task_id", task.ID), zap.Int("source_root_id", srcRoot), zap.Error(err))
 		}
-		return
+		return srcRoot
 	}
 	if len(comments) == 0 {
-		return
+		return srcRoot
 	}
 
 	st := ResolveRuntimeStrategy(task)
 	rule, enabled, _ := resolveCommentRule(task, st)
 	if !enabled {
-		return
+		return srcRoot
 	}
 
 	trustedSet := make(map[int64]struct{}, len(rule.TrustedUserIDs))
@@ -184,7 +186,7 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 
 	for _, msg := range comments {
 		if err := ctx.Err(); err != nil {
-			return
+			return srcRoot
 		}
 		if msg == nil || msg.ID <= 0 {
 			continue
@@ -238,6 +240,8 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 			global.Logger.Warn("store local comment failed", zap.Uint("task_id", task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
 		}
 	}
+
+	return srcRoot
 }
 
 func (m *TaskManager) StoreRealtimeComment(ctx context.Context, task model.Task, cfg *commentPipelineConfig, msg *tg.Message) {

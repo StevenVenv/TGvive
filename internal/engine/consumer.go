@@ -121,12 +121,20 @@ func (m *TaskManager) consumeLocalCommentsOnce(ctx context.Context, api *tg.Clie
 
 		var mapping localdb.LocalMapping
 		if err := db.Where("source_root_id = ?", item.ReplyToRootID).First(&mapping).Error; err != nil {
-			// Mapping missing: retry later.
-			_ = db.Model(&localdb.LocalComment{}).Where("id = ?", item.ID).
-				Updates(map[string]any{
-					"last_error":      "mapping missing",
-					"next_attempt_at": now.Add(30 * time.Second),
-				}).Error
+			// Mapping missing: retry with backoff, eventually mark failed to avoid blocking history forever.
+			attempts := item.Attempts + 1
+			updates := map[string]any{
+				"attempts":   attempts,
+				"last_error": "mapping missing",
+			}
+			if attempts >= 10 {
+				updates["status"] = "failed"
+				updates["next_attempt_at"] = now.Add(24 * time.Hour)
+			} else {
+				updates["status"] = "pending"
+				updates["next_attempt_at"] = now.Add(nextAttemptDelay(attempts))
+			}
+			_ = db.Model(&localdb.LocalComment{}).Where("id = ?", item.ID).Updates(updates).Error
 			continue
 		}
 		if mapping.TargetRootID <= 0 {

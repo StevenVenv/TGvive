@@ -115,7 +115,15 @@ function formatDateTime(d: Date): string {
 function statusView(task: Task): StatusView {
   const status = Number(task?.status ?? 0)
 
-  if (status === 3) return { type: 'danger', text: '异常', icon: 'ri-error-warning-line' }
+  if (status === 3) {
+    const tip = String(task?.last_error || '').trim()
+    return {
+      type: 'danger',
+      text: '异常',
+      icon: 'ri-error-warning-line',
+      tooltip: tip || '点击任务行查看右侧日志',
+    }
+  }
   if (status === 2) return { type: 'warning', text: '已暂停', icon: 'ri-pause-circle-line' }
   if (status !== 1) return { type: 'info', text: '已停止', icon: 'ri-stop-circle-line' }
 
@@ -626,7 +634,12 @@ defineExpose({
               <el-divider />
 
               <div ref="logBoxRef" class="log-console">
-                <div v-if="(logProgress?.logs?.length ?? 0) === 0" class="log-empty">暂无日志</div>
+                <div v-if="(logProgress?.logs?.length ?? 0) === 0" class="log-empty">
+                  <span v-if="selectedTask?.status === 3 && String(selectedTask?.last_error || '').trim()">
+                    {{ String(selectedTask?.last_error || '').trim() }}
+                  </span>
+                  <span v-else>暂无日志</span>
+                </div>
                 <pre v-else class="log-pre"><code>{{ logProgress?.logs?.join('\n') }}</code></pre>
               </div>
             </div>

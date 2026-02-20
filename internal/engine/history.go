@@ -11,6 +11,7 @@ import (
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
+	"github.com/gotd/td/pool"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -472,7 +473,12 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						if commentEnabled && minInGroup > 0 {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								if srcRoot > 0 {
+									if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
+										return err
+									}
+								}
 							}
 						}
 					}
@@ -588,7 +594,12 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					if srcRoot > 0 {
+						if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
+							return err
+						}
+					}
 				}
 			}
 
@@ -889,7 +900,12 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						if commentEnabled && minInGroup > 0 {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								if srcRoot > 0 {
+									if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
+										return err
+									}
+								}
 							}
 						}
 					}
@@ -1006,7 +1022,12 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					if srcRoot > 0 {
+						if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
+							return err
+						}
+					}
 				}
 			}
 
@@ -1297,7 +1318,12 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						if commentEnabled {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								if srcRoot > 0 {
+									if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
+										return err
+									}
+								}
 							}
 						}
 					}
@@ -1412,7 +1438,12 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					if srcRoot > 0 {
+						if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
+							return err
+						}
+					}
 				}
 			}
 
@@ -1517,7 +1548,34 @@ func resolveInputPeer(ctx context.Context, api *tg.Client, raw string) (tg.Input
 	}
 
 	s := message.NewSender(api)
-	return s.Resolve(raw).AsInputPeer(ctx)
+
+	var last error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		peer, err := s.Resolve(raw).AsInputPeer(ctx)
+		if err == nil {
+			return peer, nil
+		}
+		last = err
+
+		// FloodWait: wait and retry.
+		if ok, _ := tgerr.FloodWait(ctx, err); ok {
+			continue
+		}
+
+		// Connection dead: pool will recreate; retry shortly.
+		if errors.Is(err, pool.ErrConnDead) {
+			sleepRandom(ctx, 250*time.Millisecond, 900*time.Millisecond)
+			continue
+		}
+
+		break
+	}
+
+	return nil, last
 }
 
 func persistHistoryMaxID(taskID uint, maxID int) error {
