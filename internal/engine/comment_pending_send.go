@@ -3,12 +3,16 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"time"
 
 	"my-go-server/internal/engine/localdb"
+	wm "my-go-server/internal/engine/watermark"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
@@ -49,6 +53,54 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 
 	db := cfg.LocalDB
 
+	wmRule, wmEnabled := watermarkRuleForTask(task)
+
+	sendWatermarkedImage := func(commentMsgID int, payload localdb.LightPayload) error {
+		if commentMsgID <= 0 {
+			return errors.New("comment_msg_id is required")
+		}
+		srcBytes, fullMsg, err := downloadMessageMediaBytes(ctx, api, cfg.SourceLinkedPeer, commentMsgID)
+		if err != nil {
+			return err
+		}
+		if fullMsg == nil || !isWatermarkableImageMessage(fullMsg) {
+			return errors.New("message is not watermarkable")
+		}
+
+		outBytes, err := wm.ApplyWatermark(srcBytes, wmRule)
+		if err != nil {
+			return err
+		}
+		inputFile, err := uploadBytes(ctx, api, "wm.jpg", outBytes)
+		if err != nil {
+			return err
+		}
+
+		spoiler, ttl := messageSpoilerTTL(fullMsg)
+		rid, err := randomID()
+		if err != nil {
+			return err
+		}
+
+		replyTo := &tg.InputReplyToMessage{ReplyToMsgID: targetRootID}
+		caption := payload.Text
+		if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+			caption = out
+		}
+		_, err = api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer:    cfg.TargetLinkedPeer,
+			ReplyTo: replyTo,
+			Media: &tg.InputMediaUploadedPhoto{
+				File:       inputFile,
+				Spoiler:    spoiler,
+				TTLSeconds: ttl,
+			},
+			Message:  caption,
+			RandomID: rid,
+		})
+		return err
+	}
+
 	var batch []localdb.LocalComment
 	if err := db.
 		Where("source_post_id = ? AND is_forwarded = ?", sourceRootID, false).
@@ -66,6 +118,14 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 	}
 
 	sendOne := func(item localdb.LocalComment, payload localdb.LightPayload) error {
+		if wmEnabled && strings.EqualFold(payload.MediaType, "image") {
+			if err := sendWatermarkedImage(item.CommentMsgID, payload); err == nil {
+				return nil
+			} else if _, ok := tgerr.AsFloodWait(err); ok {
+				return err
+			}
+		}
+
 		sendErr := m.sendLightPayloadAsComment(ctx, api, cfg, payload, targetRootID)
 		if sendErr != nil {
 			// Upload fallback: refetch original message and send with fallback.
@@ -110,11 +170,12 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				j++
 			}
 
-			// Try album send-by-reference if we have >=2 media items with decodable media_bytes.
+			// Try to preserve album grouping when possible.
 			if len(group) >= 2 {
 				payloads := make([]localdb.LightPayload, 0, len(group))
 				ids := make([]int, 0, len(group))
 				okAlbum := true
+				needWM := false
 				for _, it := range group {
 					ids = append(ids, it.CommentMsgID)
 					var p localdb.LightPayload
@@ -124,7 +185,9 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 							break
 						}
 					}
-					if len(p.MediaBytes) == 0 {
+					if strings.EqualFold(p.MediaType, "image") {
+						needWM = needWM || wmEnabled
+					} else if len(p.MediaBytes) == 0 {
 						okAlbum = false
 						break
 					}
@@ -132,22 +195,120 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				}
 
 				if okAlbum {
-					if err := m.sendLightPayloadAlbumAsComment(ctx, api, cfg, payloads, targetRootID); err == nil {
-						markForwarded(ids)
-						sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
-						i = j
-						continue
-					} else if d, ok := tgerr.AsFloodWait(err); ok {
-						if global.Logger != nil {
-							global.Logger.Warn(
-								"comment floodwait, skipping remaining comments for trunk",
-								zap.Uint("task_id", task.ID),
-								zap.Int("source_root_id", sourceRootID),
-								zap.Duration("wait", d),
-								zap.Error(err),
-							)
+					// Watermark path: upload watermarked photos for image items.
+					if needWM {
+						replyTo := &tg.InputReplyToMessage{ReplyToMsgID: targetRootID}
+						multi := make([]tg.InputSingleMedia, 0, len(group))
+						sendErr := error(nil)
+						for idx, it := range group {
+							p := payloads[idx]
+
+							im := tg.InputMediaClass(nil)
+							if wmEnabled && strings.EqualFold(p.MediaType, "image") {
+								// Best-effort watermark; if it fails, fallback to per-item send.
+								srcBytes, fullMsg, err := downloadMessageMediaBytes(ctx, api, cfg.SourceLinkedPeer, it.CommentMsgID)
+								if err != nil {
+									sendErr = err
+									break
+								}
+								if fullMsg == nil || !isWatermarkableImageMessage(fullMsg) {
+									sendErr = errors.New("message is not watermarkable")
+									break
+								}
+								outBytes, err := wm.ApplyWatermark(srcBytes, wmRule)
+								if err != nil {
+									sendErr = err
+									break
+								}
+								inputFile, err := uploadBytes(ctx, api, "wm.jpg", outBytes)
+								if err != nil {
+									sendErr = err
+									break
+								}
+								spoiler, ttl := messageSpoilerTTL(fullMsg)
+								im = &tg.InputMediaUploadedPhoto{
+									File:       inputFile,
+									Spoiler:    spoiler,
+									TTLSeconds: ttl,
+								}
+							} else if len(p.MediaBytes) > 0 {
+								decoded, err := tg.DecodeInputMedia(&bin.Buffer{Buf: p.MediaBytes})
+								if err != nil || decoded == nil {
+									if err == nil {
+										err = errors.New("decode input media returned nil")
+									}
+									sendErr = err
+									break
+								}
+								im = decoded
+							} else {
+								sendErr = errors.New("album item missing media")
+								break
+							}
+
+							rid, err := randomID()
+							if err != nil {
+								sendErr = err
+								break
+							}
+							item := tg.InputSingleMedia{
+								Media:    im,
+								RandomID: rid,
+							}
+							if idx == 0 {
+								caption := p.Text
+								if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+									caption = out
+								}
+								item.Message = caption
+							}
+							multi = append(multi, item)
 						}
-						return
+
+						if sendErr == nil && len(multi) == len(group) {
+							_, sendErr = api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+								Peer:       cfg.TargetLinkedPeer,
+								ReplyTo:    replyTo,
+								MultiMedia: multi,
+							})
+						}
+
+						if sendErr == nil {
+							markForwarded(ids)
+							sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
+							i = j
+							continue
+						} else if d, ok := tgerr.AsFloodWait(sendErr); ok {
+							if global.Logger != nil {
+								global.Logger.Warn(
+									"comment floodwait, skipping remaining comments for trunk",
+									zap.Uint("task_id", task.ID),
+									zap.Int("source_root_id", sourceRootID),
+									zap.Duration("wait", d),
+									zap.Error(sendErr),
+								)
+							}
+							return
+						}
+					} else {
+						// Reference path.
+						if err := m.sendLightPayloadAlbumAsComment(ctx, api, cfg, payloads, targetRootID); err == nil {
+							markForwarded(ids)
+							sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
+							i = j
+							continue
+						} else if d, ok := tgerr.AsFloodWait(err); ok {
+							if global.Logger != nil {
+								global.Logger.Warn(
+									"comment floodwait, skipping remaining comments for trunk",
+									zap.Uint("task_id", task.ID),
+									zap.Int("source_root_id", sourceRootID),
+									zap.Duration("wait", d),
+									zap.Error(err),
+								)
+							}
+							return
+						}
 					}
 				}
 			}

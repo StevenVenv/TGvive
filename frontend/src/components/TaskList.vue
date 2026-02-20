@@ -160,6 +160,20 @@ function statusTooltip(task: Task): string {
   return statusView(task).tooltip || ''
 }
 
+function progressLine(p?: TaskProgress): string {
+  const processed = Number(p?.processed_cnt ?? 0)
+  const total = Number(p?.total_msg ?? 0)
+  if (total > 0) return `已处理 ${processed} / ${total}`
+  return `已处理 ${processed}`
+}
+
+function filteredCount(p?: TaskProgress): number {
+  const processed = Number(p?.processed_cnt ?? 0)
+  const success = Number(p?.success_cnt ?? 0)
+  const fail = Number(p?.fail_cnt ?? 0)
+  return Math.max(0, processed - success - fail)
+}
+
 async function reloadTasks() {
   loading.value = true
   try {
@@ -551,11 +565,20 @@ defineExpose({
 
                 <el-table-column label="进度" min-width="220">
                   <template #default="{ row }">
-                    <el-progress :percentage="progressMap[row.ID]?.progress_pct ?? 0" :stroke-width="10" />
+                    <div class="sub">
+                      <el-text type="info">{{ progressLine(progressMap[row.ID]) }}</el-text>
+                      <el-text v-if="(progressMap[row.ID]?.total_msg ?? 0) > 0" type="info">
+                        {{ progressMap[row.ID]?.progress_pct ?? 0 }}%
+                      </el-text>
+                      <el-text v-else type="info">未知总量</el-text>
+                    </div>
                     <div class="sub">
                       <el-text type="info">{{ progressMap[row.ID]?.speed ?? '0 消息/秒' }}</el-text>
                       <el-text type="info">
                         成功 {{ progressMap[row.ID]?.success_cnt ?? 0 }} / 失败 {{ progressMap[row.ID]?.fail_cnt ?? 0 }}
+                        <template v-if="filteredCount(progressMap[row.ID]) > 0">
+                          / 过滤 {{ filteredCount(progressMap[row.ID]) }}
+                        </template>
                       </el-text>
                     </div>
                   </template>
@@ -842,10 +865,13 @@ defineExpose({
 }
 
 .sub {
-  margin-top: 6px;
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.sub + .sub {
+  margin-top: 4px;
 }
 
 .quota {

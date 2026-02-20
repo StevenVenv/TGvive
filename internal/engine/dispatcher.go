@@ -14,14 +14,15 @@ import (
 
 // TaskProgress matches the polling response expected by UI.
 type TaskProgress struct {
-	TaskID      uint     `json:"task_id"`
-	Status      string   `json:"status"`
-	Speed       string   `json:"speed"`
-	ProgressPct int      `json:"progress_pct"`
-	SuccessCnt  int      `json:"success_cnt"`
-	FailCnt     int      `json:"fail_cnt"`
-	TotalMsg    int      `json:"total_msg"`
-	Logs        []string `json:"logs"`
+	TaskID       uint     `json:"task_id"`
+	Status       string   `json:"status"`
+	Speed        string   `json:"speed"`
+	ProgressPct  int      `json:"progress_pct"`
+	ProcessedCnt int      `json:"processed_cnt"`
+	SuccessCnt   int      `json:"success_cnt"`
+	FailCnt      int      `json:"fail_cnt"`
+	TotalMsg     int      `json:"total_msg"`
+	Logs         []string `json:"logs"`
 }
 
 // TaskManager manages concurrent running tasks.
@@ -348,14 +349,15 @@ func snapshotLocked(now time.Time, st *taskState) TaskProgress {
 	}
 
 	return TaskProgress{
-		TaskID:      st.TaskID,
-		Status:      statusText,
-		Speed:       speedText,
-		ProgressPct: progressPct,
-		SuccessCnt:  st.Success,
-		FailCnt:     st.Fail,
-		TotalMsg:    total,
-		Logs:        tail(st.Logs, maxRespLogs),
+		TaskID:       st.TaskID,
+		Status:       statusText,
+		Speed:        speedText,
+		ProgressPct:  progressPct,
+		ProcessedCnt: processed,
+		SuccessCnt:   st.Success,
+		FailCnt:      st.Fail,
+		TotalMsg:     total,
+		Logs:         tail(st.Logs, maxRespLogs),
 	}
 }
 

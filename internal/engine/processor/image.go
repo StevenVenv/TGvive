@@ -88,7 +88,7 @@ func (p *ImageProcessor) ProcessPath(ctx context.Context, inPath string) (outPat
 	if p == nil {
 		return inPath, nil, false, nil
 	}
-	return p.processPath(ctx, inPath, p.defaultMaxWidth, p.defaultMaxHeight, p.defaultQuality)
+	return p.processPath(ctx, inPath, p.defaultMaxWidth, p.defaultMaxHeight, p.defaultQuality, true)
 }
 
 func (p *ImageProcessor) ProcessPathWith(ctx context.Context, inPath string, maxW, maxH, quality int) (outPath string, cleanup func() error, changed bool, err error) {
@@ -96,10 +96,19 @@ func (p *ImageProcessor) ProcessPathWith(ctx context.Context, inPath string, max
 		return inPath, nil, false, nil
 	}
 	quality = clampInt(quality, 1, 100, p.defaultQuality)
-	return p.processPath(ctx, inPath, maxW, maxH, quality)
+	return p.processPath(ctx, inPath, maxW, maxH, quality, true)
 }
 
-func (p *ImageProcessor) processPath(ctx context.Context, inPath string, maxW, maxH, quality int) (outPath string, cleanup func() error, changed bool, err error) {
+// ProcessPathNoWatermark runs image resize (and other non-watermark steps) but skips watermark overlay.
+// It is used when Strategy-level watermarking is enabled to avoid double watermarking.
+func (p *ImageProcessor) ProcessPathNoWatermark(ctx context.Context, inPath string) (outPath string, cleanup func() error, changed bool, err error) {
+	if p == nil {
+		return inPath, nil, false, nil
+	}
+	return p.processPath(ctx, inPath, p.defaultMaxWidth, p.defaultMaxHeight, p.defaultQuality, false)
+}
+
+func (p *ImageProcessor) processPath(ctx context.Context, inPath string, maxW, maxH, quality int, applyWatermark bool) (outPath string, cleanup func() error, changed bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return inPath, nil, false, err
 	}
@@ -108,8 +117,10 @@ func (p *ImageProcessor) processPath(ctx context.Context, inPath string, maxW, m
 		return inPath, nil, false, nil
 	}
 
+	wmEnabled := p.wm.Enabled && applyWatermark
+
 	// Fast path: nothing to do (still leave decoding to the caller).
-	if !p.wm.Enabled && maxW <= 0 && maxH <= 0 {
+	if !wmEnabled && maxW <= 0 && maxH <= 0 {
 		return inPath, nil, false, nil
 	}
 
@@ -125,7 +136,7 @@ func (p *ImageProcessor) processPath(ctx context.Context, inPath string, maxW, m
 	outPath = f.Name()
 	_ = f.Close()
 
-	changed, err = p.processToFile(ctx, inPath, outPath, maxW, maxH, quality)
+	changed, err = p.processToFile(ctx, inPath, outPath, maxW, maxH, quality, applyWatermark)
 	if err != nil {
 		_ = os.Remove(outPath)
 		return inPath, nil, false, err
@@ -138,7 +149,7 @@ func (p *ImageProcessor) processPath(ctx context.Context, inPath string, maxW, m
 	return outPath, func() error { return os.Remove(outPath) }, true, nil
 }
 
-func (p *ImageProcessor) processToFile(ctx context.Context, inPath, outPath string, maxW, maxH, quality int) (bool, error) {
+func (p *ImageProcessor) processToFile(ctx context.Context, inPath, outPath string, maxW, maxH, quality int, applyWatermark bool) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -175,7 +186,7 @@ func (p *ImageProcessor) processToFile(ctx context.Context, inPath, outPath stri
 	}
 
 	nrgba := toNRGBA(img)
-	if p.wm.Enabled {
+	if p.wm.Enabled && applyWatermark {
 		ok, err := p.applyWatermark(nrgba)
 		if err != nil {
 			return false, err

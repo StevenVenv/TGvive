@@ -32,6 +32,11 @@ func (c *StrategyCache) Set(strategy *model.Strategy) {
 		copy(rules, cp.ScheduleRules)
 		cp.ScheduleRules = rules
 	}
+	if len(cp.WatermarkRule) > 0 {
+		raw := make([]byte, len(cp.WatermarkRule))
+		copy(raw, cp.WatermarkRule)
+		cp.WatermarkRule = raw
+	}
 
 	c.mu.Lock()
 	if c.strategies == nil {

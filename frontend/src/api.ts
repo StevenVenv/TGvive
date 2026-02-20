@@ -69,6 +69,7 @@ export type Strategy = {
   schedule_rules?: Array<{ start: string; end: string; limit: number }>
 
   comment_rule?: CommentRule
+  watermark_rule?: WatermarkRule
 
   keep_reply?: boolean
   realtime?: boolean
@@ -91,6 +92,19 @@ export type CommentRule = {
   allow_anonymous: boolean
   allowed_types: string[]
   block_keywords: string[]
+}
+
+export type WatermarkRule = {
+  enable: boolean
+  type: 'text' | 'image' | string
+  text: string
+  image_path: string
+  position: 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left' | 'center' | 'custom' | string
+  custom_x: number
+  custom_y: number
+  margin: number
+  scale_ratio: number
+  opacity: number
 }
 
 export type ReplaceRule = {
@@ -120,6 +134,7 @@ export type TaskProgress = {
   status: string
   speed: string
   progress_pct: number
+  processed_cnt: number
   success_cnt: number
   fail_cnt: number
   total_msg: number

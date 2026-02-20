@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { CommentRule } from '../../api'
+import type { CommentRule, WatermarkRule } from '../../api'
 
 export type ScheduleRule = {
   start: string
@@ -28,6 +28,7 @@ export type StrategyFormModel = {
   schedule_rules: ScheduleRule[]
 
   comment_rule: CommentRule
+  watermark_rule: WatermarkRule
 
   keep_reply: boolean
   realtime: boolean
@@ -113,6 +114,7 @@ const enablePull = computed<boolean>({
 })
 
 const commentCollapse = ref<string[]>(['comment'])
+const mediaCollapse = ref<string[]>(['media'])
 
 type CommentAllowedTypeKey = 'text' | 'image' | 'file' | 'video'
 
@@ -154,6 +156,197 @@ function ensureCommentRule(): CommentRule {
 
   return r
 }
+
+function defaultWatermarkRule(enable: boolean): WatermarkRule {
+  return {
+    enable,
+    type: 'text',
+    text: '',
+    image_path: '',
+    position: 'bottom_right',
+    custom_x: 0.5,
+    custom_y: 0.5,
+    margin: 0.02,
+    scale_ratio: 0.03,
+    opacity: 0.35,
+  }
+}
+
+function clampFloat01(v: any): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  if (n < 0) return 0
+  if (n > 1) return 1
+  return n
+}
+
+function clampInt(min: number, v: any, max: number): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return min
+  const i = Math.floor(n)
+  if (i < min) return min
+  if (i > max) return max
+  return i
+}
+
+function nearlyEqual(a: number, b: number, eps = 1e-6): boolean {
+  return Math.abs(a-b) <= eps
+}
+
+function ensureWatermarkRule(): WatermarkRule {
+  const f = form.value as any
+  let r = f.watermark_rule as WatermarkRule | undefined
+  if (!r || typeof r !== 'object') {
+    r = defaultWatermarkRule(false)
+    f.watermark_rule = r
+  }
+
+  r.enable = Boolean((r as any).enable)
+  r.type = String((r as any).type || 'text')
+  r.text = String((r as any).text || '')
+  r.image_path = String((r as any).image_path || '')
+  r.position = String((r as any).position || 'bottom_right')
+
+  r.custom_x = clampFloat01((r as any).custom_x)
+  r.custom_y = clampFloat01((r as any).custom_y)
+
+  r.margin = clampFloat01((r as any).margin)
+  if (r.margin === 0) r.margin = 0.02
+  if (r.margin > 0.1) r.margin = 0.1
+
+  r.scale_ratio = clampFloat01((r as any).scale_ratio)
+  if (r.scale_ratio === 0) {
+    r.scale_ratio = String(r.type).trim().toLowerCase() === 'image' ? 0.15 : 0.03
+  }
+  if (r.scale_ratio > 0.5) r.scale_ratio = 0.5
+
+  r.opacity = clampFloat01((r as any).opacity)
+  if (r.opacity === 0) r.opacity = 0.35
+
+  return r
+}
+
+const watermarkEnable = computed<boolean>({
+  get() {
+    return Boolean(ensureWatermarkRule().enable)
+  },
+  set(v) {
+    ensureWatermarkRule().enable = Boolean(v)
+  },
+})
+
+const watermarkType = computed<'text' | 'image'>({
+  get() {
+    const raw = String(ensureWatermarkRule().type || '')
+      .trim()
+      .toLowerCase()
+    if (raw === 'image') return 'image'
+    return 'text'
+  },
+  set(v) {
+    const r = ensureWatermarkRule()
+    const prev = String(r.type || 'text')
+      .trim()
+      .toLowerCase()
+    const prevType = prev === 'image' ? 'image' : 'text'
+    if (prevType !== v) {
+      if (prevType === 'text' && nearlyEqual(Number(r.scale_ratio || 0), 0.03)) r.scale_ratio = 0.15
+      if (prevType === 'image' && nearlyEqual(Number(r.scale_ratio || 0), 0.15)) r.scale_ratio = 0.03
+    }
+    r.type = v
+  },
+})
+
+const watermarkText = computed<string>({
+  get() {
+    return String(ensureWatermarkRule().text || '')
+  },
+  set(v) {
+    ensureWatermarkRule().text = String(v || '')
+  },
+})
+
+const watermarkImagePath = computed<string>({
+  get() {
+    return String(ensureWatermarkRule().image_path || '')
+  },
+  set(v) {
+    ensureWatermarkRule().image_path = String(v || '')
+  },
+})
+
+type WatermarkPositionKey = 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left' | 'center' | 'custom'
+
+const watermarkPosition = computed<WatermarkPositionKey>({
+  get() {
+    const raw = String(ensureWatermarkRule().position || '')
+      .trim()
+      .toLowerCase()
+    switch (raw) {
+      case 'bottom_left':
+        return 'bottom_left'
+      case 'top_right':
+        return 'top_right'
+      case 'top_left':
+        return 'top_left'
+      case 'center':
+        return 'center'
+      case 'custom':
+        return 'custom'
+      case 'bottom_right':
+      default:
+        return 'bottom_right'
+    }
+  },
+  set(v) {
+    ensureWatermarkRule().position = v
+  },
+})
+
+const watermarkCustomX = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureWatermarkRule().custom_x) * 100), 100)
+  },
+  set(v) {
+    ensureWatermarkRule().custom_x = clampInt(0, v, 100) / 100
+  },
+})
+
+const watermarkCustomY = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureWatermarkRule().custom_y) * 100), 100)
+  },
+  set(v) {
+    ensureWatermarkRule().custom_y = clampInt(0, v, 100) / 100
+  },
+})
+
+const watermarkMarginPct = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureWatermarkRule().margin) * 100), 10)
+  },
+  set(v) {
+    ensureWatermarkRule().margin = clampInt(0, v, 10) / 100
+  },
+})
+
+const watermarkScalePct = computed<number>({
+  get() {
+    return clampInt(1, Math.round(clampFloat01(ensureWatermarkRule().scale_ratio) * 100), 50)
+  },
+  set(v) {
+    ensureWatermarkRule().scale_ratio = clampInt(1, v, 50) / 100
+  },
+})
+
+const watermarkOpacityPct = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureWatermarkRule().opacity) * 100), 100)
+  },
+  set(v) {
+    ensureWatermarkRule().opacity = clampInt(0, v, 100) / 100
+  },
+})
 
 const commentEnable = computed<boolean>({
   get() {
@@ -516,6 +709,32 @@ async function submit() {
     ;(form.value as any).comment_rule = r
   }
 
+  // normalize watermark_rule (percent sliders -> float)
+  {
+    const r = ensureWatermarkRule()
+    r.enable = Boolean(watermarkEnable.value)
+    r.type = watermarkType.value
+    r.text = String(r.text || '').trim()
+    r.image_path = String(r.image_path || '').trim()
+    r.position = watermarkPosition.value
+
+    r.custom_x = clampFloat01(r.custom_x)
+    r.custom_y = clampFloat01(r.custom_y)
+
+    r.margin = clampFloat01(r.margin)
+    if (r.margin === 0) r.margin = 0.02
+    if (r.margin > 0.1) r.margin = 0.1
+
+    r.scale_ratio = clampFloat01(r.scale_ratio)
+    if (r.scale_ratio === 0) r.scale_ratio = r.type === 'image' ? 0.15 : 0.03
+    if (r.scale_ratio > 0.5) r.scale_ratio = 0.5
+
+    r.opacity = clampFloat01(r.opacity)
+    if (r.opacity === 0) r.opacity = 0.35
+
+    ;(form.value as any).watermark_rule = r
+  }
+
   const ok = await validate()
   if (!ok) return
   emit('submit')
@@ -852,6 +1071,103 @@ defineExpose<StrategyFormExpose>({
                   placeholder="例如：免费\n加群\n私聊"
                 />
               </el-form-item>
+            </el-collapse-item>
+          </el-collapse>
+
+          <div class="sub-split">
+            <span>媒体加工</span>
+          </div>
+
+          <el-collapse v-model="mediaCollapse" class="comment-collapse">
+            <el-collapse-item name="media">
+              <template #title>
+                <span class="label-with-icon">
+                  <i class="ri-brush-line" />
+                  <span>媒体加工</span>
+                </span>
+              </template>
+
+              <el-row :gutter="12">
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="启用水印">
+                    <el-switch v-model="watermarkEnable" inline-prompt active-text="开" inactive-text="关" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="16">
+                  <div class="hint compact">开启后，对图片做纯内存水印渲染并重新上传发送（评论 + 主贴）。</div>
+                </el-col>
+              </el-row>
+
+              <el-row v-if="watermarkEnable" :gutter="12">
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="水印类型">
+                    <el-radio-group v-model="watermarkType" class="radio-dense">
+                      <el-radio label="text">文字水印</el-radio>
+                      <el-radio label="image">图片水印 (PNG)</el-radio>
+                    </el-radio-group>
+                  </el-form-item>
+                </el-col>
+
+                <el-col v-if="watermarkType === 'text'" :xs="24" :sm="12">
+                  <el-form-item label="文字内容">
+                    <el-input v-model="watermarkText" placeholder="例如：@MyChannel" />
+                  </el-form-item>
+                </el-col>
+                <el-col v-else :xs="24" :sm="12">
+                  <el-form-item label="PNG 绝对路径">
+                    <el-input v-model="watermarkImagePath" placeholder="例如：/var/www/watermark/logo.png" />
+                    <div class="hint compact">需填写服务器上的本地绝对路径（PNG）。</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row v-if="watermarkEnable" :gutter="12">
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="位置">
+                    <el-select v-model="watermarkPosition" class="ctrl ctrl-sm" popper-class="tgvive-dark-popper">
+                      <el-option value="bottom_right" label="右下角" />
+                      <el-option value="bottom_left" label="左下角" />
+                      <el-option value="top_right" label="右上角" />
+                      <el-option value="top_left" label="左上角" />
+                      <el-option value="center" label="正中心" />
+                      <el-option value="custom" label="自定义坐标" />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row v-if="watermarkEnable && watermarkPosition === 'custom'" :gutter="12">
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="自定义 X（%）">
+                    <el-slider v-model="watermarkCustomX" :min="0" :max="100" :step="1" show-input />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="自定义 Y（%）">
+                    <el-slider v-model="watermarkCustomY" :min="0" :max="100" :step="1" show-input />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row v-if="watermarkEnable" :gutter="12">
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="边距（0-10%）">
+                    <el-slider v-model="watermarkMarginPct" :min="0" :max="10" :step="1" show-input />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="缩放占比（1-50%）">
+                    <el-slider v-model="watermarkScalePct" :min="1" :max="50" :step="1" show-input />
+                    <div class="hint compact">控制水印占画面宽度的比例。</div>
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="透明度（0-100%）">
+                    <el-slider v-model="watermarkOpacityPct" :min="0" :max="100" :step="1" show-input />
+                    <div class="hint compact">100% 为完全不透明。</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
             </el-collapse-item>
           </el-collapse>
 

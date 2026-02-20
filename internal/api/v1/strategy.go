@@ -3,6 +3,7 @@ package v1
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -271,6 +272,169 @@ func normalizeAndSyncStrategyCommentRuleForUpdate(existing model.Strategy, paylo
 	return nil
 }
 
+func defaultWatermarkRule() model.WatermarkRule {
+	return model.WatermarkRule{
+		Enable:     true,
+		Position:   "bottom_right",
+		Margin:     0.02,
+		Opacity:    0.35,
+		ScaleRatio: 0, // decided by Type
+	}
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func normalizeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
+	out := in
+	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
+	out.Position = strings.ToLower(strings.TrimSpace(out.Position))
+	out.Text = strings.TrimSpace(out.Text)
+	out.ImagePath = strings.TrimSpace(out.ImagePath)
+
+	// Infer type if empty.
+	if out.Type == "" {
+		if out.ImagePath != "" {
+			out.Type = "image"
+		} else {
+			out.Type = "text"
+		}
+	}
+	switch out.Type {
+	case "text", "image":
+	default:
+		if out.ImagePath != "" {
+			out.Type = "image"
+		} else {
+			out.Type = "text"
+		}
+	}
+
+	switch out.Position {
+	case "bottom_right", "bottom_left", "top_right", "top_left", "center", "custom":
+	default:
+		out.Position = "bottom_right"
+	}
+
+	out.CustomX = clamp01(out.CustomX)
+	out.CustomY = clamp01(out.CustomY)
+
+	out.Margin = clamp01(out.Margin)
+	if out.Margin == 0 {
+		out.Margin = 0.02
+	}
+	if out.Margin > 0.1 {
+		out.Margin = 0.1
+	}
+
+	out.Opacity = clamp01(out.Opacity)
+	if out.Opacity == 0 {
+		out.Opacity = 0.35
+	}
+
+	out.ScaleRatio = clamp01(out.ScaleRatio)
+	if out.ScaleRatio == 0 {
+		if out.Type == "image" {
+			out.ScaleRatio = 0.15
+		} else {
+			out.ScaleRatio = 0.03
+		}
+	}
+	if out.ScaleRatio > 0.5 {
+		out.ScaleRatio = 0.5
+	}
+
+	return out
+}
+
+func validateWatermarkRule(r model.WatermarkRule) error {
+	if !r.Enable {
+		return nil
+	}
+	if r.Type == "image" {
+		if p := strings.TrimSpace(r.ImagePath); p != "" && !filepath.IsAbs(p) {
+			return errors.New("watermark_rule image_path 必须是绝对路径")
+		}
+	}
+	return nil
+}
+
+func normalizeAndSyncStrategyWatermarkRuleForCreate(s *model.Strategy) error {
+	if s == nil {
+		return nil
+	}
+
+	raw := s.WatermarkRule
+	if isEmptyJSON(raw) {
+		s.WatermarkRule = nil
+		return nil
+	}
+
+	var r model.WatermarkRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("watermark_rule 格式错误: " + err.Error())
+	}
+	r = normalizeWatermarkRule(r)
+	if !r.Enable {
+		s.WatermarkRule = nil
+		return nil
+	}
+	if err := validateWatermarkRule(r); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(r)
+	s.WatermarkRule = b
+	return nil
+}
+
+func normalizeAndSyncStrategyWatermarkRuleForUpdate(existing model.Strategy, payload *model.Strategy) error {
+	if payload == nil {
+		return nil
+	}
+
+	raw := payload.WatermarkRule
+	if raw == nil {
+		raw = existing.WatermarkRule
+	}
+
+	if isEmptyJSON(raw) {
+		payload.WatermarkRule = nil
+		return nil
+	}
+
+	var r model.WatermarkRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("watermark_rule 格式错误: " + err.Error())
+	}
+
+	// If request did not include watermark_rule explicitly, keep existing state.
+	if payload.WatermarkRule == nil && isEmptyJSON(existing.WatermarkRule) && r.Enable {
+		// No previous rule, but enable requested -> apply defaults.
+		def := defaultWatermarkRule()
+		def.Enable = true
+		r = def
+	}
+
+	r = normalizeWatermarkRule(r)
+	if !r.Enable {
+		payload.WatermarkRule = nil
+		return nil
+	}
+	if err := validateWatermarkRule(r); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(r)
+	payload.WatermarkRule = b
+	return nil
+}
+
 // CreateStrategy 创建策略模板
 func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	var s model.Strategy
@@ -326,6 +490,10 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	syncStrategyTypes(&s)
 	syncStrategyFileSuffixes(&s)
 	if err := normalizeAndSyncStrategyCommentRuleForCreate(&s); err != nil {
+		app.FailWithMsg(err.Error(), c)
+		return
+	}
+	if err := normalizeAndSyncStrategyWatermarkRuleForCreate(&s); err != nil {
 		app.FailWithMsg(err.Error(), c)
 		return
 	}
@@ -423,6 +591,10 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 	syncStrategyTypes(&payload)
 	syncStrategyFileSuffixes(&payload)
 	if err := normalizeAndSyncStrategyCommentRuleForUpdate(existing, &payload); err != nil {
+		app.FailWithMsg(err.Error(), c)
+		return
+	}
+	if err := normalizeAndSyncStrategyWatermarkRuleForUpdate(existing, &payload); err != nil {
 		app.FailWithMsg(err.Error(), c)
 		return
 	}

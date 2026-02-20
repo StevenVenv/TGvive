@@ -46,6 +46,7 @@ func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (mode
 	s.EnableRealtime = payload.EnableRealtime
 	s.ScheduleRules = payload.ScheduleRules
 	s.CommentRule = payload.CommentRule
+	s.WatermarkRule = payload.WatermarkRule
 
 	s.KeepReply = payload.KeepReply
 	s.Realtime = payload.Realtime

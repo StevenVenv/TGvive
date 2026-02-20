@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"my-go-server/internal/engine/processor"
+	wm "my-go-server/internal/engine/watermark"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 
@@ -373,11 +374,18 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	enableMediaEdit := task.CloneMode == 3 && task.EnableMediaEdit
 	procs := m.processors()
 
+	wmRule, wmEnabled := watermarkRuleForTask(task)
+	wmCandidate := wmEnabled && isWatermarkableImageMessage(msg)
+
 	if enableMediaEdit {
 		switch media := msg.Media.(type) {
 		case *tg.MessageMediaPhoto:
 			if procs.Image != nil && procs.Image.Enabled() {
-				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+				proc := procs.Image.ProcessPath
+				if wmCandidate {
+					proc = procs.Image.ProcessPathNoWatermark
+				}
+				if outPath, c, changed, err := proc(ctx, localPath); err != nil {
 					if err != processor.ErrUnsupportedImage && global.Logger != nil {
 						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
 					}
@@ -433,7 +441,11 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 			}
 
 			if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
-				if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+				proc := procs.Image.ProcessPath
+				if wmCandidate {
+					proc = procs.Image.ProcessPathNoWatermark
+				}
+				if outPath, c, changed, err := proc(ctx, localPath); err != nil {
 					if err != processor.ErrUnsupportedImage && global.Logger != nil {
 						global.Logger.Warn("image processor failed, skipped", zap.Error(err))
 					}
@@ -441,6 +453,47 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 					uploadPath = outPath
 					if c != nil {
 						defer func() { _ = c() }()
+					}
+				}
+			}
+		}
+	}
+
+	if wmCandidate {
+		if b, rerr := os.ReadFile(uploadPath); rerr == nil {
+			if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
+				if inputFile, uerr := uploadBytes(ctx, api, "wm.jpg", outBytes); uerr == nil && inputFile != nil {
+					spoiler, ttl := messageSpoilerTTL(msg)
+					uploaded := &tg.InputMediaUploadedPhoto{
+						File:       inputFile,
+						Spoiler:    spoiler,
+						TTLSeconds: ttl,
+					}
+					rid, err := randomID()
+					if err != nil {
+						return nil, err
+					}
+
+					caption := msg.Message
+					entities := msg.Entities
+					if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+						caption = out
+						entities = nil
+					}
+
+					req := &tg.MessagesSendMediaRequest{
+						Peer:     peer,
+						Media:    uploaded,
+						Message:  caption,
+						RandomID: rid,
+					}
+					if len(entities) > 0 {
+						req.Entities = entities
+					}
+
+					upd, err := api.MessagesSendMedia(ctx, req)
+					if err == nil {
+						return upd, nil
 					}
 				}
 			}
@@ -549,8 +602,11 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 
 	enableMediaEdit := task.CloneMode == 3 && task.EnableMediaEdit
 	procs := m.processors()
+	wmRule, wmEnabled := watermarkRuleForTask(task)
 
 	for _, msg := range mediaMsgs {
+		wmCandidate := wmEnabled && isWatermarkableImageMessage(msg)
+
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
 			if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
@@ -571,7 +627,11 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 			switch media := msg.Media.(type) {
 			case *tg.MessageMediaPhoto:
 				if procs.Image != nil && procs.Image.Enabled() {
-					if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					proc := procs.Image.ProcessPath
+					if wmCandidate {
+						proc = procs.Image.ProcessPathNoWatermark
+					}
+					if outPath, c, changed, err := proc(ctx, localPath); err != nil {
 						if err != processor.ErrUnsupportedImage && global.Logger != nil {
 							global.Logger.Warn("image processor failed, skipped", zap.Error(err))
 						}
@@ -627,7 +687,11 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 				}
 
 				if isImageDocument(media) && !isStickerDocument(media) && procs.Image != nil && procs.Image.Enabled() {
-					if outPath, c, changed, err := procs.Image.ProcessPath(ctx, localPath); err != nil {
+					proc := procs.Image.ProcessPath
+					if wmCandidate {
+						proc = procs.Image.ProcessPathNoWatermark
+					}
+					if outPath, c, changed, err := proc(ctx, localPath); err != nil {
 						if err != processor.ErrUnsupportedImage && global.Logger != nil {
 							global.Logger.Warn("image processor failed, skipped", zap.Error(err))
 						}
@@ -635,6 +699,37 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 						uploadPath = outPath
 						if c != nil {
 							cleanups = append(cleanups, c)
+						}
+					}
+				}
+			}
+		}
+
+		if wmCandidate {
+			if b, rerr := os.ReadFile(uploadPath); rerr == nil {
+				if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
+					if inputFile, uerr := uploadBytes(ctx, api, "wm.jpg", outBytes); uerr == nil && inputFile != nil {
+						spoiler, ttl := messageSpoilerTTL(msg)
+						uploaded := &tg.InputMediaUploadedPhoto{
+							File:       inputFile,
+							Spoiler:    spoiler,
+							TTLSeconds: ttl,
+						}
+						if thumb != nil {
+							// keep best-effort thumb (not applicable to uploaded photo)
+							_ = thumb
+						}
+						inputMedia, err := uploadMediaForAlbum(ctx, api, peer, uploaded)
+						if err == nil && inputMedia != nil {
+							rid, err := randomID()
+							if err != nil {
+								return nil, err
+							}
+							ups = append(ups, tg.InputSingleMedia{
+								Media:    inputMedia,
+								RandomID: rid,
+							})
+							continue
 						}
 					}
 				}

@@ -11,6 +11,7 @@ import {
   getStrategies,
   updateKeywordProfile,
   updateStrategy,
+  type WatermarkRule,
   type KeywordProfile,
   type Strategy,
 } from '../api'
@@ -74,6 +75,19 @@ function emptyModel(): StrategyFormModel {
       block_keywords: [],
     },
 
+    watermark_rule: {
+      enable: false,
+      type: 'text',
+      text: '',
+      image_path: '',
+      position: 'bottom_right',
+      custom_x: 0.5,
+      custom_y: 0.5,
+      margin: 0.02,
+      scale_ratio: 0.03,
+      opacity: 0.35,
+    },
+
     keep_reply: false,
     realtime: false,
     clone_comment: false,
@@ -128,6 +142,7 @@ function summarizeTags(s: Strategy): string[] {
   if (push) tags.push('监听')
   if (s.keep_reply) tags.push('保留回复')
   if (s.clone_comment) tags.push('克隆评论')
+  if (Boolean((s as any)?.watermark_rule?.enable)) tags.push('水印')
   if (s.gpu_accel) tags.push('GPU')
   if (s.change_md5) tags.push('改MD5')
   if ((s as any).enable_media_edit) tags.push('媒体编辑')
@@ -273,6 +288,8 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
   const allowExts = normalizeFileExtList((m as any).allow_file_exts)
   const commentEnable = Boolean((m as any)?.comment_rule?.enable ?? m.clone_comment)
   const comment_rule = normalizeCommentRule((m as any).comment_rule, commentEnable)
+  const rawWatermark = (m as any).watermark_rule
+  const watermark_rule = rawWatermark && typeof rawWatermark === 'object' ? (rawWatermark as WatermarkRule) : undefined
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
@@ -297,6 +314,7 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     keep_reply: Boolean(m.keep_reply),
     clone_comment: commentEnable,
     comment_rule,
+    watermark_rule,
     gpu_accel: Boolean(m.gpu_accel),
     change_md5: Boolean(m.change_md5),
     enable_media_edit: Boolean((m as any).enable_media_edit),
@@ -322,6 +340,11 @@ function fillEdit(row: Strategy) {
   const rawComment = (row as any).comment_rule
   const commentEnable = Boolean((rawComment as any)?.enable ?? row.clone_comment)
   const comment_rule = normalizeCommentRule(rawComment, commentEnable)
+  const rawWatermark = (row as any).watermark_rule
+  const watermark_rule =
+    rawWatermark && typeof rawWatermark === 'object'
+      ? ({ ...emptyModel().watermark_rule, ...(rawWatermark as any) } as WatermarkRule)
+      : emptyModel().watermark_rule
   Object.assign(editModel, emptyModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
@@ -341,6 +364,7 @@ function fillEdit(row: Strategy) {
     schedule_rules: normalizeScheduleRules((row as any).schedule_rules),
 
     comment_rule,
+    watermark_rule,
 
     keep_reply: Boolean(row.keep_reply),
     realtime: enable,
