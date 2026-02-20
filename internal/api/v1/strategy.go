@@ -302,9 +302,7 @@ func normalizeHexColor(in string, def string) string {
 	if s == "" {
 		return def
 	}
-	if strings.HasPrefix(s, "#") {
-		s = strings.TrimPrefix(s, "#")
-	}
+	s = strings.TrimPrefix(s, "#")
 	s = strings.TrimSpace(s)
 	if len(s) == 3 {
 		// Expand #RGB -> #RRGGBB.

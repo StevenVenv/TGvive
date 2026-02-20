@@ -22,9 +22,7 @@ func normalizeHexColor(in string, def string) string {
 	if s == "" {
 		return def
 	}
-	if strings.HasPrefix(s, "#") {
-		s = strings.TrimPrefix(s, "#")
-	}
+	s = strings.TrimPrefix(s, "#")
 	s = strings.TrimSpace(s)
 	if len(s) == 3 {
 		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
@@ -114,7 +112,7 @@ func normalizeRuntimeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 	return out
 }
 
-func resolveWatermarkRule(task model.Task, st *model.Strategy) (rule model.WatermarkRule, enabled bool, key string) {
+func resolveWatermarkRule(st *model.Strategy) (rule model.WatermarkRule, enabled bool, key string) {
 	if st != nil && len(st.WatermarkRule) > 0 && strings.TrimSpace(string(st.WatermarkRule)) != "null" {
 		var r model.WatermarkRule
 		if err := json.Unmarshal(st.WatermarkRule, &r); err == nil {

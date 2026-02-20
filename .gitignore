@@ -4,3 +4,4 @@ tmp/
 data/
 .DS_Store
 test/
+.trunk/

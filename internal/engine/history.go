@@ -34,9 +34,6 @@ const (
 	defaultRetryDelayMin  = 800 * time.Millisecond
 	defaultRetryDelayMax  = 2500 * time.Millisecond
 
-	// Safety valve if caller chooses to keep going on failures (unused for now).
-	maxConsecutiveFails = 10
-
 	// When history_max_id is missing (existing tasks before schema upgrade), we can only do best-effort 追更.
 	// We'll scan a recent window to avoid re-sending the entire history.
 	defaultCatchUpFallbackWindow = 500

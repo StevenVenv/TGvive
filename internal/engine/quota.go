@@ -386,30 +386,6 @@ func quotaSendableCount(m *TaskManager, msg *tg.Message, allowedTypes map[string
 	return 1
 }
 
-func quotaSendableAlbumCount(m *TaskManager, msgs []*tg.Message, allowedTypes map[string]struct{}) int {
-	if m == nil || len(msgs) == 0 {
-		return 0
-	}
-
-	n := 0
-	for _, msg := range msgs {
-		if msg == nil || msg.Media == nil {
-			continue
-		}
-		if allowedTypes != nil {
-			ct := m.DetectContentType(msg)
-			if _, ok := allowedTypes[ct]; !ok {
-				continue
-			}
-		}
-		if _, err := convertMessageMediaToInput(msg.Media); err != nil {
-			continue
-		}
-		n++
-	}
-	return n
-}
-
 func minDuration(a, b time.Duration) time.Duration {
 	if a <= 0 {
 		return 0

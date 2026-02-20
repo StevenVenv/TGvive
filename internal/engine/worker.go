@@ -216,17 +216,6 @@ func (m *TaskManager) isActiveRun(taskID uint, runID uint64) bool {
 	return ok
 }
 
-func (m *TaskManager) getCounters(taskID uint, runID uint64) (processed int, total int, realtime bool, completed bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	st := m.states[taskID]
-	if st == nil || st.RunID != runID {
-		return 0, 0, false, false
-	}
-	return st.Processed, st.Total, st.Realtime, st.Completed
-}
-
 // record updates counters and appends a log line.
 // totalDelta is used by realtime mode when new messages arrive.
 func (m *TaskManager) record(taskID uint, runID uint64, totalDelta int, processedDelta int, successDelta int, failDelta int, logLine string) {

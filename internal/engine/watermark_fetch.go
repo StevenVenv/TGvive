@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"sort"
 
 	"my-go-server/internal/model"
 
@@ -39,78 +38,6 @@ func messageSpoilerTTL(msg *tg.Message) (spoiler bool, ttl int) {
 	default:
 		return false, 0
 	}
-}
-
-func refreshMessagesByIDs(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, ids []int) (map[int]*tg.Message, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if api == nil {
-		return nil, errors.New("tg api is nil")
-	}
-	if len(ids) == 0 {
-		return nil, nil
-	}
-
-	uniq := make(map[int]struct{}, len(ids))
-	list := make([]int, 0, len(ids))
-	for _, id := range ids {
-		if id <= 0 {
-			continue
-		}
-		if _, ok := uniq[id]; ok {
-			continue
-		}
-		uniq[id] = struct{}{}
-		list = append(list, id)
-	}
-	if len(list) == 0 {
-		return nil, nil
-	}
-	sort.Ints(list)
-
-	out := make(map[int]*tg.Message, len(list))
-	const chunkSize = 100
-	for start := 0; start < len(list); start += chunkSize {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		end := start + chunkSize
-		if end > len(list) {
-			end = len(list)
-		}
-		chunk := list[start:end]
-		input := make([]tg.InputMessageClass, 0, len(chunk))
-		for _, id := range chunk {
-			input = append(input, &tg.InputMessageID{ID: id})
-		}
-
-		var (
-			r   tg.MessagesMessagesClass
-			err error
-		)
-		if ch, ok := sourcePeer.(*tg.InputPeerChannel); ok && ch != nil {
-			r, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-				Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
-				ID:      input,
-			})
-		} else {
-			r, err = api.MessagesGetMessages(ctx, input)
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		msgs := extractTGMessages(r)
-		for _, m := range msgs {
-			if m == nil || m.ID <= 0 {
-				continue
-			}
-			out[m.ID] = m
-		}
-	}
-
-	return out, nil
 }
 
 func downloadMessageMediaBytes(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgID int) ([]byte, *tg.Message, error) {
@@ -200,6 +127,6 @@ func uploadBytes(ctx context.Context, api *tg.Client, name string, b []byte) (tg
 
 func watermarkRuleForTask(task model.Task) (model.WatermarkRule, bool) {
 	st := ResolveRuntimeStrategy(task)
-	rule, enabled, _ := resolveWatermarkRule(task, st)
+	rule, enabled, _ := resolveWatermarkRule(st)
 	return rule, enabled
 }

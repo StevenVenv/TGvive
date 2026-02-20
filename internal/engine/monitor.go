@@ -15,7 +15,6 @@ import (
 	"my-go-server/internal/model"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 )
@@ -975,10 +974,6 @@ func (rt *telegramRuntime) shutdown() {
 	}
 }
 
-func (m *TaskManager) ensureTelegram(ctx context.Context) (*telegramRuntime, error) {
-	return m.ensureTelegramForTask(ctx, model.Task{})
-}
-
 func (m *TaskManager) ensureTelegramForTask(ctx context.Context, t model.Task) (*telegramRuntime, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1107,7 +1102,7 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 				return err
 			}
 			if !status.Authorized {
-				err := errors.New("Telegram 未授权：请先运行 cmd/auth_tool 登录或使用 /api/v1/tg/qr 扫码生成 session 文件")
+				err := errors.New("telegram 未授权：请先运行 cmd/auth_tool 登录或使用 /api/v1/tg/qr 扫码生成 session 文件")
 				rt.finishStart(err, ready)
 				return err
 			}
@@ -1413,15 +1408,4 @@ func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Mess
 		return false
 	}
 	return true
-}
-
-// resolveTargetPeer is a small helper for monitor/history orchestration.
-func resolveTargetPeer(ctx context.Context, api *tg.Client, raw string) (tg.InputPeerClass, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.New("empty target peer")
-	}
-
-	s := message.NewSender(api)
-	return s.Resolve(raw).AsInputPeer(ctx)
 }

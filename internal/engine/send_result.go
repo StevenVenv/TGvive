@@ -29,8 +29,7 @@ func extractSentMsgIDs(upd tg.UpdatesClass) []int {
 		out = append(out, id)
 	}
 
-	var walkUpdate func(u tg.UpdateClass)
-	walkUpdate = func(u tg.UpdateClass) {
+	walkUpdate := func(u tg.UpdateClass) {
 		switch v := u.(type) {
 		case *tg.UpdateNewMessage:
 			if m, ok := v.Message.(*tg.Message); ok && m != nil && m.ID > 0 {

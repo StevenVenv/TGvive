@@ -204,9 +204,7 @@ func applyImageWatermark(base image.Image, rule model.WatermarkRule) (image.Imag
 
 func hexRGB01(hex string) (r, g, b float64) {
 	s := strings.TrimSpace(hex)
-	if strings.HasPrefix(s, "#") {
-		s = strings.TrimPrefix(s, "#")
-	}
+	s = strings.TrimPrefix(s, "#")
 	if len(s) == 3 {
 		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
 	}

@@ -1274,42 +1274,6 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 	return "", mediaMeta{}, nil, err
 }
 
-func uploadAsInputMediaUploaded(meta mediaMeta, inputFile tg.InputFileClass) tg.InputMediaClass {
-	switch meta.Kind {
-	case mediaKindPhoto:
-		return &tg.InputMediaUploadedPhoto{
-			Spoiler:    meta.Spoiler,
-			File:       inputFile,
-			TTLSeconds: meta.TTLSeconds,
-		}
-	case mediaKindDocument:
-		attrs := meta.Attributes
-		if !hasFilenameAttr(attrs) {
-			name := meta.Filename
-			if name == "" {
-				name = "file.bin"
-			}
-			attrs = append(attrs, &tg.DocumentAttributeFilename{FileName: sanitizeFilename(name)})
-		}
-		mime := strings.TrimSpace(meta.MimeType)
-		if mime == "" {
-			mime = "application/octet-stream"
-		}
-		return &tg.InputMediaUploadedDocument{
-			Spoiler:    meta.Spoiler,
-			File:       inputFile,
-			MimeType:   mime,
-			Attributes: attrs,
-			TTLSeconds: meta.TTLSeconds,
-		}
-	default:
-		return &tg.InputMediaUploadedDocument{
-			File:     inputFile,
-			MimeType: "application/octet-stream",
-		}
-	}
-}
-
 func uploadMediaForAlbum(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, uploaded tg.InputMediaClass) (tg.InputMediaClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1330,14 +1294,6 @@ func uploadMediaForAlbum(ctx context.Context, api *tg.Client, peer tg.InputPeerC
 	}
 
 	return convertMessageMediaToInput(m)
-}
-
-func bestPhotoThumbType(photo *tg.Photo) (thumb string, ok bool) {
-	types := photoThumbCandidates(photo)
-	if len(types) == 0 {
-		return "", false
-	}
-	return types[0], true
 }
 
 func randomID() (int64, error) {
