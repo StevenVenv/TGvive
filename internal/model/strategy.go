@@ -62,6 +62,9 @@ type Strategy struct {
 	CloneComment bool `gorm:"default:false" json:"clone_comment"`
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`
 	ChangeMD5    bool `gorm:"default:false" json:"change_md5"`
+	// RandomFilename controls whether to randomize DocumentAttributeFilename when uploading media.
+	// It is only effective when ChangeMD5=true (anti-detection bundle) and CloneMode=3 (Upload).
+	RandomFilename bool `gorm:"default:false" json:"random_filename"`
 	// EnableMediaEdit controls whether to apply media processors (image/video watermark, cover extraction, etc.).
 	// It is only effective in CloneMode=3 (Upload). For other modes it will be force-disabled at runtime.
 	EnableMediaEdit bool `gorm:"default:false" json:"enable_media_edit"`

@@ -400,12 +400,38 @@ func validateWatermarkRule(r model.WatermarkRule) error {
 	}
 	if r.Type == "image" {
 		if p := strings.TrimSpace(r.ImagePath); p != "" && !filepath.IsAbs(p) {
-			return errors.New("watermark_rule image_path 必须是绝对路径")
+			// Allow storing server-uploaded watermark by filename (recommended) to avoid leaking local absolute paths.
+			norm := strings.ReplaceAll(p, "\\", "/")
+			norm = strings.TrimPrefix(norm, "./")
+			clean := strings.ReplaceAll(filepath.Clean(norm), "\\", "/")
+			base := strings.TrimSpace(filepath.Base(clean))
+			if base == "" || base == "." || base == ".." {
+				return errors.New("watermark_rule image_path 不合法")
+			}
+			if !strings.HasSuffix(strings.ToLower(base), ".png") {
+				return errors.New("watermark_rule image_path 仅支持 .png")
+			}
+			if strings.ContainsAny(norm, `/\`) && !strings.HasPrefix(clean, "data/watermarks/") {
+				return errors.New("watermark_rule image_path 必须是绝对路径或 data/watermarks/ 下的文件名")
+			}
 		}
 	}
 	if r.Type == "text" {
 		if p := strings.TrimSpace(r.FontPath); p != "" && !filepath.IsAbs(p) {
-			return errors.New("watermark_rule font_path 必须是绝对路径")
+			norm := strings.ReplaceAll(p, "\\", "/")
+			norm = strings.TrimPrefix(norm, "./")
+			clean := strings.ReplaceAll(filepath.Clean(norm), "\\", "/")
+			base := strings.TrimSpace(filepath.Base(clean))
+			if base == "" || base == "." || base == ".." {
+				return errors.New("watermark_rule font_path 不合法")
+			}
+			ext := strings.ToLower(filepath.Ext(base))
+			if ext != ".ttf" && ext != ".otf" {
+				return errors.New("watermark_rule font_path 仅支持 .ttf/.otf")
+			}
+			if strings.ContainsAny(norm, `/\`) && !strings.HasPrefix(clean, "data/watermarks/fonts/") {
+				return errors.New("watermark_rule font_path 必须是绝对路径或 data/watermarks/fonts/ 下的文件名")
+			}
 		}
 	}
 	return nil
@@ -531,6 +557,9 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	enableRealtime := s.EnableRealtime || s.Realtime
 	s.EnableRealtime = enableRealtime
 	s.Realtime = enableRealtime
+	if !s.ChangeMD5 {
+		s.RandomFilename = false
+	}
 
 	syncStrategyTypes(&s)
 	syncStrategyFileSuffixes(&s)
@@ -632,6 +661,9 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 	enableRealtime := payload.EnableRealtime || payload.Realtime
 	payload.EnableRealtime = enableRealtime
 	payload.Realtime = enableRealtime
+	if !payload.ChangeMD5 {
+		payload.RandomFilename = false
+	}
 
 	syncStrategyTypes(&payload)
 	syncStrategyFileSuffixes(&payload)

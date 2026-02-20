@@ -510,7 +510,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 		return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 	}
 
-	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
+	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
 	if err != nil {
 		return nil, err
 	}
@@ -746,7 +746,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 			return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 		}
 
-		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
+		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
 		if err != nil {
 			return nil, err
 		}

@@ -130,7 +130,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		if sendErr != nil {
 			// Upload fallback: refetch original message and send with fallback.
 			if fullMsg, rerr := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, item.CommentMsgID); rerr == nil && fullMsg != nil {
-				sendErr = m.sendCommentWithFallback(ctx, api, cfg.SourceLinkedPeer, cfg.TargetLinkedPeer, fullMsg, targetRootID, task.ID)
+				sendErr = m.sendCommentWithFallback(ctx, api, cfg.SourceLinkedPeer, cfg.TargetLinkedPeer, fullMsg, targetRootID, task)
 			}
 		}
 		return sendErr

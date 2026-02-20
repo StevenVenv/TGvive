@@ -216,6 +216,7 @@ func MergeHotFieldsIntoTask(task model.Task, st *model.Strategy) model.Task {
 	out.DailyLimit = st.DailyLimit
 	out.RunWindow = strings.TrimSpace(st.RunWindow)
 	out.ChangeMD5 = st.ChangeMD5
+	out.RandomFilename = st.ChangeMD5 && st.RandomFilename
 	out.EnableMediaEdit = st.EnableMediaEdit
 	return out
 }

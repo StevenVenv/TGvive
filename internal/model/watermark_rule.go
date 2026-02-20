@@ -24,10 +24,12 @@ type WatermarkRule struct {
 	// ShadowColor is used by shadow styles (hex like "#000000").
 	ShadowColor string `json:"shadow_color"`
 
-	// FontPath is an absolute local font file path (.ttf/.otf) used when Type == "text".
+	// FontPath is a local font path (.ttf/.otf) used when Type == "text".
+	// It can be an absolute path, or a filename stored under data/watermarks/fonts (recommended).
 	FontPath string `json:"font_path"`
 
-	// ImagePath is used when Type == "image". Must be an absolute local PNG path.
+	// ImagePath is used when Type == "image". It can be an absolute path, or a filename stored under
+	// data/watermarks (recommended). PNG only.
 	ImagePath string `json:"image_path"`
 
 	// Position: "bottom_right", "bottom_left", "top_right", "top_left", "center", "custom".

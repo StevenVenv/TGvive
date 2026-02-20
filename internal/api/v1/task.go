@@ -100,6 +100,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		CloneComment:    strategy.CloneComment,
 		GpuAccel:        strategy.GpuAccel,
 		ChangeMD5:       strategy.ChangeMD5,
+		RandomFilename:  strategy.ChangeMD5 && strategy.RandomFilename,
 		EnableMediaEdit: strategy.EnableMediaEdit,
 
 		DelayMinMs: strategy.DelayMinMs,
@@ -334,6 +335,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		CloneComment:    strategy.CloneComment,
 		GpuAccel:        strategy.GpuAccel,
 		ChangeMD5:       strategy.ChangeMD5,
+		RandomFilename:  strategy.ChangeMD5 && strategy.RandomFilename,
 		EnableMediaEdit: strategy.EnableMediaEdit,
 
 		DelayMinMs: strategy.DelayMinMs,

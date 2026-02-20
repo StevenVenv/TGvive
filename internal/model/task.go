@@ -60,6 +60,9 @@ type Task struct {
 	CloneComment bool `gorm:"default:false" json:"clone_comment"` // 克隆评论
 	GpuAccel     bool `gorm:"default:false" json:"gpu_accel"`     // GPU 加速
 	ChangeMD5    bool `gorm:"default:false" json:"change_md5"`    // 下载上传时修改文件 MD5
+	// RandomFilename controls whether to randomize DocumentAttributeFilename when uploading media.
+	// It is only effective when ChangeMD5=true (anti-detection bundle) and CloneMode=3 (Upload).
+	RandomFilename bool `gorm:"default:false" json:"random_filename"`
 	// EnableMediaEdit controls whether to apply media processors (image/video watermark, cover extraction, etc.).
 	// It is only effective in CloneMode=3 (Upload). For other modes it will be force-disabled at runtime.
 	EnableMediaEdit bool `gorm:"default:false" json:"enable_media_edit"`

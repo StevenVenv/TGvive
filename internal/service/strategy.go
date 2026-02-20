@@ -53,6 +53,7 @@ func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (mode
 	s.CloneComment = payload.CloneComment
 	s.GpuAccel = payload.GpuAccel
 	s.ChangeMD5 = payload.ChangeMD5
+	s.RandomFilename = payload.ChangeMD5 && payload.RandomFilename
 	s.EnableMediaEdit = payload.EnableMediaEdit
 
 	s.DelayMinMs = payload.DelayMinMs

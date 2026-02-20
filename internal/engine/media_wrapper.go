@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gotd/td/telegram/downloader"
@@ -13,7 +16,7 @@ import (
 
 // WrapUploadedMedia 将上传后的文件封装为可发送的媒体对象（CloneMode=3）。
 // 使用原始消息的元数据（如 Attributes / Spoiler / TTLSeconds）来尽量还原显示效果。
-func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inputFile tg.InputFileClass, originalMsg *tg.Message) (tg.InputMediaClass, error) {
+func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inputFile tg.InputFileClass, originalMsg *tg.Message, randomFilename bool) (tg.InputMediaClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -41,10 +44,26 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 			return nil, nil
 		}
 
-		attrs := make([]tg.DocumentAttributeClass, len(doc.Attributes))
-		copy(attrs, doc.Attributes)
+		origName, _ := findDocumentFilename(doc.Attributes)
+		randomName := ""
+		if randomFilename {
+			if name, err := randomizeFilename(origName, doc.MimeType); err == nil && strings.TrimSpace(name) != "" {
+				randomName = name
+			}
+		}
 
-		if !hasFilenameAttr(attrs) {
+		attrs := make([]tg.DocumentAttributeClass, 0, len(doc.Attributes)+1)
+		for _, a := range doc.Attributes {
+			if _, ok := a.(*tg.DocumentAttributeFilename); ok && randomName != "" {
+				continue
+			}
+			attrs = append(attrs, a)
+		}
+		if randomName != "" {
+			attrs = append(attrs, &tg.DocumentAttributeFilename{FileName: sanitizeFilename(randomName)})
+		}
+
+		if randomName == "" && !hasFilenameAttr(attrs) {
 			name := ""
 			if v, ok := findDocumentFilename(attrs); ok {
 				name = v
@@ -86,6 +105,124 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 	}
 
 	return nil, nil
+}
+
+func randomizeFilename(origName, mime string) (string, error) {
+	ext := extFromOrigName(origName)
+	if ext == "" {
+		ext = extFromMime(mime)
+	}
+	if ext == "" {
+		ext = ".bin"
+	}
+
+	b := make([]byte, 10) // 20 hex chars
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "file_" + hex.EncodeToString(b) + ext, nil
+}
+
+func extFromOrigName(origName string) string {
+	name := strings.TrimSpace(origName)
+	if name == "" {
+		return ""
+	}
+	ext1 := sanitizeExt(filepath.Ext(name))
+	if ext1 == "" {
+		return ""
+	}
+	stem := strings.TrimSuffix(strings.ToLower(name), ext1)
+	ext2 := sanitizeExt(filepath.Ext(stem))
+	if ext2 == "" {
+		return ext1
+	}
+
+	// Preserve common compound extensions.
+	if ext2 == ".tar" && isTarCompressedExt(ext1) {
+		return ext2 + ext1
+	}
+	if isNumericExt(ext1) && (ext2 == ".7z" || ext2 == ".zip" || ext2 == ".rar") {
+		return ext2 + ext1
+	}
+
+	return ext1
+}
+
+func isTarCompressedExt(ext string) bool {
+	switch ext {
+	case ".gz", ".bz2", ".xz", ".zst", ".br", ".lz", ".lz4", ".lzo":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericExt(ext string) bool {
+	if len(ext) < 2 || len(ext) > 8 || !strings.HasPrefix(ext, ".") {
+		return false
+	}
+	for i := 1; i < len(ext); i++ {
+		if ext[i] < '0' || ext[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func sanitizeExt(ext string) string {
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		return ""
+	}
+	if !strings.HasPrefix(ext, ".") {
+		return ""
+	}
+	if len(ext) > 32 {
+		return ""
+	}
+	for i := 1; i < len(ext); i++ {
+		ch := ext[i]
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			continue
+		}
+		return ""
+	}
+	return strings.ToLower(ext)
+}
+
+func extFromMime(mime string) string {
+	mime = strings.ToLower(strings.TrimSpace(mime))
+	switch mime {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "video/mp4":
+		return ".mp4"
+	case "video/quicktime":
+		return ".mov"
+	case "video/x-matroska":
+		return ".mkv"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/ogg":
+		return ".ogg"
+	case "application/pdf":
+		return ".pdf"
+	case "application/zip":
+		return ".zip"
+	case "application/x-7z-compressed":
+		return ".7z"
+	case "application/x-rar-compressed":
+		return ".rar"
+	default:
+		return ""
+	}
 }
 
 // transferDocumentThumb downloads the best available document thumbnail and uploads it as InputFile.

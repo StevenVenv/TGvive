@@ -750,7 +750,7 @@ func (m *TaskManager) dispatchCommentMessage(tgRT *telegramRuntime, channelID in
 	}
 }
 
-func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msg *tg.Message, replyToMsgID int, taskID uint) error {
+func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msg *tg.Message, replyToMsgID int, task model.Task) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -846,7 +846,7 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 	}
 
 	// Upload fallback (CloneMode=3 behavior, without processors/MD5 changes).
-	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, taskID)
+	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
 		return err
 	}
@@ -859,7 +859,7 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 		return err
 	}
 
-	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg)
+	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
 	if err != nil {
 		return err
 	}

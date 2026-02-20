@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
-import { uploadWatermarkFont, uploadWatermarkPNG, type CommentRule, type WatermarkRule } from '../../api'
+import { apiFetchBlob, uploadWatermarkFont, uploadWatermarkPNG, type CommentRule, type WatermarkRule } from '../../api'
 
 export type ScheduleRule = {
   start: string
@@ -36,6 +36,7 @@ export type StrategyFormModel = {
   clone_comment: boolean
   gpu_accel: boolean
   change_md5: boolean
+  random_filename: boolean
   enable_media_edit: boolean
 
   delay_min_ms: number
@@ -84,6 +85,14 @@ watch(
     if (mode !== 3) {
       form.value.enable_media_edit = false
     }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => Boolean(form.value.change_md5),
+  (v) => {
+    if (!v) form.value.random_filename = false
   },
   { immediate: true },
 )
@@ -214,8 +223,8 @@ function ensureWatermarkRule(): WatermarkRule {
   r.text_color = String((r as any).text_color || '#FFFFFF')
   r.stroke_color = String((r as any).stroke_color || '#000000')
   r.shadow_color = String((r as any).shadow_color || '#000000')
-  r.font_path = String((r as any).font_path || '')
-  r.image_path = String((r as any).image_path || '')
+  r.font_path = normalizeUploadedWatermarkPath(String((r as any).font_path || ''))
+  r.image_path = normalizeUploadedWatermarkPath(String((r as any).image_path || ''))
   r.position = String((r as any).position || 'bottom_right')
 
   r.custom_x = clampFloat01((r as any).custom_x)
@@ -375,7 +384,7 @@ async function uploadWatermarkPNGRequest(opts: UploadRequestOptions) {
   try {
     const res = await uploadWatermarkPNG(file)
     watermarkType.value = 'image'
-    watermarkImagePath.value = String(res?.path || '')
+    watermarkImagePath.value = normalizeUploadedWatermarkPath(String(res?.name || res?.path || ''))
     ElMessage.success('水印已上传')
     opts.onSuccess?.(res as any)
   } catch (e: any) {
@@ -412,7 +421,7 @@ async function uploadWatermarkFontRequest(opts: UploadRequestOptions) {
   try {
     const res = await uploadWatermarkFont(file)
     watermarkType.value = 'text'
-    watermarkFontPath.value = String(res?.path || '')
+    watermarkFontPath.value = normalizeUploadedWatermarkPath(String(res?.name || res?.path || ''))
     ElMessage.success('字体已上传')
     opts.onSuccess?.(res as any)
   } catch (e: any) {
@@ -432,17 +441,64 @@ function pathBasename(p: string): string {
   return parts[parts.length - 1] || ''
 }
 
+function normalizeUploadedWatermarkPath(p: string): string {
+  const s = String(p || '')
+    .trim()
+    .replace(/\\/g, '/')
+  if (!s) return ''
+  if (s.includes('/data/watermarks/') || s.startsWith('data/watermarks/')) {
+    return pathBasename(s)
+  }
+  return s
+}
+
 const watermarkImagePreviewURL = computed<string>(() => {
   const name = pathBasename(watermarkImagePath.value)
   if (!name) return ''
   return `/api/v1/watermarks/files/${encodeURIComponent(name)}`
 })
 
+const watermarkImagePreviewSrc = ref('')
+const watermarkImagePreviewLoading = ref(false)
 const watermarkImagePreviewOK = ref(true)
+
 watch(
-  () => watermarkImagePreviewURL.value,
-  () => {
+  () => [watermarkEnable.value, watermarkType.value, watermarkImagePreviewURL.value] as const,
+  async ([enable, typ, url], _, onCleanup) => {
     watermarkImagePreviewOK.value = true
+    watermarkImagePreviewLoading.value = false
+    watermarkImagePreviewSrc.value = ''
+
+    if (!enable || typ !== 'image' || !url) {
+      return
+    }
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof URL.revokeObjectURL !== 'function') {
+      watermarkImagePreviewOK.value = false
+      return
+    }
+
+    const ac = new AbortController()
+    onCleanup(() => ac.abort())
+
+    let objectURL = ''
+    onCleanup(() => {
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    })
+
+    watermarkImagePreviewLoading.value = true
+    try {
+      const blob = await apiFetchBlob(url, { method: 'GET', signal: ac.signal })
+      if (ac.signal.aborted) return
+      objectURL = URL.createObjectURL(blob)
+      watermarkImagePreviewSrc.value = objectURL
+      watermarkImagePreviewOK.value = true
+    } catch {
+      if (ac.signal.aborted) return
+      watermarkImagePreviewOK.value = false
+      watermarkImagePreviewSrc.value = ''
+    } finally {
+      if (!ac.signal.aborted) watermarkImagePreviewLoading.value = false
+    }
   },
   { immediate: true },
 )
@@ -452,6 +508,9 @@ const watermarkFontPreviewURL = computed<string>(() => {
   if (!name) return ''
   return `/api/v1/watermarks/fonts/${encodeURIComponent(name)}`
 })
+
+const watermarkFontPreviewSrc = ref('')
+const watermarkFontPreviewLoading = ref(false)
 
 const watermarkPreviewFontFamily = ref('')
 const watermarkPreviewFontError = ref('')
@@ -484,13 +543,47 @@ async function loadPreviewFont(url: string) {
 
 watch(
   () => [watermarkEnable.value, watermarkType.value, watermarkFontPreviewURL.value] as const,
-  ([enable, typ, url]) => {
+  async ([enable, typ, url], _, onCleanup) => {
+    watermarkFontPreviewLoading.value = false
+    watermarkFontPreviewSrc.value = ''
+
     if (!enable || typ !== 'text') {
       watermarkPreviewFontFamily.value = ''
       watermarkPreviewFontError.value = ''
       return
     }
-    void loadPreviewFont(url)
+    if (!url) {
+      await loadPreviewFont('')
+      return
+    }
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof URL.revokeObjectURL !== 'function') {
+      watermarkPreviewFontFamily.value = ''
+      watermarkPreviewFontError.value = '字体预览不支持'
+      return
+    }
+
+    const ac = new AbortController()
+    onCleanup(() => ac.abort())
+
+    let objectURL = ''
+    onCleanup(() => {
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    })
+
+    watermarkFontPreviewLoading.value = true
+    try {
+      const blob = await apiFetchBlob(url, { method: 'GET', signal: ac.signal })
+      if (ac.signal.aborted) return
+      objectURL = URL.createObjectURL(blob)
+      watermarkFontPreviewSrc.value = objectURL
+      await loadPreviewFont(objectURL)
+    } catch {
+      if (ac.signal.aborted) return
+      watermarkPreviewFontFamily.value = ''
+      watermarkPreviewFontError.value = '字体预览加载失败'
+    } finally {
+      if (!ac.signal.aborted) watermarkFontPreviewLoading.value = false
+    }
   },
   { immediate: true },
 )
@@ -1384,13 +1477,13 @@ defineExpose<StrategyFormExpose>({
                   </el-form-item>
                 </el-col>
                 <el-col v-else :xs="24" :sm="12">
-                  <el-form-item label="PNG 绝对路径">
-                    <div class="wm-upload">
-                      <el-input v-model="watermarkImagePath" placeholder="例如：/var/www/watermark/logo.png" />
-                      <el-upload
-                        :show-file-list="false"
-                        accept="image/png"
-                        :before-upload="beforeUploadWatermarkPNG"
+	                  <el-form-item label="PNG 路径/文件名">
+	                    <div class="wm-upload">
+	                      <el-input v-model="watermarkImagePath" placeholder="例如：wm_xxx.png 或 /var/www/watermark/logo.png" />
+	                      <el-upload
+	                        :show-file-list="false"
+	                        accept="image/png"
+	                        :before-upload="beforeUploadWatermarkPNG"
                         :http-request="uploadWatermarkPNGRequest"
                         :disabled="watermarkImageUploading"
                       >
@@ -1398,12 +1491,12 @@ defineExpose<StrategyFormExpose>({
                           <i class="ri-upload-2-line" />
                           上传 PNG
                         </el-button>
-                      </el-upload>
-                    </div>
-                    <div class="hint compact">上传后返回服务器本地绝对路径，可直接用于水印配置。</div>
-                  </el-form-item>
-                </el-col>
-              </el-row>
+	                      </el-upload>
+	                    </div>
+	                    <div class="hint compact">上传后仅保存文件名（data/watermarks/ 下），避免暴露本机绝对路径。</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
 
               <el-row v-if="watermarkEnable && watermarkType === 'text'" :gutter="12">
                 <el-col :xs="24" :sm="8">
@@ -1431,13 +1524,13 @@ defineExpose<StrategyFormExpose>({
 
               <el-row v-if="watermarkEnable && watermarkType === 'text'" :gutter="12">
                 <el-col :xs="24">
-                  <el-form-item label="自定义字体（可选）">
-                    <div class="wm-upload">
-                      <el-input v-model="watermarkFontPath" placeholder="例如：/abs/custom.ttf" />
-                      <el-upload
-                        :show-file-list="false"
-                        accept=".ttf,.otf"
-                        :before-upload="beforeUploadWatermarkFont"
+	                  <el-form-item label="自定义字体（可选）">
+	                    <div class="wm-upload">
+	                      <el-input v-model="watermarkFontPath" placeholder="例如：font_xxx.ttf 或 /abs/custom.ttf" />
+	                      <el-upload
+	                        :show-file-list="false"
+	                        accept=".ttf,.otf"
+	                        :before-upload="beforeUploadWatermarkFont"
                         :http-request="uploadWatermarkFontRequest"
                         :disabled="watermarkFontUploading"
                       >
@@ -1445,13 +1538,13 @@ defineExpose<StrategyFormExpose>({
                           <i class="ri-upload-2-line" />
                           上传字体
                         </el-button>
-                      </el-upload>
-                    </div>
-                    <div class="hint compact">上传后会在服务器解析字体并填充绝对路径。</div>
-                    <div v-if="watermarkPreviewFontError" class="hint compact">{{ watermarkPreviewFontError }}</div>
-                  </el-form-item>
-                </el-col>
-              </el-row>
+	                      </el-upload>
+	                    </div>
+	                    <div class="hint compact">上传后仅保存文件名（data/watermarks/fonts/ 下），并自动用于预览与渲染。</div>
+	                    <div v-if="watermarkPreviewFontError" class="hint compact">{{ watermarkPreviewFontError }}</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
 
               <el-row v-if="watermarkEnable" :gutter="12">
                 <el-col :xs="24" :sm="12">
@@ -1511,19 +1604,19 @@ defineExpose<StrategyFormExpose>({
 	                    <div class="wm-preview-text" :style="watermarkPreviewTextStyle">
 	                      {{ watermarkText || '@Preview' }}
 	                    </div>
-	                  </template>
-	                  <template v-else>
-	                    <img
-	                      v-if="watermarkImagePreviewURL && watermarkImagePreviewOK"
-	                      :src="watermarkImagePreviewURL"
-	                      class="wm-preview-img"
-	                      @error="watermarkImagePreviewOK = false"
-	                    />
-	                    <div v-else class="hint compact">无可预览图片（请先上传 PNG）</div>
-	                  </template>
-	                </div>
-	              </div>
-	            </el-collapse-item>
+		                  </template>
+		                  <template v-else>
+		                    <img
+		                      v-if="watermarkImagePreviewSrc && watermarkImagePreviewOK"
+		                      :src="watermarkImagePreviewSrc"
+		                      class="wm-preview-img"
+		                      @error="watermarkImagePreviewOK = false"
+		                    />
+		                    <div v-else class="hint compact">{{ watermarkImagePreviewLoading ? '水印加载中…' : '无可预览图片（请先上传 PNG）' }}</div>
+		                  </template>
+		                </div>
+		              </div>
+		            </el-collapse-item>
 	          </el-collapse>
 
           <div class="sub-split">
@@ -1539,6 +1632,11 @@ defineExpose<StrategyFormExpose>({
             </el-tooltip>
             <el-switch v-model="form.gpu_accel" active-text="GPU 加速" />
             <el-switch v-model="form.change_md5" active-text="修改 MD5" />
+            <el-tooltip effect="dark" placement="top" content="需先开启“修改 MD5”" :disabled="form.change_md5">
+              <span class="switch-tooltip">
+                <el-switch v-model="form.random_filename" :disabled="!form.change_md5" active-text="随机文件名" />
+              </span>
+            </el-tooltip>
           </div>
         </el-card>
       </el-form>

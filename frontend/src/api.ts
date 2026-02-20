@@ -26,6 +26,7 @@ export type Task = {
   clone_comment?: boolean
   gpu_accel?: boolean
   change_md5?: boolean
+  random_filename?: boolean
   enable_media_edit?: boolean
 
   delay_min_ms?: number
@@ -76,6 +77,7 @@ export type Strategy = {
   clone_comment?: boolean
   gpu_accel?: boolean
   change_md5?: boolean
+  random_filename?: boolean
   enable_media_edit?: boolean
 
   delay_min_ms?: number
@@ -226,6 +228,32 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     throw new Error(json.msg || `API error: ${json.code}`)
   }
   return json.data
+}
+
+export async function apiFetchBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const headers: Record<string, string> = {
+    ...(init?.headers ? (init.headers as Record<string, string>) : {}),
+  }
+
+  const cleanToken = getStoredToken().trim()
+  if (cleanToken) headers.Authorization = `Bearer ${cleanToken}`
+
+  const res = await fetch(path, {
+    ...init,
+    headers,
+  })
+
+  const ct = String(res.headers.get('content-type') || '').toLowerCase()
+  if (ct.includes('application/json')) {
+    const json = (await res.json()) as ApiResponse<any>
+    throw new Error(json?.msg || `API error: ${json?.code ?? 'unknown'}`)
+  }
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} ${res.statusText}`.trim())
+  }
+
+  return res.blob()
 }
 
 export function getTasks(): Promise<Task[]> {

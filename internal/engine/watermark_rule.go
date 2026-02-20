@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 
 	"my-go-server/internal/model"
@@ -40,6 +41,49 @@ func normalizeHexColor(in string, def string) string {
 	return "#" + strings.ToUpper(s)
 }
 
+func resolveUploadedWatermarkImagePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	norm := strings.ReplaceAll(p, "\\", "/")
+	base := strings.TrimSpace(filepath.Base(norm))
+	if base == "" || base == "." || base == ".." || base == "/" {
+		return ""
+	}
+
+	// If user stores only filename (recommended) or an old absolute path that contains our watermark dir,
+	// resolve it to project-relative data path to avoid leaking local machine absolute paths.
+	if !strings.ContainsAny(p, `/\`) || strings.Contains(norm, "/data/watermarks/") || strings.HasPrefix(norm, "data/watermarks/") {
+		if !strings.HasSuffix(strings.ToLower(base), ".png") {
+			return ""
+		}
+		return filepath.Join("data", "watermarks", base)
+	}
+	return p
+}
+
+func resolveUploadedWatermarkFontPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	norm := strings.ReplaceAll(p, "\\", "/")
+	base := strings.TrimSpace(filepath.Base(norm))
+	if base == "" || base == "." || base == ".." || base == "/" {
+		return ""
+	}
+
+	if !strings.ContainsAny(p, `/\`) || strings.Contains(norm, "/data/watermarks/fonts/") || strings.HasPrefix(norm, "data/watermarks/fonts/") {
+		ext := strings.ToLower(filepath.Ext(base))
+		if ext != ".ttf" && ext != ".otf" {
+			return ""
+		}
+		return filepath.Join("data", "watermarks", "fonts", base)
+	}
+	return p
+}
+
 func normalizeRuntimeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 	out := in
 	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
@@ -49,8 +93,8 @@ func normalizeRuntimeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 	out.TextColor = normalizeHexColor(out.TextColor, "#FFFFFF")
 	out.StrokeColor = normalizeHexColor(out.StrokeColor, "#000000")
 	out.ShadowColor = normalizeHexColor(out.ShadowColor, "#000000")
-	out.FontPath = strings.TrimSpace(out.FontPath)
-	out.ImagePath = strings.TrimSpace(out.ImagePath)
+	out.FontPath = resolveUploadedWatermarkFontPath(out.FontPath)
+	out.ImagePath = resolveUploadedWatermarkImagePath(out.ImagePath)
 
 	if out.Type == "" {
 		if out.ImagePath != "" {

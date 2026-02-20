@@ -98,6 +98,7 @@ function emptyModel(): StrategyFormModel {
     clone_comment: false,
     gpu_accel: false,
     change_md5: false,
+    random_filename: false,
     enable_media_edit: false,
 
     delay_min_ms: 1000,
@@ -150,6 +151,7 @@ function summarizeTags(s: Strategy): string[] {
   if (Boolean((s as any)?.watermark_rule?.enable)) tags.push('水印')
   if (s.gpu_accel) tags.push('GPU')
   if (s.change_md5) tags.push('改MD5')
+  if ((s as any).random_filename) tags.push('随机文件名')
   if ((s as any).enable_media_edit) tags.push('媒体编辑')
 
   const poll = Number(s.poll_interval ?? 0)
@@ -322,6 +324,7 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     watermark_rule,
     gpu_accel: Boolean(m.gpu_accel),
     change_md5: Boolean(m.change_md5),
+    random_filename: Boolean((m as any).random_filename),
     enable_media_edit: Boolean((m as any).enable_media_edit),
 
     delay_min_ms: Number(m.delay_min_ms || 0),
@@ -376,6 +379,7 @@ function fillEdit(row: Strategy) {
     clone_comment: commentEnable,
     gpu_accel: Boolean(row.gpu_accel),
     change_md5: Boolean(row.change_md5),
+    random_filename: Boolean((row as any).random_filename),
     enable_media_edit: Boolean((row as any).enable_media_edit),
 
     delay_min_ms: Number(row.delay_min_ms ?? 0),
