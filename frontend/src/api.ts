@@ -325,7 +325,10 @@ export function deleteKeywordProfile(id: number): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/v1/keyword-profiles/${id}`, { method: 'DELETE' })
 }
 
-export function taskAction(id: number, action: 'start' | 'pause' | 'stop'): Promise<{ status: number; msg: string }> {
+export function taskAction(
+  id: number,
+  action: 'start' | 'pause' | 'stop' | 'restart',
+): Promise<{ status: number; msg: string }> {
   return apiFetch<{ status: number; msg: string }>('/api/v1/tasks/action', {
     method: 'POST',
     body: JSON.stringify({ id, action }),

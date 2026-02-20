@@ -18,7 +18,7 @@ type TaskApi struct{}
 // TaskActionReq 任务操作请求
 type TaskActionReq struct {
 	ID     uint   `json:"id" binding:"required"`
-	Action string `json:"action" binding:"required,oneof=start stop pause"`
+	Action string `json:"action" binding:"required,oneof=start stop pause restart"`
 }
 
 type CreateTaskReq struct {

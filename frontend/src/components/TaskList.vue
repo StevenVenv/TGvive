@@ -221,13 +221,16 @@ async function refreshOne(id: number) {
   }
 }
 
-async function doAction(task: Task, action: 'start' | 'pause' | 'stop') {
+async function doAction(task: Task, action: 'start' | 'pause' | 'stop' | 'restart') {
   if (task.ID <= 0) return
 
-  if (action === 'stop') {
+  if (action === 'stop' || action === 'restart') {
     try {
-      await ElMessageBox.confirm(`确定停止任务 #${task.ID} 吗？`, '确认', {
-        confirmButtonText: '停止',
+      const title = '确认'
+      const tip = action === 'restart' ? `确定重启任务 #${task.ID} 吗？` : `确定停止任务 #${task.ID} 吗？`
+      const confirmText = action === 'restart' ? '重启' : '停止'
+      await ElMessageBox.confirm(tip, title, {
+        confirmButtonText: confirmText,
         cancelButtonText: '取消',
         type: 'warning',
       })
@@ -336,12 +339,13 @@ async function removeTask(task: Task) {
   }
 }
 
-type TaskCommand = 'start' | 'pause' | 'stop' | 'edit' | 'log' | 'delete'
+type TaskCommand = 'start' | 'restart' | 'pause' | 'stop' | 'edit' | 'log' | 'delete'
 
 function handleTaskCommand(task: Task, cmd: string) {
   const c = String(cmd || '') as TaskCommand
   switch (c) {
     case 'start':
+    case 'restart':
     case 'pause':
     case 'stop':
       void doAction(task, c)
@@ -500,6 +504,7 @@ defineExpose({
                     <template #dropdown>
                       <el-dropdown-menu>
                         <el-dropdown-item command="start">启动</el-dropdown-item>
+                        <el-dropdown-item command="restart">重启</el-dropdown-item>
                         <el-dropdown-item command="pause">暂停</el-dropdown-item>
                         <el-dropdown-item command="stop">停止</el-dropdown-item>
                         <el-dropdown-item divided command="edit">编辑</el-dropdown-item>

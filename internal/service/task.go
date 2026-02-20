@@ -52,6 +52,8 @@ func ApplyTaskAction(userID uint, taskID uint, action string) (model.Task, error
 	switch action {
 	case "start":
 		status = model.TaskStatusRunning
+	case "restart":
+		status = model.TaskStatusRunning
 	case "stop":
 		status = model.TaskStatusStopped
 	case "pause":
@@ -67,7 +69,11 @@ func ApplyTaskAction(userID uint, taskID uint, action string) (model.Task, error
 
 	switch status {
 	case model.TaskStatusRunning:
-		engine.Manager.StartTask(task)
+		if action == "restart" {
+			engine.Manager.RestartTask(task)
+		} else {
+			engine.Manager.StartTask(task)
+		}
 	case model.TaskStatusPaused:
 		engine.Manager.PauseTask(task.ID)
 	case model.TaskStatusStopped:

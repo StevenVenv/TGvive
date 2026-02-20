@@ -132,6 +132,16 @@ func (m *TaskManager) StartTask(t model.Task) {
 	go m.runTransferLoop(ctx, t, runID)
 }
 
+// RestartTask stops current run (if any) and starts again.
+// It is a convenience for UI "restart" action.
+func (m *TaskManager) RestartTask(t model.Task) {
+	if t.ID == 0 {
+		return
+	}
+	m.StopTask(t.ID)
+	m.StartTask(t)
+}
+
 func (m *TaskManager) PauseTask(taskID uint) {
 	if taskID == 0 {
 		return
