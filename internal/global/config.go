@@ -11,6 +11,22 @@ type AppConfig struct {
 type ServerConfig struct {
 	Port int    `mapstructure:"port"`
 	Mode string `mapstructure:"mode"`
+
+	// AllowAnonymousDebug permits bypassing auth middleware in debug mode,
+	// intended ONLY for local development.
+	AllowAnonymousDebug bool `mapstructure:"allow_anonymous_debug"`
+
+	ShutdownTimeoutSec int        `mapstructure:"shutdown_timeout_sec"`
+	CORS               CORSConfig `mapstructure:"cors"`
+}
+
+type CORSConfig struct {
+	AllowOrigins     []string `mapstructure:"allow_origins"`
+	AllowMethods     []string `mapstructure:"allow_methods"`
+	AllowHeaders     []string `mapstructure:"allow_headers"`
+	ExposeHeaders    []string `mapstructure:"expose_headers"`
+	AllowCredentials bool     `mapstructure:"allow_credentials"`
+	MaxAgeSec        int      `mapstructure:"max_age_sec"`
 }
 
 type MySQLConfig struct {

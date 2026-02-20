@@ -42,6 +42,7 @@ type WSMessage =
   | { type: 'log'; data: LogEvent }
 
 const storageProxyKey = 'tgvive_proxy_config'
+const tokenStorageKey = 'tgvive_jwt_token'
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
@@ -229,7 +230,15 @@ function applyLog(ev: LogEvent) {
 
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${window.location.host}/api/v1/ws/dashboard`
+  const base = `${proto}://${window.location.host}/api/v1/ws/dashboard`
+  try {
+    const token = (localStorage.getItem(tokenStorageKey) || '').trim()
+    if (!token) return base
+    const q = new URLSearchParams({ token })
+    return `${base}?${q.toString()}`
+  } catch {
+    return base
+  }
 }
 
 let ws: WebSocket | null = null

@@ -1,14 +1,16 @@
 package initialize
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"my-go-server/internal/global"
 
 	"github.com/spf13/viper"
 )
 
-func InitConfig() {
+func InitConfig() error {
 	v := viper.New()
 
 	v.SetConfigName("config")
@@ -17,7 +19,22 @@ func InitConfig() {
 	v.AddConfigPath(".")
 
 	v.SetDefault("server.port", 8080)
-	v.SetDefault("server.mode", "debug")
+	v.SetDefault("server.mode", "release")
+	v.SetDefault("server.allow_anonymous_debug", false)
+	v.SetDefault("server.shutdown_timeout_sec", 10)
+
+	v.SetDefault("server.cors.allow_origins", []string{
+		"http://localhost:5173",
+		"http://127.0.0.1:5173",
+		"http://localhost:4173",
+		"http://127.0.0.1:4173",
+	})
+	v.SetDefault("server.cors.allow_methods", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
+	v.SetDefault("server.cors.allow_headers", []string{"Content-Type", "Authorization"})
+	v.SetDefault("server.cors.expose_headers", []string{})
+	v.SetDefault("server.cors.allow_credentials", true)
+	v.SetDefault("server.cors.max_age_sec", 600)
+
 	v.SetDefault("mysql.host", "127.0.0.1")
 	v.SetDefault("mysql.port", 3306)
 	v.SetDefault("mysql.user", "root")
@@ -58,15 +75,30 @@ func InitConfig() {
 	v.SetDefault("processor.video.cover_max_height", 0)
 	v.SetDefault("processor.video.cover_quality", 85)
 
+	v.SetEnvPrefix("TGVIVE")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
 	if err := v.ReadInConfig(); err != nil {
-		panic(fmt.Errorf("read config failed: %w", err))
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return fmt.Errorf("read config failed: %w", err)
+		}
 	}
 
 	var cfg global.AppConfig
 	if err := v.Unmarshal(&cfg); err != nil {
-		panic(fmt.Errorf("unmarshal config failed: %w", err))
+		return fmt.Errorf("unmarshal config failed: %w", err)
+	}
+
+	// Basic hardening: forbid shipping with default JWT secret outside debug.
+	mode := strings.ToLower(strings.TrimSpace(cfg.Server.Mode))
+	secret := strings.TrimSpace(cfg.JWT.Secret)
+	if mode != "debug" && (secret == "" || secret == "change_me") {
+		return fmt.Errorf("invalid jwt.secret in %q mode: must be set to a strong random value", cfg.Server.Mode)
 	}
 
 	global.Viper = v
 	global.Config = cfg
+	return nil
 }

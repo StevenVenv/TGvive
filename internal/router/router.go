@@ -33,40 +33,42 @@ func SetupRouter() *gin.Engine {
 			authV1.GET("/dev/token", authApi.DevToken)
 		}
 
-		apiV1.GET("/tg/qr", tgAuthApi.GetQRCode)
-		apiV1.GET("/tg/qr/status", tgAuthApi.CheckQRStatus)
-		apiV1.GET("/tg/qr/ws", tgAuthApi.QRWebSocket)
-
-		// Convenience alias for frontend: /accounts mirrors /tg/accounts.
-		apiV1.GET("/accounts", tgAuthApi.ListAccounts)
-
-		tgV1 := apiV1.Group("/tg")
-		// tgV1.Use(middleware.JWTAuth())
+		protected := apiV1.Group("")
+		protected.Use(middleware.JWTAuth())
 		{
-			tgV1.GET("/accounts", tgAuthApi.ListAccounts)
-			tgV1.DELETE("/accounts/:key", tgAuthApi.RemoveAccount)
-			tgV1.POST("/accounts/qr", tgAuthApi.StartAccountQR)
-			tgV1.GET("/accounts/qr/status", tgAuthApi.CheckQRStatus)
-			tgV1.POST("/accounts/qr/password", tgAuthApi.SubmitQRPassword)
-			tgV1.POST("/accounts/code", tgAuthApi.StartCodeLogin)
-			tgV1.GET("/accounts/code/status", tgAuthApi.CheckCodeStatus)
-			tgV1.POST("/accounts/code/submit", tgAuthApi.SubmitCode)
-			tgV1.POST("/accounts/code/password", tgAuthApi.SubmitPassword)
+			protected.GET("/tg/qr", tgAuthApi.GetQRCode)
+			protected.GET("/tg/qr/status", tgAuthApi.CheckQRStatus)
+			protected.GET("/tg/qr/ws", tgAuthApi.QRWebSocket)
+
+			// Convenience alias for frontend: /accounts mirrors /tg/accounts.
+			protected.GET("/accounts", tgAuthApi.ListAccounts)
+
+			tgV1 := protected.Group("/tg")
+			{
+				tgV1.GET("/accounts", tgAuthApi.ListAccounts)
+				tgV1.DELETE("/accounts/:key", tgAuthApi.RemoveAccount)
+				tgV1.POST("/accounts/qr", tgAuthApi.StartAccountQR)
+				tgV1.GET("/accounts/qr/status", tgAuthApi.CheckQRStatus)
+				tgV1.POST("/accounts/qr/password", tgAuthApi.SubmitQRPassword)
+				tgV1.POST("/accounts/code", tgAuthApi.StartCodeLogin)
+				tgV1.GET("/accounts/code/status", tgAuthApi.CheckCodeStatus)
+				tgV1.POST("/accounts/code/submit", tgAuthApi.SubmitCode)
+				tgV1.POST("/accounts/code/password", tgAuthApi.SubmitPassword)
+			}
 		}
 
-		taskV1 := apiV1.Group("/tasks")
-		// taskV1.Use(middleware.JWTAuth())
+		taskV1 := protected.Group("/tasks")
 		{
 			taskV1.POST("", taskApi.CreateTask)
 			taskV1.GET("", taskApi.GetTaskList)
+			taskV1.GET("/progress", taskApi.GetTaskProgressBatch)
 			taskV1.PUT("/:id", taskApi.UpdateTask)
 			taskV1.DELETE("/:id", taskApi.DeleteTask)
 			taskV1.POST("/action", taskApi.UpdateTaskStatus)
 			taskV1.GET("/:id/progress", taskApi.GetTaskProgress)
 		}
 
-		strategyV1 := apiV1.Group("/strategies")
-		// strategyV1.Use(middleware.JWTAuth())
+		strategyV1 := protected.Group("/strategies")
 		{
 			strategyV1.POST("", strategyApi.CreateStrategy)
 			strategyV1.GET("", strategyApi.GetStrategyList)
@@ -74,7 +76,7 @@ func SetupRouter() *gin.Engine {
 			strategyV1.DELETE("/:id", strategyApi.DeleteStrategy)
 		}
 
-		keywordV1 := apiV1.Group("/keyword-profiles")
+		keywordV1 := protected.Group("/keyword-profiles")
 		{
 			keywordV1.POST("", keywordApi.CreateKeywordProfile)
 			keywordV1.GET("", keywordApi.GetKeywordProfileList)
@@ -82,18 +84,18 @@ func SetupRouter() *gin.Engine {
 			keywordV1.DELETE("/:id", keywordApi.DeleteKeywordProfile)
 		}
 
-		dashV1 := apiV1.Group("/dashboard")
+		dashV1 := protected.Group("/dashboard")
 		{
 			dashV1.GET("/summary", dashboardApi.Summary)
 			dashV1.GET("/events", dashboardApi.Events)
 		}
 
-		wsV1 := apiV1.Group("/ws")
+		wsV1 := protected.Group("/ws")
 		{
 			wsV1.GET("/dashboard", dashboardApi.DashboardWS)
 		}
 
-		wmV1 := apiV1.Group("/watermarks")
+		wmV1 := protected.Group("/watermarks")
 		{
 			wmV1.POST("/upload", watermarkApi.UploadWatermarkPNG)
 			wmV1.POST("/fonts/upload", watermarkApi.UploadWatermarkFont)

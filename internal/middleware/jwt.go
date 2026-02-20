@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"errors"
+	"net"
+	"net/http"
 	"strings"
 
 	"my-go-server/internal/global"
@@ -20,10 +22,16 @@ type CustomClaims struct {
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr, ok := parseBearerToken(c.GetHeader("Authorization"))
+		if !ok && isWebSocketUpgrade(c.Request) {
+			// Browser WebSocket can't set custom headers; allow token via query string for WS only.
+			tokenStr = strings.TrimSpace(c.Query("token"))
+			if tokenStr == "" {
+				tokenStr = strings.TrimSpace(c.Query("access_token"))
+			}
+			ok = tokenStr != ""
+		}
 		if !ok {
-			// Local/dev convenience: in debug mode allow anonymous access and bind to a default user.
-			// WARNING: do NOT use debug mode in public deployments.
-			if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) == "debug" {
+			if allowAnonymousDebug(c) {
 				c.Set("user_id", uint(1))
 				c.Next()
 				return
@@ -35,11 +43,6 @@ func JWTAuth() gin.HandlerFunc {
 
 		secret := global.Config.JWT.Secret
 		if strings.TrimSpace(secret) == "" {
-			if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) == "debug" {
-				c.Set("user_id", uint(1))
-				c.Next()
-				return
-			}
 			app.FailWithMsg("服务端未配置 JWT Secret", c)
 			c.Abort()
 			return
@@ -58,7 +61,7 @@ func JWTAuth() gin.HandlerFunc {
 			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		)
 		if err != nil || !token.Valid || claims.UserID == 0 {
-			if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) == "debug" {
+			if allowAnonymousDebug(c) {
 				c.Set("user_id", uint(1))
 				c.Next()
 				return
@@ -86,4 +89,40 @@ func parseBearerToken(authHeader string) (string, bool) {
 		return "", false
 	}
 	return parts[1], true
+}
+
+func allowAnonymousDebug(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) != "debug" {
+		return false
+	}
+	if !global.Config.Server.AllowAnonymousDebug {
+		return false
+	}
+	return isLoopbackRemoteAddr(c.Request)
+}
+
+func isLoopbackRemoteAddr(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isWebSocketUpgrade(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	conn := strings.ToLower(r.Header.Get("Connection"))
+	return strings.Contains(conn, "upgrade")
 }

@@ -308,6 +308,16 @@ export function getTaskProgress(id: number): Promise<TaskProgress> {
   return apiFetch<TaskProgress>(`/api/v1/tasks/${id}/progress`, { method: 'GET' })
 }
 
+export function getTaskProgressBatch(ids: number[]): Promise<Record<number, TaskProgress>> {
+  const uniq = Array.from(new Set((ids || []).map((v) => Math.floor(Number(v || 0))).filter((v) => Number.isFinite(v) && v > 0))).slice(
+    0,
+    200,
+  )
+  if (uniq.length === 0) return Promise.resolve({})
+  const q = new URLSearchParams({ ids: uniq.join(',') })
+  return apiFetch<Record<number, TaskProgress>>(`/api/v1/tasks/progress?${q.toString()}`, { method: 'GET' })
+}
+
 export function listTGAccounts(): Promise<TGAccount[]> {
   return apiFetch<TGAccount[]>('/api/v1/tg/accounts', { method: 'GET' })
 }

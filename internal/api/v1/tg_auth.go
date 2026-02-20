@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"my-go-server/internal/engine"
+	"my-go-server/internal/middleware"
 	"my-go-server/pkg/app"
 
 	"github.com/gin-gonic/gin"
@@ -50,11 +51,19 @@ func (a *TGAuthApi) CheckQRStatus(c *gin.Context) {
 }
 
 var wsUpgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	ReadBufferSize:    1024,
+	WriteBufferSize:   1024,
+	EnableCompression: true,
 	CheckOrigin: func(r *http.Request) bool {
-		// TODO: production should validate Origin
-		return true
+		origin := ""
+		if r != nil {
+			origin = r.Header.Get("Origin")
+		}
+		// Non-browser clients may omit Origin.
+		if origin == "" {
+			return true
+		}
+		return middleware.IsOriginAllowed(origin)
 	},
 }
 

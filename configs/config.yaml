@@ -1,6 +1,15 @@
 server:
   port: 8080
   mode: debug # debug, release, test
+  allow_anonymous_debug: false
+  shutdown_timeout_sec: 10
+  cors:
+    allow_origins:
+      - "http://localhost:5173"
+      - "http://127.0.0.1:5173"
+      - "http://localhost:4173"
+      - "http://127.0.0.1:4173"
+    allow_credentials: true
 
 mysql:
   host: "192.168.0.108"

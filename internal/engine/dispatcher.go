@@ -200,6 +200,49 @@ func (m *TaskManager) StopTask(taskID uint) {
 	st.appendLogLocked("任务已停止")
 }
 
+func (m *TaskManager) Shutdown(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var ids []uint
+	var cancelers []context.CancelFunc
+
+	m.mu.Lock()
+	for id, cancel := range m.cancelers {
+		ids = append(ids, id)
+		cancelers = append(cancelers, cancel)
+	}
+	m.cancelers = make(map[uint]context.CancelFunc)
+	m.mu.Unlock()
+
+	for _, cancel := range cancelers {
+		if cancel != nil {
+			cancel()
+		}
+	}
+
+	for _, id := range ids {
+		m.unregisterTask(id, 0)
+	}
+
+	if m.tg != nil {
+		for _, rt := range m.tg.snapshot() {
+			if rt != nil {
+				rt.shutdown()
+			}
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+	default:
+	}
+}
+
 func (m *TaskManager) GetTaskProgress(t model.Task) TaskProgress {
 	if t.ID == 0 {
 		return TaskProgress{}

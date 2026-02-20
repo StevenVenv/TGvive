@@ -18,7 +18,10 @@ import (
 )
 
 func main() {
-	initialize.InitConfig()
+	if err := initialize.InitConfig(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "init config failed:", err)
+		os.Exit(1)
+	}
 
 	phone := flag.String("phone", "", "Telegram phone number, e.g. +86138xxxxxxx")
 	flag.Parse()

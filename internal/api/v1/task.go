@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"my-go-server/internal/engine"
+	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 	"my-go-server/internal/service"
 	"my-go-server/pkg/app"
@@ -203,6 +204,67 @@ func (a *TaskApi) GetTaskProgress(c *gin.Context) {
 	app.OkWithData(progress, c)
 }
 
+// GetTaskProgressBatch returns progress for multiple tasks in a single request to avoid N+1 polling.
+// GET /api/v1/tasks/progress?ids=1,2,3
+func (a *TaskApi) GetTaskProgressBatch(c *gin.Context) {
+	userID := getCurrentUserID(c)
+	if userID == 0 {
+		app.FailWithMsg("未获取到用户信息", c)
+		return
+	}
+	raw := strings.TrimSpace(c.Query("ids"))
+	if raw == "" {
+		app.OkWithData(map[uint]engine.TaskProgress{}, c)
+		return
+	}
+
+	parts := strings.Split(raw, ",")
+	ids := make([]uint, 0, len(parts))
+	seen := make(map[uint]struct{}, len(parts))
+	for _, p := range parts {
+		if len(ids) >= 200 {
+			break
+		}
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		u64, err := strconv.ParseUint(p, 10, 64)
+		if err != nil || u64 == 0 {
+			continue
+		}
+		id := uint(u64)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		app.OkWithData(map[uint]engine.TaskProgress{}, c)
+		return
+	}
+	if global.DB == nil {
+		app.FailWithMsg("数据库未初始化", c)
+		return
+	}
+
+	var tasks []model.Task
+	if err := global.DB.Where("user_id = ? AND id IN ?", userID, ids).Find(&tasks).Error; err != nil {
+		app.FailWithMsg("查询任务失败: "+err.Error(), c)
+		return
+	}
+
+	out := make(map[uint]engine.TaskProgress, len(tasks))
+	for _, t := range tasks {
+		if t.ID == 0 {
+			continue
+		}
+		out[t.ID] = engine.Manager.GetTaskProgress(t)
+	}
+	app.OkWithData(out, c)
+}
+
 // UpdateTask 更新任务基础信息与策略引用（更新后状态重置为停止）
 func (a *TaskApi) UpdateTask(c *gin.Context) {
 	userID := getCurrentUserID(c)
@@ -359,6 +421,5 @@ func getCurrentUserID(c *gin.Context) uint {
 		}
 	}
 
-	// Local/single-user fallback when auth middleware is disabled.
-	return 1
+	return 0
 }

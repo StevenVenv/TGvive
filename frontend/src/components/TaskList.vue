@@ -8,6 +8,7 @@ import {
   getKeywordProfiles,
   getStrategies,
   getTaskProgress,
+  getTaskProgressBatch,
   getTasks,
   listTGAccounts,
   taskAction,
@@ -196,21 +197,13 @@ async function refreshProgress() {
   if (ids.length === 0) return
 
   try {
-    const results = await Promise.all(
-      ids.map(async (id) => {
-        try {
-          const p = await getTaskProgress(id)
-          return [id, p] as const
-        } catch {
-          return null
-        }
-      }),
-    )
-
+    const res = await getTaskProgressBatch(ids)
     const next = { ...progressMap.value }
-    for (const item of results) {
-      if (!item) continue
-      next[item[0]] = item[1]
+    const entries = Object.entries(res || {}) as Array<[string, TaskProgress]>
+    for (const [k, v] of entries) {
+      const id = Number(k || 0)
+      if (!Number.isFinite(id) || id <= 0) continue
+      next[id] = v
     }
     progressMap.value = next
   } catch {
