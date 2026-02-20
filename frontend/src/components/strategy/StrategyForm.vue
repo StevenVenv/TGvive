@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { FormInstance, FormRules } from 'element-plus'
-import type { CommentRule, WatermarkRule } from '../../api'
+import { ElMessage } from 'element-plus'
+import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
+import { uploadWatermarkFont, uploadWatermarkPNG, type CommentRule, type WatermarkRule } from '../../api'
 
 export type ScheduleRule = {
   start: string
@@ -162,6 +163,11 @@ function defaultWatermarkRule(enable: boolean): WatermarkRule {
     enable,
     type: 'text',
     text: '',
+    text_style: 'stroke',
+    text_color: '#FFFFFF',
+    stroke_color: '#000000',
+    shadow_color: '#000000',
+    font_path: '',
     image_path: '',
     position: 'bottom_right',
     custom_x: 0.5,
@@ -204,6 +210,11 @@ function ensureWatermarkRule(): WatermarkRule {
   r.enable = Boolean((r as any).enable)
   r.type = String((r as any).type || 'text')
   r.text = String((r as any).text || '')
+  r.text_style = String((r as any).text_style || 'stroke')
+  r.text_color = String((r as any).text_color || '#FFFFFF')
+  r.stroke_color = String((r as any).stroke_color || '#000000')
+  r.shadow_color = String((r as any).shadow_color || '#000000')
+  r.font_path = String((r as any).font_path || '')
   r.image_path = String((r as any).image_path || '')
   r.position = String((r as any).position || 'bottom_right')
 
@@ -266,6 +277,66 @@ const watermarkText = computed<string>({
   },
 })
 
+type WatermarkTextStyleKey = 'plain' | 'stroke' | 'shadow' | 'stroke_shadow'
+
+const watermarkTextStyle = computed<WatermarkTextStyleKey>({
+  get() {
+    const raw = String(ensureWatermarkRule().text_style || '')
+      .trim()
+      .toLowerCase()
+    switch (raw) {
+      case 'plain':
+        return 'plain'
+      case 'shadow':
+        return 'shadow'
+      case 'stroke_shadow':
+        return 'stroke_shadow'
+      case 'stroke':
+      default:
+        return 'stroke'
+    }
+  },
+  set(v) {
+    ensureWatermarkRule().text_style = v
+  },
+})
+
+const watermarkTextColor = computed<string>({
+  get() {
+    return String(ensureWatermarkRule().text_color || '#FFFFFF')
+  },
+  set(v) {
+    ensureWatermarkRule().text_color = String(v || '').trim() || '#FFFFFF'
+  },
+})
+
+const watermarkStrokeColor = computed<string>({
+  get() {
+    return String(ensureWatermarkRule().stroke_color || '#000000')
+  },
+  set(v) {
+    ensureWatermarkRule().stroke_color = String(v || '').trim() || '#000000'
+  },
+})
+
+const watermarkShadowColor = computed<string>({
+  get() {
+    return String(ensureWatermarkRule().shadow_color || '#000000')
+  },
+  set(v) {
+    ensureWatermarkRule().shadow_color = String(v || '').trim() || '#000000'
+  },
+})
+
+const watermarkFontPath = computed<string>({
+  get() {
+    return String(ensureWatermarkRule().font_path || '')
+  },
+  set(v) {
+    ensureWatermarkRule().font_path = String(v || '').trim()
+  },
+})
+
 const watermarkImagePath = computed<string>({
   get() {
     return String(ensureWatermarkRule().image_path || '')
@@ -273,6 +344,200 @@ const watermarkImagePath = computed<string>({
   set(v) {
     ensureWatermarkRule().image_path = String(v || '')
   },
+})
+
+const watermarkImageUploading = ref(false)
+const watermarkFontUploading = ref(false)
+
+function beforeUploadWatermarkPNG(file: File): boolean {
+  if (!file) return false
+  const name = String((file as any).name || '').toLowerCase()
+  const isPNG = file.type === 'image/png' || name.endsWith('.png')
+  if (!isPNG) {
+    ElMessage.error('仅支持 PNG 文件')
+    return false
+  }
+  const max = 5 * 1024 * 1024
+  if (Number(file.size || 0) > max) {
+    ElMessage.error('PNG 文件过大，最大 5MB')
+    return false
+  }
+  return true
+}
+
+async function uploadWatermarkPNGRequest(opts: UploadRequestOptions) {
+  const file = opts.file as File
+  if (!file) {
+    opts.onError?.(new Error('no file') as any)
+    return
+  }
+  watermarkImageUploading.value = true
+  try {
+    const res = await uploadWatermarkPNG(file)
+    watermarkType.value = 'image'
+    watermarkImagePath.value = String(res?.path || '')
+    ElMessage.success('水印已上传')
+    opts.onSuccess?.(res as any)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '上传失败')
+    opts.onError?.(e as any)
+  } finally {
+    watermarkImageUploading.value = false
+  }
+}
+
+function beforeUploadWatermarkFont(file: File): boolean {
+  if (!file) return false
+  const name = String((file as any).name || '').toLowerCase()
+  const ok = name.endsWith('.ttf') || name.endsWith('.otf')
+  if (!ok) {
+    ElMessage.error('仅支持 .ttf/.otf 字体文件')
+    return false
+  }
+  const max = 10 * 1024 * 1024
+  if (Number(file.size || 0) > max) {
+    ElMessage.error('字体文件过大，最大 10MB')
+    return false
+  }
+  return true
+}
+
+async function uploadWatermarkFontRequest(opts: UploadRequestOptions) {
+  const file = opts.file as File
+  if (!file) {
+    opts.onError?.(new Error('no file') as any)
+    return
+  }
+  watermarkFontUploading.value = true
+  try {
+    const res = await uploadWatermarkFont(file)
+    watermarkType.value = 'text'
+    watermarkFontPath.value = String(res?.path || '')
+    ElMessage.success('字体已上传')
+    opts.onSuccess?.(res as any)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '上传失败')
+    opts.onError?.(e as any)
+  } finally {
+    watermarkFontUploading.value = false
+  }
+}
+
+function pathBasename(p: string): string {
+  const s = String(p || '')
+    .trim()
+    .replace(/\\/g, '/')
+  if (!s) return ''
+  const parts = s.split('/')
+  return parts[parts.length - 1] || ''
+}
+
+const watermarkImagePreviewURL = computed<string>(() => {
+  const name = pathBasename(watermarkImagePath.value)
+  if (!name) return ''
+  return `/api/v1/watermarks/files/${encodeURIComponent(name)}`
+})
+
+const watermarkImagePreviewOK = ref(true)
+watch(
+  () => watermarkImagePreviewURL.value,
+  () => {
+    watermarkImagePreviewOK.value = true
+  },
+  { immediate: true },
+)
+
+const watermarkFontPreviewURL = computed<string>(() => {
+  const name = pathBasename(watermarkFontPath.value)
+  if (!name) return ''
+  return `/api/v1/watermarks/fonts/${encodeURIComponent(name)}`
+})
+
+const watermarkPreviewFontFamily = ref('')
+const watermarkPreviewFontError = ref('')
+
+async function loadPreviewFont(url: string) {
+  if (!url) {
+    watermarkPreviewFontFamily.value = ''
+    watermarkPreviewFontError.value = ''
+    return
+  }
+  if (typeof FontFace === 'undefined' || typeof document === 'undefined' || !(document as any).fonts) {
+    return
+  }
+
+  const key = encodeURIComponent(url).replace(/[^a-zA-Z0-9]/g, '')
+  const family = `wm_${key.slice(-24) || 'custom'}`
+  if (watermarkPreviewFontFamily.value === family) return
+
+  try {
+    const face = new FontFace(family, `url(${url})`)
+    await face.load()
+    ;(document as any).fonts.add(face)
+    watermarkPreviewFontFamily.value = family
+    watermarkPreviewFontError.value = ''
+  } catch {
+    watermarkPreviewFontFamily.value = ''
+    watermarkPreviewFontError.value = '字体预览加载失败'
+  }
+}
+
+watch(
+  () => [watermarkEnable.value, watermarkType.value, watermarkFontPreviewURL.value] as const,
+  ([enable, typ, url]) => {
+    if (!enable || typ !== 'text') {
+      watermarkPreviewFontFamily.value = ''
+      watermarkPreviewFontError.value = ''
+      return
+    }
+    void loadPreviewFont(url)
+  },
+  { immediate: true },
+)
+
+function previewTextShadow(style: WatermarkTextStyleKey, strokeColor: string, shadowColor: string): string {
+  const shadows: string[] = []
+  const withStroke = style === 'stroke' || style === 'stroke_shadow'
+  const withShadow = style === 'shadow' || style === 'stroke_shadow'
+  if (withShadow) shadows.push(`2px 2px 0 ${shadowColor}`)
+  if (withStroke) {
+    const offsets: Array<[number, number]> = [
+      [-2, 0],
+      [2, 0],
+      [0, -2],
+      [0, 2],
+      [-2, -2],
+      [2, 2],
+      [-2, 2],
+      [2, -2],
+    ]
+    for (const [dx, dy] of offsets) {
+      shadows.push(`${dx}px ${dy}px 0 ${strokeColor}`)
+    }
+  }
+  return shadows.join(', ')
+}
+
+const watermarkPreviewTextStyle = computed<Record<string, string>>(() => {
+  const r = ensureWatermarkRule()
+  const baseW = 1080
+  let fontSize = baseW * clampFloat01(Number(r.scale_ratio || 0))
+  if (!Number.isFinite(fontSize) || fontSize <= 0) fontSize = 32
+  if (fontSize < 12) fontSize = 12
+  if (fontSize > 72) fontSize = 72
+
+  const ff = watermarkPreviewFontFamily.value
+  const family = ff ? `'${ff}', sans-serif` : 'inherit'
+
+  return {
+    fontFamily: family,
+    fontSize: `${Math.round(fontSize)}px`,
+    color: watermarkTextColor.value,
+    opacity: String(clampFloat01(Number(r.opacity || 0.35)) || 0.35),
+    textShadow: previewTextShadow(watermarkTextStyle.value, watermarkStrokeColor.value, watermarkShadowColor.value),
+    whiteSpace: 'pre-line',
+    lineHeight: '1.2',
+  }
 })
 
 type WatermarkPositionKey = 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left' | 'center' | 'custom'
@@ -715,6 +980,11 @@ async function submit() {
     r.enable = Boolean(watermarkEnable.value)
     r.type = watermarkType.value
     r.text = String(r.text || '').trim()
+    r.text_style = watermarkTextStyle.value
+    r.text_color = String(watermarkTextColor.value || '').trim() || '#FFFFFF'
+    r.stroke_color = String(watermarkStrokeColor.value || '').trim() || '#000000'
+    r.shadow_color = String(watermarkShadowColor.value || '').trim() || '#000000'
+    r.font_path = String(watermarkFontPath.value || '').trim()
     r.image_path = String(r.image_path || '').trim()
     r.position = watermarkPosition.value
 
@@ -1115,8 +1385,70 @@ defineExpose<StrategyFormExpose>({
                 </el-col>
                 <el-col v-else :xs="24" :sm="12">
                   <el-form-item label="PNG 绝对路径">
-                    <el-input v-model="watermarkImagePath" placeholder="例如：/var/www/watermark/logo.png" />
-                    <div class="hint compact">需填写服务器上的本地绝对路径（PNG）。</div>
+                    <div class="wm-upload">
+                      <el-input v-model="watermarkImagePath" placeholder="例如：/var/www/watermark/logo.png" />
+                      <el-upload
+                        :show-file-list="false"
+                        accept="image/png"
+                        :before-upload="beforeUploadWatermarkPNG"
+                        :http-request="uploadWatermarkPNGRequest"
+                        :disabled="watermarkImageUploading"
+                      >
+                        <el-button plain size="small" :loading="watermarkImageUploading">
+                          <i class="ri-upload-2-line" />
+                          上传 PNG
+                        </el-button>
+                      </el-upload>
+                    </div>
+                    <div class="hint compact">上传后返回服务器本地绝对路径，可直接用于水印配置。</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row v-if="watermarkEnable && watermarkType === 'text'" :gutter="12">
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="文字样式">
+                    <el-select v-model="watermarkTextStyle" class="ctrl ctrl-sm" popper-class="tgvive-dark-popper">
+                      <el-option value="stroke" label="描边" />
+                      <el-option value="shadow" label="阴影" />
+                      <el-option value="stroke_shadow" label="描边 + 阴影" />
+                      <el-option value="plain" label="无" />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <el-form-item label="文字颜色">
+                    <el-color-picker v-model="watermarkTextColor" color-format="hex" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <el-form-item :label="watermarkTextStyle === 'shadow' ? '阴影颜色' : '描边颜色'">
+                    <el-color-picker v-if="watermarkTextStyle === 'shadow'" v-model="watermarkShadowColor" color-format="hex" />
+                    <el-color-picker v-else v-model="watermarkStrokeColor" color-format="hex" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-row v-if="watermarkEnable && watermarkType === 'text'" :gutter="12">
+                <el-col :xs="24">
+                  <el-form-item label="自定义字体（可选）">
+                    <div class="wm-upload">
+                      <el-input v-model="watermarkFontPath" placeholder="例如：/abs/custom.ttf" />
+                      <el-upload
+                        :show-file-list="false"
+                        accept=".ttf,.otf"
+                        :before-upload="beforeUploadWatermarkFont"
+                        :http-request="uploadWatermarkFontRequest"
+                        :disabled="watermarkFontUploading"
+                      >
+                        <el-button plain size="small" :loading="watermarkFontUploading">
+                          <i class="ri-upload-2-line" />
+                          上传字体
+                        </el-button>
+                      </el-upload>
+                    </div>
+                    <div class="hint compact">上传后会在服务器解析字体并填充绝对路径。</div>
+                    <div v-if="watermarkPreviewFontError" class="hint compact">{{ watermarkPreviewFontError }}</div>
                   </el-form-item>
                 </el-col>
               </el-row>
@@ -1149,27 +1481,50 @@ defineExpose<StrategyFormExpose>({
                 </el-col>
               </el-row>
 
-              <el-row v-if="watermarkEnable" :gutter="12">
-                <el-col :xs="24" :sm="8">
-                  <el-form-item label="边距（0-10%）">
-                    <el-slider v-model="watermarkMarginPct" :min="0" :max="10" :step="1" show-input />
-                  </el-form-item>
-                </el-col>
-                <el-col :xs="24" :sm="8">
-                  <el-form-item label="缩放占比（1-50%）">
-                    <el-slider v-model="watermarkScalePct" :min="1" :max="50" :step="1" show-input />
-                    <div class="hint compact">控制水印占画面宽度的比例。</div>
-                  </el-form-item>
-                </el-col>
-                <el-col :xs="24" :sm="8">
-                  <el-form-item label="透明度（0-100%）">
-                    <el-slider v-model="watermarkOpacityPct" :min="0" :max="100" :step="1" show-input />
-                    <div class="hint compact">100% 为完全不透明。</div>
-                  </el-form-item>
-                </el-col>
-              </el-row>
-            </el-collapse-item>
-          </el-collapse>
+	              <el-row v-if="watermarkEnable" :gutter="12">
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="边距（0-10%）">
+	                    <el-slider v-model="watermarkMarginPct" :min="0" :max="10" :step="1" show-input />
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="缩放占比（1-50%）">
+	                    <el-slider v-model="watermarkScalePct" :min="1" :max="50" :step="1" show-input />
+	                    <div class="hint compact">控制水印占画面宽度的比例。</div>
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="透明度（0-100%）">
+	                    <el-slider v-model="watermarkOpacityPct" :min="0" :max="100" :step="1" show-input />
+	                    <div class="hint compact">100% 为完全不透明。</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <div v-if="watermarkEnable" class="wm-preview">
+	                <div class="wm-preview-head">
+	                  <i class="ri-eye-line" />
+	                  <span>水印预览</span>
+	                </div>
+	                <div class="wm-preview-stage">
+	                  <template v-if="watermarkType === 'text'">
+	                    <div class="wm-preview-text" :style="watermarkPreviewTextStyle">
+	                      {{ watermarkText || '@Preview' }}
+	                    </div>
+	                  </template>
+	                  <template v-else>
+	                    <img
+	                      v-if="watermarkImagePreviewURL && watermarkImagePreviewOK"
+	                      :src="watermarkImagePreviewURL"
+	                      class="wm-preview-img"
+	                      @error="watermarkImagePreviewOK = false"
+	                    />
+	                    <div v-else class="hint compact">无可预览图片（请先上传 PNG）</div>
+	                  </template>
+	                </div>
+	              </div>
+	            </el-collapse-item>
+	          </el-collapse>
 
           <div class="sub-split">
             <span>处理开关</span>
@@ -1252,6 +1607,66 @@ defineExpose<StrategyFormExpose>({
 
 .radio-dense :deep(.el-radio) {
   margin-right: 12px;
+}
+
+.wm-upload {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  :deep(.el-input) {
+    flex: 1 1 auto;
+  }
+}
+
+.wm-preview {
+  margin-top: 10px;
+  border: 1px solid #363637;
+  border-radius: 6px;
+  background: #161616;
+  overflow: hidden;
+}
+
+.wm-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #2a2a2a;
+  background: #202020;
+  color: var(--el-text-color-primary);
+
+  i {
+    color: var(--el-color-primary);
+  }
+}
+
+.wm-preview-stage {
+  padding: 12px;
+  min-height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%);
+  background-position: 0 0, 10px 10px;
+  background-size: 20px 20px;
+}
+
+.wm-preview-text {
+  max-width: 100%;
+  text-align: center;
+  word-break: break-word;
+}
+
+.wm-preview-img {
+  max-width: 220px;
+  max-height: 120px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .actions {

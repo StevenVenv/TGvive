@@ -98,6 +98,11 @@ export type WatermarkRule = {
   enable: boolean
   type: 'text' | 'image' | string
   text: string
+  text_style: 'plain' | 'stroke' | 'shadow' | 'stroke_shadow' | string
+  text_color: string
+  stroke_color: string
+  shadow_color: string
+  font_path: string
   image_path: string
   position: 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left' | 'center' | 'custom' | string
   custom_x: number
@@ -183,6 +188,25 @@ function getStoredToken(): string {
   }
 }
 
+async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {}
+
+  const cleanToken = getStoredToken().trim()
+  if (cleanToken) headers.Authorization = `Bearer ${cleanToken}`
+
+  const res = await fetch(path, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+
+  const json = (await res.json()) as ApiResponse<T>
+  if (json.code !== 0) {
+    throw new Error(json.msg || `API error: ${json.code}`)
+  }
+  return json.data
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -235,6 +259,20 @@ export function updateStrategy(id: number, payload: Partial<Strategy>): Promise<
 
 export function deleteStrategy(id: number): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/v1/strategies/${id}`, { method: 'DELETE' })
+}
+
+export type WatermarkUploadResult = { path: string; name?: string; url?: string }
+
+export function uploadWatermarkPNG(file: File): Promise<WatermarkUploadResult> {
+  const form = new FormData()
+  form.append('file', file)
+  return apiUpload<WatermarkUploadResult>('/api/v1/watermarks/upload', form)
+}
+
+export function uploadWatermarkFont(file: File): Promise<WatermarkUploadResult> {
+  const form = new FormData()
+  form.append('file', file)
+  return apiUpload<WatermarkUploadResult>('/api/v1/watermarks/fonts/upload', form)
 }
 
 export function getKeywordProfiles(): Promise<KeywordProfile[]> {

@@ -274,11 +274,16 @@ func normalizeAndSyncStrategyCommentRuleForUpdate(existing model.Strategy, paylo
 
 func defaultWatermarkRule() model.WatermarkRule {
 	return model.WatermarkRule{
-		Enable:     true,
-		Position:   "bottom_right",
-		Margin:     0.02,
-		Opacity:    0.35,
-		ScaleRatio: 0, // decided by Type
+		Enable:      true,
+		Type:        "text",
+		TextStyle:   "stroke",
+		TextColor:   "#FFFFFF",
+		StrokeColor: "#000000",
+		ShadowColor: "#000000",
+		Position:    "bottom_right",
+		Margin:      0.02,
+		Opacity:     0.35,
+		ScaleRatio:  0, // decided by Type
 	}
 }
 
@@ -292,11 +297,42 @@ func clamp01(v float64) float64 {
 	return v
 }
 
+func normalizeHexColor(in string, def string) string {
+	s := strings.TrimSpace(in)
+	if s == "" {
+		return def
+	}
+	if strings.HasPrefix(s, "#") {
+		s = strings.TrimPrefix(s, "#")
+	}
+	s = strings.TrimSpace(s)
+	if len(s) == 3 {
+		// Expand #RGB -> #RRGGBB.
+		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
+	}
+	if len(s) != 6 {
+		return def
+	}
+	for i := 0; i < 6; i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return def
+	}
+	return "#" + strings.ToUpper(s)
+}
+
 func normalizeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 	out := in
 	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
 	out.Position = strings.ToLower(strings.TrimSpace(out.Position))
 	out.Text = strings.TrimSpace(out.Text)
+	out.TextStyle = strings.ToLower(strings.TrimSpace(out.TextStyle))
+	out.TextColor = normalizeHexColor(out.TextColor, "#FFFFFF")
+	out.StrokeColor = normalizeHexColor(out.StrokeColor, "#000000")
+	out.ShadowColor = normalizeHexColor(out.ShadowColor, "#000000")
+	out.FontPath = strings.TrimSpace(out.FontPath)
 	out.ImagePath = strings.TrimSpace(out.ImagePath)
 
 	// Infer type if empty.
@@ -315,6 +351,12 @@ func normalizeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 		} else {
 			out.Type = "text"
 		}
+	}
+
+	switch out.TextStyle {
+	case "plain", "stroke", "shadow", "stroke_shadow":
+	default:
+		out.TextStyle = "stroke"
 	}
 
 	switch out.Position {
@@ -361,6 +403,11 @@ func validateWatermarkRule(r model.WatermarkRule) error {
 	if r.Type == "image" {
 		if p := strings.TrimSpace(r.ImagePath); p != "" && !filepath.IsAbs(p) {
 			return errors.New("watermark_rule image_path 必须是绝对路径")
+		}
+	}
+	if r.Type == "text" {
+		if p := strings.TrimSpace(r.FontPath); p != "" && !filepath.IsAbs(p) {
+			return errors.New("watermark_rule font_path 必须是绝对路径")
 		}
 	}
 	return nil

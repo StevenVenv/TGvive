@@ -11,6 +11,7 @@ import (
 	_ "image/png"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -28,7 +29,8 @@ var (
 	regularFont     *opentype.Font
 	regularFontErr  error
 
-	pngCache sync.Map // map[path]string -> image.Image
+	pngCache  sync.Map // map[path]string -> image.Image
+	fontCache sync.Map // map[path]string -> *opentype.Font
 )
 
 func loadRegularFont() (*opentype.Font, error) {
@@ -129,6 +131,29 @@ func loadPNG(path string) (image.Image, error) {
 	return img, nil
 }
 
+func loadFontFromPath(path string) (*opentype.Font, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("empty font_path")
+	}
+	if v, ok := fontCache.Load(path); ok {
+		if f, ok2 := v.(*opentype.Font); ok2 && f != nil {
+			return f, nil
+		}
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := opentype.Parse(b)
+	if err != nil {
+		return nil, err
+	}
+	fontCache.Store(path, f)
+	return f, nil
+}
+
 func applyImageWatermark(base image.Image, rule model.WatermarkRule) (image.Image, error) {
 	wmImg, err := loadPNG(rule.ImagePath)
 	if err != nil {
@@ -177,6 +202,29 @@ func applyImageWatermark(base image.Image, rule model.WatermarkRule) (image.Imag
 	return dst, nil
 }
 
+func hexRGB01(hex string) (r, g, b float64) {
+	s := strings.TrimSpace(hex)
+	if strings.HasPrefix(s, "#") {
+		s = strings.TrimPrefix(s, "#")
+	}
+	if len(s) == 3 {
+		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
+	}
+	if len(s) != 6 {
+		return 1, 1, 1
+	}
+	var v [3]uint8
+	for i := 0; i < 3; i++ {
+		x := s[i*2 : i*2+2]
+		n, err := strconv.ParseUint(x, 16, 8)
+		if err != nil {
+			return 1, 1, 1
+		}
+		v[i] = uint8(n)
+	}
+	return float64(v[0]) / 255, float64(v[1]) / 255, float64(v[2]) / 255
+}
+
 func applyTextWatermark(base image.Image, rule model.WatermarkRule) (image.Image, error) {
 	text := strings.TrimSpace(rule.Text)
 	if text == "" {
@@ -197,6 +245,11 @@ func applyTextWatermark(base image.Image, rule model.WatermarkRule) (image.Image
 	f, err := loadRegularFont()
 	if err != nil {
 		return nil, err
+	}
+	if p := strings.TrimSpace(rule.FontPath); p != "" {
+		if ff, ferr := loadFontFromPath(p); ferr == nil && ff != nil {
+			f = ff
+		}
 	}
 	face, err := opentype.NewFace(f, &opentype.FaceOptions{
 		Size:    fontSize,
@@ -248,15 +301,27 @@ func applyTextWatermark(base image.Image, rule model.WatermarkRule) (image.Image
 
 	x, y := calcXY(baseW, baseH, wmW, wmH, rule)
 
-	shadowAlpha := rule.Opacity
-	if shadowAlpha > 1 {
-		shadowAlpha = 1
+	alpha := rule.Opacity
+	if alpha > 1 {
+		alpha = 1
 	}
-	if shadowAlpha < 0 {
-		shadowAlpha = 0
+	if alpha < 0 {
+		alpha = 0
 	}
-	mainAlpha := shadowAlpha
-	shadowAlpha *= 0.8
+	if alpha == 0 {
+		return base, nil
+	}
+
+	style := strings.ToLower(strings.TrimSpace(rule.TextStyle))
+	if style == "" {
+		style = "stroke"
+	}
+	doStroke := style == "stroke" || style == "stroke_shadow"
+	doShadow := style == "shadow" || style == "stroke_shadow"
+
+	mainR, mainG, mainB := hexRGB01(rule.TextColor)
+	strokeR, strokeG, strokeB := hexRGB01(rule.StrokeColor)
+	shadowR, shadowG, shadowB := hexRGB01(rule.ShadowColor)
 
 	// Draw per-line to keep ordering stable.
 	for i, line := range lines {
@@ -265,11 +330,22 @@ func applyTextWatermark(base image.Image, rule model.WatermarkRule) (image.Image
 		}
 		yy := float64(y) + float64(i)*lineStep
 
-		dc.SetRGBA(0, 0, 0, shadowAlpha)
-		dc.DrawStringAnchored(line, float64(x)+2, yy+2, 0, 0)
-		dc.DrawStringAnchored(line, float64(x)-2, yy-2, 0, 0)
+		if doShadow {
+			dc.SetRGBA(shadowR, shadowG, shadowB, alpha*0.8)
+			dc.DrawStringAnchored(line, float64(x)+2, yy+2, 0, 0)
+		}
+		if doStroke {
+			dc.SetRGBA(strokeR, strokeG, strokeB, alpha*0.9)
+			offs := [][2]float64{
+				{-2, 0}, {2, 0}, {0, -2}, {0, 2},
+				{-2, -2}, {2, 2}, {-2, 2}, {2, -2},
+			}
+			for _, off := range offs {
+				dc.DrawStringAnchored(line, float64(x)+off[0], yy+off[1], 0, 0)
+			}
+		}
 
-		dc.SetRGBA(1, 1, 1, mainAlpha)
+		dc.SetRGBA(mainR, mainG, mainB, alpha)
 		dc.DrawStringAnchored(line, float64(x), yy, 0, 0)
 	}
 

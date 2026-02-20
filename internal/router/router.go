@@ -23,6 +23,7 @@ func SetupRouter() *gin.Engine {
 	authApi := v1.AuthApi{}
 	tgAuthApi := v1.TGAuthApi{}
 	dashboardApi := v1.DashboardApi{}
+	watermarkApi := v1.WatermarkApi{}
 	apiV1 := r.Group("/api/v1")
 	{
 		apiV1.GET("/ping", v1.Ping)
@@ -90,6 +91,14 @@ func SetupRouter() *gin.Engine {
 		wsV1 := apiV1.Group("/ws")
 		{
 			wsV1.GET("/dashboard", dashboardApi.DashboardWS)
+		}
+
+		wmV1 := apiV1.Group("/watermarks")
+		{
+			wmV1.POST("/upload", watermarkApi.UploadWatermarkPNG)
+			wmV1.POST("/fonts/upload", watermarkApi.UploadWatermarkFont)
+			wmV1.GET("/files/:name", watermarkApi.GetWatermarkFile)
+			wmV1.GET("/fonts/:name", watermarkApi.GetWatermarkFont)
 		}
 	}
 

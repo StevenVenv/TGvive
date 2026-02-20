@@ -12,6 +12,21 @@ type WatermarkRule struct {
 	// Text is used when Type == "text".
 	Text string `json:"text"`
 
+	// TextStyle controls how to draw text watermark: "plain", "stroke", "shadow", "stroke_shadow".
+	TextStyle string `json:"text_style"`
+
+	// TextColor is the main text color (hex like "#FFFFFF").
+	TextColor string `json:"text_color"`
+
+	// StrokeColor is used by stroke styles (hex like "#000000").
+	StrokeColor string `json:"stroke_color"`
+
+	// ShadowColor is used by shadow styles (hex like "#000000").
+	ShadowColor string `json:"shadow_color"`
+
+	// FontPath is an absolute local font file path (.ttf/.otf) used when Type == "text".
+	FontPath string `json:"font_path"`
+
 	// ImagePath is used when Type == "image". Must be an absolute local PNG path.
 	ImagePath string `json:"image_path"`
 

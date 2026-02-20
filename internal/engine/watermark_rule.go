@@ -17,11 +17,41 @@ func clampFloat01(v float64) float64 {
 	return v
 }
 
+func normalizeHexColor(in string, def string) string {
+	s := strings.TrimSpace(in)
+	if s == "" {
+		return def
+	}
+	if strings.HasPrefix(s, "#") {
+		s = strings.TrimPrefix(s, "#")
+	}
+	s = strings.TrimSpace(s)
+	if len(s) == 3 {
+		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
+	}
+	if len(s) != 6 {
+		return def
+	}
+	for i := 0; i < 6; i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return def
+	}
+	return "#" + strings.ToUpper(s)
+}
+
 func normalizeRuntimeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 	out := in
 	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
 	out.Position = strings.ToLower(strings.TrimSpace(out.Position))
 	out.Text = strings.TrimSpace(out.Text)
+	out.TextStyle = strings.ToLower(strings.TrimSpace(out.TextStyle))
+	out.TextColor = normalizeHexColor(out.TextColor, "#FFFFFF")
+	out.StrokeColor = normalizeHexColor(out.StrokeColor, "#000000")
+	out.ShadowColor = normalizeHexColor(out.ShadowColor, "#000000")
+	out.FontPath = strings.TrimSpace(out.FontPath)
 	out.ImagePath = strings.TrimSpace(out.ImagePath)
 
 	if out.Type == "" {
@@ -39,6 +69,12 @@ func normalizeRuntimeWatermarkRule(in model.WatermarkRule) model.WatermarkRule {
 		} else {
 			out.Type = "text"
 		}
+	}
+
+	switch out.TextStyle {
+	case "plain", "stroke", "shadow", "stroke_shadow":
+	default:
+		out.TextStyle = "stroke"
 	}
 
 	switch out.Position {
