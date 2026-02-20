@@ -61,6 +61,10 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 			Limit:    pageLimit,
 		})
 		if err != nil {
+			// FloodWait: wait and retry.
+			if ok, _ := tgerr.FloodWait(ctx, err); ok {
+				continue
+			}
 			// Some Telegram backends reject large limits; fallback to a smaller page size.
 			if !didFallbackLimit && offsetID == 0 && limit > 50 && tgerr.Is(err, "LIMIT_INVALID") {
 				limit = 50

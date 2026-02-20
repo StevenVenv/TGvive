@@ -748,7 +748,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if commentEnabled && minID > 0 {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {
-							if _, _, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID); werr != nil && global.Logger != nil {
+							srcRoot, dstRoot, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID)
+							if werr != nil && global.Logger != nil {
 								global.Logger.Warn(
 									"store local mapping failed",
 									zap.Uint("task_id", t.Task.ID),
@@ -756,6 +757,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 									zap.Int("target_msg_id", targetID),
 									zap.Error(werr),
 								)
+							} else if srcRoot > 0 && dstRoot > 0 {
+								m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, srcRoot, dstRoot)
 							}
 						}
 					}
@@ -868,7 +871,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if commentEnabled {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {
-							if _, _, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID); werr != nil && global.Logger != nil {
+							srcRoot, dstRoot, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID)
+							if werr != nil && global.Logger != nil {
 								global.Logger.Warn(
 									"store local mapping failed",
 									zap.Uint("task_id", t.Task.ID),
@@ -876,6 +880,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 									zap.Int("target_msg_id", targetID),
 									zap.Error(werr),
 								)
+							} else if srcRoot > 0 && dstRoot > 0 {
+								m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, srcRoot, dstRoot)
 							}
 						}
 					}

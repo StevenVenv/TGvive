@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -31,6 +32,9 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 	tgRT, err := m.ensureTelegramForTask(ctx, t)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		msg := "初始化 Telegram 失败: " + err.Error()
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
@@ -49,6 +53,9 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	task := t
 	sourcePeer, targetPeer, sourceChannelID, err := m.SetupTaskPeers(ctx, api, &task)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		msg := "解析频道/群组失败: " + err.Error()
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)

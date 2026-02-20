@@ -14,7 +14,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const strictCommentDelay = 500 * time.Millisecond
+const (
+	commentSendDelayMin = 300 * time.Millisecond
+	commentSendDelayMax = 1 * time.Second
+)
 
 // sendPendingCommentsForRoot sends all unforwarded comments for a given source discussion root,
 // in ascending msg id order, and marks them as forwarded in the task localdb.
@@ -41,6 +44,9 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		return
 	}
 
+	cfg.sendMu.Lock()
+	defer cfg.sendMu.Unlock()
+
 	db := cfg.LocalDB
 
 	var batch []localdb.LocalComment
@@ -59,17 +65,149 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		return
 	}
 
-	for _, item := range batch {
+	sendOne := func(item localdb.LocalComment, payload localdb.LightPayload) error {
+		sendErr := m.sendLightPayloadAsComment(ctx, api, cfg, payload, targetRootID)
+		if sendErr != nil {
+			// Upload fallback: refetch original message and send with fallback.
+			if fullMsg, rerr := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, item.CommentMsgID); rerr == nil && fullMsg != nil {
+				sendErr = m.sendCommentWithFallback(ctx, api, cfg.SourceLinkedPeer, cfg.TargetLinkedPeer, fullMsg, targetRootID, task.ID)
+			}
+		}
+		return sendErr
+	}
+
+	markForwarded := func(ids []int) {
+		if len(ids) == 0 {
+			return
+		}
+		_ = db.Model(&localdb.LocalComment{}).
+			Where("source_post_id = ? AND comment_msg_id IN ?", sourceRootID, ids).
+			Update("is_forwarded", true).Error
+	}
+
+	for i := 0; i < len(batch); {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if item.CommentMsgID <= 0 || item.SourcePostID != sourceRootID {
-			continue
-		}
-		if item.IsForwarded {
+
+		item := batch[i]
+		if item.CommentMsgID <= 0 || item.SourcePostID != sourceRootID || item.IsForwarded {
+			i++
 			continue
 		}
 
+		// Grouped media (album) support.
+		if item.GroupedID != 0 {
+			gid := item.GroupedID
+			j := i
+			group := make([]localdb.LocalComment, 0, 8)
+			for j < len(batch) {
+				it := batch[j]
+				if it.CommentMsgID <= 0 || it.SourcePostID != sourceRootID || it.IsForwarded || it.GroupedID != gid {
+					break
+				}
+				group = append(group, it)
+				j++
+			}
+
+			// Try album send-by-reference if we have >=2 media items with decodable media_bytes.
+			if len(group) >= 2 {
+				payloads := make([]localdb.LightPayload, 0, len(group))
+				ids := make([]int, 0, len(group))
+				okAlbum := true
+				for _, it := range group {
+					ids = append(ids, it.CommentMsgID)
+					var p localdb.LightPayload
+					if len(it.LightPayload) > 0 {
+						if err := json.Unmarshal(it.LightPayload, &p); err != nil {
+							okAlbum = false
+							break
+						}
+					}
+					if len(p.MediaBytes) == 0 {
+						okAlbum = false
+						break
+					}
+					payloads = append(payloads, p)
+				}
+
+				if okAlbum {
+					if err := m.sendLightPayloadAlbumAsComment(ctx, api, cfg, payloads, targetRootID); err == nil {
+						markForwarded(ids)
+						sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
+						i = j
+						continue
+					} else if d, ok := tgerr.AsFloodWait(err); ok {
+						if global.Logger != nil {
+							global.Logger.Warn(
+								"comment floodwait, skipping remaining comments for trunk",
+								zap.Uint("task_id", task.ID),
+								zap.Int("source_root_id", sourceRootID),
+								zap.Duration("wait", d),
+								zap.Error(err),
+							)
+						}
+						return
+					}
+				}
+			}
+
+			// Fallback: send each item individually (still in order).
+			for _, it := range group {
+				if err := ctx.Err(); err != nil {
+					return
+				}
+
+				var payload localdb.LightPayload
+				if len(it.LightPayload) > 0 {
+					if err := json.Unmarshal(it.LightPayload, &payload); err != nil {
+						if global.Logger != nil {
+							global.Logger.Warn(
+								"decode light payload failed",
+								zap.Uint("task_id", task.ID),
+								zap.Int("msg_id", it.CommentMsgID),
+								zap.Error(err),
+							)
+						}
+						continue
+					}
+				}
+
+				sendErr := sendOne(it, payload)
+				if sendErr != nil {
+					if d, ok := tgerr.AsFloodWait(sendErr); ok {
+						if global.Logger != nil {
+							global.Logger.Warn(
+								"comment floodwait, skipping remaining comments for trunk",
+								zap.Uint("task_id", task.ID),
+								zap.Int("source_root_id", sourceRootID),
+								zap.Duration("wait", d),
+								zap.Error(sendErr),
+							)
+						}
+						return
+					}
+					if global.Logger != nil {
+						global.Logger.Warn(
+							"send comment failed",
+							zap.Uint("task_id", task.ID),
+							zap.Int("msg_id", it.CommentMsgID),
+							zap.Int64("grouped_id", gid),
+							zap.Error(sendErr),
+						)
+					}
+					continue
+				}
+
+				markForwarded([]int{it.CommentMsgID})
+				sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
+			}
+
+			i = j
+			continue
+		}
+
+		// Single message.
 		var payload localdb.LightPayload
 		if len(item.LightPayload) > 0 {
 			if err := json.Unmarshal(item.LightPayload, &payload); err != nil {
@@ -81,20 +219,13 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 						zap.Error(err),
 					)
 				}
+				i++
 				continue
 			}
 		}
 
-		sendErr := m.sendLightPayloadAsComment(ctx, api, cfg, payload, targetRootID)
+		sendErr := sendOne(item, payload)
 		if sendErr != nil {
-			// Upload fallback: refetch original message and send with fallback.
-			if fullMsg, rerr := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, item.CommentMsgID); rerr == nil && fullMsg != nil {
-				sendErr = m.sendCommentWithFallback(ctx, api, cfg.SourceLinkedPeer, cfg.TargetLinkedPeer, fullMsg, targetRootID, task.ID)
-			}
-		}
-
-		if sendErr != nil {
-			// FloodWait: skip remaining comments for this root.
 			if d, ok := tgerr.AsFloodWait(sendErr); ok {
 				if global.Logger != nil {
 					global.Logger.Warn(
@@ -107,7 +238,6 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				}
 				return
 			}
-
 			if global.Logger != nil {
 				global.Logger.Warn(
 					"send comment failed",
@@ -116,14 +246,12 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					zap.Error(sendErr),
 				)
 			}
+			i++
 			continue
 		}
 
-		_ = db.Model(&localdb.LocalComment{}).
-			Where("comment_msg_id = ? AND source_post_id = ?", item.CommentMsgID, sourceRootID).
-			Update("is_forwarded", true).Error
-
-		sleepWithContext(ctx, strictCommentDelay)
+		markForwarded([]int{item.CommentMsgID})
+		sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
+		i++
 	}
 }
-

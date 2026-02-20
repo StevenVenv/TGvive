@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"my-go-server/internal/engine/localdb"
 	"my-go-server/internal/global"
@@ -23,6 +24,8 @@ const (
 	groupAnonymousBotID int64 = 1087968824
 	muteForeverUnix     int   = 2147483647
 )
+
+const commentAlbumFlushDebounce = 800 * time.Millisecond
 
 type linkedChatInfo struct {
 	LinkedChatID int64
@@ -44,6 +47,9 @@ type commentPipelineConfig struct {
 	// LocalDB is the task-scoped SQLite handle used by Producer/Consumer.
 	// It is nil when comment mirroring is disabled or localdb init failed.
 	LocalDB *gorm.DB
+
+	// sendMu prevents concurrent flushes (trunk mapping flush vs realtime comment flush).
+	sendMu sync.Mutex
 }
 
 type commentProducerTaskConfig struct {
@@ -202,12 +208,75 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 		return
 	}
 
+	var (
+		pendingGroupedID int64
+		pendingRootID    int
+
+		flushTimer *time.Timer
+		flushC     <-chan time.Time
+	)
+
+	stopFlushTimer := func() {
+		if flushTimer == nil {
+			return
+		}
+		if !flushTimer.Stop() {
+			select {
+			case <-flushTimer.C:
+			default:
+			}
+		}
+		flushTimer = nil
+		flushC = nil
+	}
+
+	scheduleGroupedFlush := func() {
+		if pendingGroupedID == 0 || pendingRootID <= 0 {
+			stopFlushTimer()
+			return
+		}
+		if flushTimer == nil {
+			flushTimer = time.NewTimer(commentAlbumFlushDebounce)
+			flushC = flushTimer.C
+			return
+		}
+		if !flushTimer.Stop() {
+			select {
+			case <-flushTimer.C:
+			default:
+			}
+		}
+		flushTimer.Reset(commentAlbumFlushDebounce)
+		flushC = flushTimer.C
+	}
+
+	flushPendingGrouped := func() {
+		if pendingGroupedID == 0 || pendingRootID <= 0 {
+			stopFlushTimer()
+			return
+		}
+		defer func() {
+			pendingGroupedID = 0
+			pendingRootID = 0
+			stopFlushTimer()
+		}()
+
+		var mapping localdb.LocalMapping
+		if err := t.comment.LocalDB.Where("source_root_id = ?", pendingRootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
+			return
+		}
+		m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, pendingRootID, mapping.TargetRootID)
+	}
+	defer stopFlushTimer()
+
 	for {
 		select {
 		case <-t.done:
 			return
 		case <-t.Ctx.Done():
 			return
+		case <-flushC:
+			flushPendingGrouped()
 		case msg, ok := <-t.queue:
 			if !ok {
 				return
@@ -240,6 +309,14 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 				continue
 			}
 
+			// If a previous grouped (album) comment is pending and the new message is not part of it,
+			// flush the previous group first to preserve ordering.
+			if pendingGroupedID != 0 && pendingRootID > 0 {
+				if msg.GroupedID == 0 || msg.GroupedID != pendingGroupedID || rootID != pendingRootID {
+					flushPendingGrouped()
+				}
+			}
+
 			if !shouldCloneCommentByIdentity(msg, t.comment.SourceChannelID, filterMode, trusted, allowAnonymous) {
 				continue
 			}
@@ -269,6 +346,7 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 			rec := localdb.LocalComment{
 				SourcePostID: rootID,
 				CommentMsgID: msg.ID,
+				GroupedID:    msg.GroupedID,
 				IsForwarded:  false,
 				LightPayload: b,
 			}
@@ -286,6 +364,14 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 			var mapping localdb.LocalMapping
 			if err := t.comment.LocalDB.Where("source_root_id = ?", rootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
 				// Mapping may arrive slightly later (trunk not mirrored yet); keep cached row for retry.
+				continue
+			}
+
+			// For grouped media (album), delay flush slightly to collect the whole group.
+			if msg.GroupedID != 0 {
+				pendingGroupedID = msg.GroupedID
+				pendingRootID = rootID
+				scheduleGroupedFlush()
 				continue
 			}
 
@@ -350,8 +436,15 @@ func shouldCloneCommentByIdentity(msg *tg.Message, sourceChannelID int64, filter
 	}
 
 	// Owner (send-as-channel in linked discussion).
-	if ch, ok := from.(*tg.PeerChannel); ok && ch != nil && ch.ChannelID == sourceChannelID {
-		return true
+	if ch, ok := from.(*tg.PeerChannel); ok && ch != nil {
+		// 1) Channel itself.
+		if ch.ChannelID == sourceChannelID {
+			return true
+		}
+		// 2) Discussion group itself (anonymous admin "send as group").
+		if peerChID, ok := peerToChannelID(msg.PeerID); ok && peerChID != 0 && ch.ChannelID == peerChID {
+			return true
+		}
 	}
 
 	if u, ok := from.(*tg.PeerUser); ok && u != nil {
@@ -725,6 +818,13 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 		return err
 	}
 
+	caption := msg.Message
+	entities := msg.Entities
+	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+		caption = out
+		entities = nil
+	}
+
 	rid, err := randomID()
 	if err != nil {
 		return err
@@ -733,11 +833,11 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 		Peer:     peer,
 		ReplyTo:  replyTo,
 		Media:    inputMedia,
-		Message:  msg.Message,
+		Message:  caption,
 		RandomID: rid,
 	}
-	if len(msg.Entities) > 0 {
-		req.Entities = msg.Entities
+	if len(entities) > 0 {
+		req.Entities = entities
 	}
 	if _, err := api.MessagesSendMedia(ctx, req); err == nil {
 		return nil
@@ -771,15 +871,21 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 	if err != nil {
 		return err
 	}
+	caption2 := msg.Message
+	entities2 := msg.Entities
+	if out, truncated := sanitizeMediaCaptionText(caption2); truncated {
+		caption2 = out
+		entities2 = nil
+	}
 	req2 := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
 		ReplyTo:  replyTo,
 		Media:    uploaded,
-		Message:  msg.Message,
+		Message:  caption2,
 		RandomID: rid2,
 	}
-	if len(msg.Entities) > 0 {
-		req2.Entities = msg.Entities
+	if len(entities2) > 0 {
+		req2.Entities = entities2
 	}
 	_, err = api.MessagesSendMedia(ctx, req2)
 	return err

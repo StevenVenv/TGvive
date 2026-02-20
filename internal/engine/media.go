@@ -227,6 +227,13 @@ func (m *TaskManager) SendMedia(ctx context.Context, api *tg.Client, msg *tg.Mes
 		return nil
 	}
 
+	caption := msg.Message
+	entities := msg.Entities
+	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+		caption = out
+		entities = nil
+	}
+
 	media, err := convertMessageMediaToInput(msg.Media)
 	if err != nil {
 		return err
@@ -240,11 +247,11 @@ func (m *TaskManager) SendMedia(ctx context.Context, api *tg.Client, msg *tg.Mes
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
 		Media:    media,
-		Message:  msg.Message,
+		Message:  caption,
 		RandomID: rid,
 	}
-	if len(msg.Entities) > 0 {
-		req.Entities = msg.Entities
+	if len(entities) > 0 {
+		req.Entities = entities
 	}
 
 	_, err = api.MessagesSendMedia(ctx, req)
@@ -299,9 +306,15 @@ func (m *TaskManager) SendAlbum(ctx context.Context, api *tg.Client, msgs []*tg.
 			RandomID: rid,
 		}
 		if i == 0 {
-			item.Message = msg.Message
-			if len(msg.Entities) > 0 {
-				item.Entities = msg.Entities
+			caption := msg.Message
+			entities := msg.Entities
+			if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+				caption = out
+				entities = nil
+			}
+			item.Message = caption
+			if len(entities) > 0 {
+				item.Entities = entities
 			}
 		}
 		multi = append(multi, item)
@@ -461,14 +474,21 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 		return nil, err
 	}
 
+	caption := msg.Message
+	entities := msg.Entities
+	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+		caption = out
+		entities = nil
+	}
+
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
 		Media:    uploaded,
-		Message:  msg.Message,
+		Message:  caption,
 		RandomID: rid,
 	}
-	if len(msg.Entities) > 0 {
-		req.Entities = msg.Entities
+	if len(entities) > 0 {
+		req.Entities = entities
 	}
 
 	upd, err := api.MessagesSendMedia(ctx, req)
@@ -667,9 +687,15 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 	}
 
 	// Caption/entities only on the first item.
-	ups[0].Message = mediaMsgs[0].Message
-	if len(mediaMsgs[0].Entities) > 0 {
-		ups[0].Entities = mediaMsgs[0].Entities
+	caption := mediaMsgs[0].Message
+	entities := mediaMsgs[0].Entities
+	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+		caption = out
+		entities = nil
+	}
+	ups[0].Message = caption
+	if len(entities) > 0 {
+		ups[0].Entities = entities
 	}
 
 	upd, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{

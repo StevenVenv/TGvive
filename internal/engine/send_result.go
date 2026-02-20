@@ -135,6 +135,13 @@ func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 		return nil, nil
 	}
 
+	caption := msg.Message
+	entities := msg.Entities
+	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+		caption = out
+		entities = nil
+	}
+
 	media, err := convertMessageMediaToInput(msg.Media)
 	if err != nil {
 		return nil, err
@@ -148,11 +155,11 @@ func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
 		Media:    media,
-		Message:  msg.Message,
+		Message:  caption,
 		RandomID: rid,
 	}
-	if len(msg.Entities) > 0 {
-		req.Entities = msg.Entities
+	if len(entities) > 0 {
+		req.Entities = entities
 	}
 	return api.MessagesSendMedia(ctx, req)
 }
@@ -202,9 +209,15 @@ func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 			RandomID: rid,
 		}
 		if i == 0 {
-			item.Message = msg.Message
-			if len(msg.Entities) > 0 {
-				item.Entities = msg.Entities
+			caption := msg.Message
+			entities := msg.Entities
+			if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+				caption = out
+				entities = nil
+			}
+			item.Message = caption
+			if len(entities) > 0 {
+				item.Entities = entities
 			}
 		}
 		multi = append(multi, item)

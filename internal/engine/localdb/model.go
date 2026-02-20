@@ -21,6 +21,7 @@ type LocalComment struct {
 
 	SourcePostID int `gorm:"not null;index"` // source linked-chat discussion root msg id
 	CommentMsgID int `gorm:"not null;uniqueIndex"`
+	GroupedID    int64 `gorm:"not null;default:0;index"`
 
 	LightPayload datatypes.JSON `gorm:"type:json"`
 

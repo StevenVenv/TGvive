@@ -11,9 +11,13 @@ import (
 
 func TestShouldCloneComment_OwnerOnly(t *testing.T) {
 	sourceChannelID := int64(12345)
+	linkedChatID := int64(77777)
 
 	ownerMsg := &tg.Message{}
 	ownerMsg.SetFromID(&tg.PeerChannel{ChannelID: sourceChannelID})
+
+	anonGroupMsg := &tg.Message{PeerID: &tg.PeerChannel{ChannelID: linkedChatID}}
+	anonGroupMsg.SetFromID(&tg.PeerChannel{ChannelID: linkedChatID})
 
 	trustedMsg := &tg.Message{}
 	trustedMsg.SetFromID(&tg.PeerUser{UserID: 200})
@@ -31,6 +35,9 @@ func TestShouldCloneComment_OwnerOnly(t *testing.T) {
 	}
 	if !ShouldCloneComment(ownerMsg, sourceChannelID, rule) {
 		t.Fatalf("expected owner message allowed")
+	}
+	if !ShouldCloneComment(anonGroupMsg, sourceChannelID, rule) {
+		t.Fatalf("expected anonymous 'send as group' allowed (linked chat treated as official)")
 	}
 	if !ShouldCloneComment(trustedMsg, sourceChannelID, rule) {
 		t.Fatalf("expected trusted user allowed")

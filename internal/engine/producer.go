@@ -73,26 +73,18 @@ func (m *TaskManager) StoreMappingForTrunk(
 		return 0, 0, nil
 	}
 
-	srcRes, err := api.MessagesGetDiscussionMessage(ctx, &tg.MessagesGetDiscussionMessageRequest{
-		Peer:  sourceChannelPeer,
-		MsgID: sourceChannelMsgID,
-	})
+	sourceRootID, err = getDiscussionRootIDWithRetry(ctx, api, sourceChannelPeer, sourceChannelMsgID, cfg.SourceLinkedChatID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("get source discussion message: %w", err)
 	}
-	sourceRootID = findDiscussionRootMsgID(srcRes, cfg.SourceLinkedChatID)
 	if sourceRootID <= 0 {
 		return 0, 0, nil
 	}
 
-	dstRes, err := api.MessagesGetDiscussionMessage(ctx, &tg.MessagesGetDiscussionMessageRequest{
-		Peer:  targetChannelPeer,
-		MsgID: targetChannelMsgID,
-	})
+	targetRootID, err = getDiscussionRootIDWithRetry(ctx, api, targetChannelPeer, targetChannelMsgID, cfg.TargetLinkedChatID)
 	if err != nil {
 		return sourceRootID, 0, fmt.Errorf("get target discussion message: %w", err)
 	}
-	targetRootID = findDiscussionRootMsgID(dstRes, cfg.TargetLinkedChatID)
 	if targetRootID <= 0 {
 		return sourceRootID, 0, nil
 	}
@@ -219,12 +211,13 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 			continue
 		}
 
-		rec := localdb.LocalComment{
-			SourcePostID: srcRoot,
-			CommentMsgID: msg.ID,
-			IsForwarded:  false,
-			LightPayload: b,
-		}
+			rec := localdb.LocalComment{
+				SourcePostID: srcRoot,
+				CommentMsgID: msg.ID,
+				GroupedID:    msg.GroupedID,
+				IsForwarded:  false,
+				LightPayload: b,
+			}
 
 		if err := cfg.LocalDB.
 			Clauses(clause.OnConflict{
@@ -300,6 +293,7 @@ func (m *TaskManager) StoreRealtimeComment(ctx context.Context, task model.Task,
 	rec := localdb.LocalComment{
 		SourcePostID: rootID,
 		CommentMsgID: msg.ID,
+		GroupedID:    msg.GroupedID,
 		IsForwarded:  false,
 		LightPayload: b,
 	}
