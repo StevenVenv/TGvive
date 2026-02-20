@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"my-go-server/internal/engine/localdb"
 	"my-go-server/internal/global"
@@ -268,21 +267,29 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 			}
 
 			rec := localdb.LocalComment{
-				MsgID:         msg.ID,
-				ReplyToRootID: rootID,
-				Status:        "pending",
-				Attempts:      0,
-				NextAttemptAt: time.Now(),
-				LightPayload:  b,
+				SourcePostID: rootID,
+				CommentMsgID: msg.ID,
+				IsForwarded:  false,
+				LightPayload: b,
 			}
 			if err := t.comment.LocalDB.
 				Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "msg_id"}},
+					Columns:   []clause.Column{{Name: "comment_msg_id"}},
 					DoNothing: true,
 				}).
 				Create(&rec).Error; err != nil && global.Logger != nil {
 				global.Logger.Warn("store local comment failed", zap.Uint("task_id", t.Task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
+				continue
 			}
+
+			// Try mirror immediately (strict sequential per-task), best-effort.
+			var mapping localdb.LocalMapping
+			if err := t.comment.LocalDB.Where("source_root_id = ?", rootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
+				// Mapping may arrive slightly later (trunk not mirrored yet); keep cached row for retry.
+				continue
+			}
+
+			m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, rootID, mapping.TargetRootID)
 		}
 	}
 }

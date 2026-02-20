@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"my-go-server/internal/engine/localdb"
 	"my-go-server/internal/global"
@@ -132,23 +131,23 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 	targetChannelPeer tg.InputPeerClass,
 	sourceChannelMsgID int,
 	targetChannelMsgID int,
-) int {
+) (sourceRootID int, targetRootID int) {
 	if err := ctx.Err(); err != nil {
-		return 0
+		return 0, 0
 	}
 	if m == nil || api == nil || cfg == nil || !cfg.Enabled || cfg.LocalDB == nil {
-		return 0
+		return 0, 0
 	}
 	if cfg.SourceLinkedPeer == nil {
-		return 0
+		return 0, 0
 	}
 
-	srcRoot, _, err := m.StoreMappingForTrunk(ctx, api, task, cfg, sourceChannelPeer, targetChannelPeer, sourceChannelMsgID, targetChannelMsgID)
-	if err != nil || srcRoot <= 0 {
+	srcRoot, dstRoot, err := m.StoreMappingForTrunk(ctx, api, task, cfg, sourceChannelPeer, targetChannelPeer, sourceChannelMsgID, targetChannelMsgID)
+	if err != nil || srcRoot <= 0 || dstRoot <= 0 {
 		if err != nil && global.Logger != nil {
 			global.Logger.Warn("store trunk mapping failed", zap.Uint("task_id", task.ID), zap.Int("source_msg_id", sourceChannelMsgID), zap.Error(err))
 		}
-		return 0
+		return srcRoot, dstRoot
 	}
 
 	comments, err := fetchRepliesByRoot(ctx, api, cfg.SourceLinkedPeer, srcRoot, commentFetchPageSize, commentFetchMaxTotal)
@@ -156,16 +155,16 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 		if global.Logger != nil {
 			global.Logger.Warn("fetch replies failed", zap.Uint("task_id", task.ID), zap.Int("source_root_id", srcRoot), zap.Error(err))
 		}
-		return srcRoot
+		return srcRoot, dstRoot
 	}
 	if len(comments) == 0 {
-		return srcRoot
+		return srcRoot, dstRoot
 	}
 
 	st := ResolveRuntimeStrategy(task)
 	rule, enabled, _ := resolveCommentRule(task, st)
 	if !enabled {
-		return srcRoot
+		return srcRoot, dstRoot
 	}
 
 	trustedSet := make(map[int64]struct{}, len(rule.TrustedUserIDs))
@@ -182,11 +181,9 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 	}
 	blockLower := lowerKeywordList(rule.BlockKeywords)
 
-	now := time.Now()
-
 	for _, msg := range comments {
 		if err := ctx.Err(); err != nil {
-			return srcRoot
+			return srcRoot, dstRoot
 		}
 		if msg == nil || msg.ID <= 0 {
 			continue
@@ -223,17 +220,15 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 		}
 
 		rec := localdb.LocalComment{
-			MsgID:         msg.ID,
-			ReplyToRootID: srcRoot,
-			Status:        "pending",
-			Attempts:      0,
-			NextAttemptAt: now,
-			LightPayload:  b,
+			SourcePostID: srcRoot,
+			CommentMsgID: msg.ID,
+			IsForwarded:  false,
+			LightPayload: b,
 		}
 
 		if err := cfg.LocalDB.
 			Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "msg_id"}},
+				Columns:   []clause.Column{{Name: "comment_msg_id"}},
 				DoNothing: true,
 			}).
 			Create(&rec).Error; err != nil && global.Logger != nil {
@@ -241,7 +236,7 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 		}
 	}
 
-	return srcRoot
+	return srcRoot, dstRoot
 }
 
 func (m *TaskManager) StoreRealtimeComment(ctx context.Context, task model.Task, cfg *commentPipelineConfig, msg *tg.Message) {
@@ -303,16 +298,14 @@ func (m *TaskManager) StoreRealtimeComment(ctx context.Context, task model.Task,
 	}
 
 	rec := localdb.LocalComment{
-		MsgID:         msg.ID,
-		ReplyToRootID: rootID,
-		Status:        "pending",
-		Attempts:      0,
-		NextAttemptAt: time.Now(),
-		LightPayload:  b,
+		SourcePostID: rootID,
+		CommentMsgID: msg.ID,
+		IsForwarded:  false,
+		LightPayload: b,
 	}
 	if err := cfg.LocalDB.
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "msg_id"}},
+			Columns:   []clause.Column{{Name: "comment_msg_id"}},
 			DoNothing: true,
 		}).
 		Create(&rec).Error; err != nil && global.Logger != nil {

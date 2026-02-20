@@ -473,11 +473,9 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						if commentEnabled && minInGroup > 0 {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
-								if srcRoot > 0 {
-									if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
-										return err
-									}
+								srcRoot, dstRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								if srcRoot > 0 && dstRoot > 0 {
+									m.sendPendingCommentsForRoot(ctx, api, task, commentCfg, srcRoot, dstRoot)
 								}
 							}
 						}
@@ -594,11 +592,9 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
-					if srcRoot > 0 {
-						if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
-							return err
-						}
+					srcRoot, dstRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					if srcRoot > 0 && dstRoot > 0 {
+						m.sendPendingCommentsForRoot(ctx, api, task, commentCfg, srcRoot, dstRoot)
 					}
 				}
 			}
@@ -900,11 +896,9 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						if commentEnabled && minInGroup > 0 {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
-								if srcRoot > 0 {
-									if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
-										return err
-									}
+								srcRoot, dstRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								if srcRoot > 0 && dstRoot > 0 {
+									m.sendPendingCommentsForRoot(ctx, api, task, commentCfg, srcRoot, dstRoot)
 								}
 							}
 						}
@@ -1022,11 +1016,9 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
-					if srcRoot > 0 {
-						if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
-							return err
-						}
+					srcRoot, dstRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					if srcRoot > 0 && dstRoot > 0 {
+						m.sendPendingCommentsForRoot(ctx, api, task, commentCfg, srcRoot, dstRoot)
 					}
 				}
 			}
@@ -1318,11 +1310,9 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						if commentEnabled {
 							targetID := minPositiveInt(sentIDs)
 							if targetID > 0 {
-								srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
-								if srcRoot > 0 {
-									if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
-										return err
-									}
+								srcRoot, dstRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, minInGroup, targetID)
+								if srcRoot > 0 && dstRoot > 0 {
+									m.sendPendingCommentsForRoot(ctx, api, task, commentCfg, srcRoot, dstRoot)
 								}
 							}
 						}
@@ -1438,11 +1428,9 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if commentEnabled {
 				targetID := minPositiveInt(sentIDs)
 				if targetID > 0 {
-					srcRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
-					if srcRoot > 0 {
-						if err := m.waitUntilCommentsDrained(ctx, task, runID, commentCfg, srcRoot); err != nil {
-							return err
-						}
+					srcRoot, dstRoot := m.ProduceHistoryCommentsForTrunk(ctx, api, task, commentCfg, sourcePeer, targetPeer, msg.ID, targetID)
+					if srcRoot > 0 && dstRoot > 0 {
+						m.sendPendingCommentsForRoot(ctx, api, task, commentCfg, srcRoot, dstRoot)
 					}
 				}
 			}

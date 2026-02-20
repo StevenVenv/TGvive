@@ -108,9 +108,6 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 						} else {
 							commentCfg.LocalDB = db
 							m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, path))
-
-							// Start consumer (async sender).
-							m.startCommentConsumer(ctx, api, task, commentCfg)
 						}
 					}
 				}

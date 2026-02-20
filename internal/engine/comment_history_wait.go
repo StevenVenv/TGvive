@@ -36,7 +36,7 @@ func (m *TaskManager) waitUntilCommentsDrained(ctx context.Context, task model.T
 
 		var pendingCount int64
 		if err := db.Model(&localdb.LocalComment{}).
-			Where("reply_to_root_id = ? AND status = ?", sourceRootID, "pending").
+			Where("source_post_id = ? AND is_forwarded = ?", sourceRootID, false).
 			Count(&pendingCount).Error; err != nil {
 			if global.Logger != nil {
 				global.Logger.Warn(

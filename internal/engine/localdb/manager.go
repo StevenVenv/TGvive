@@ -108,7 +108,7 @@ func (m *Manager) Open(taskID uint) (*gorm.DB, string, error) {
 	_ = db.Exec("PRAGMA temp_store=MEMORY;").Error
 	_ = db.Exec("PRAGMA foreign_keys=ON;").Error
 
-	if err := db.AutoMigrate(&LocalMapping{}, &LocalComment{}); err != nil {
+	if err := ensureSchema(db); err != nil {
 		return nil, "", err
 	}
 
@@ -124,6 +124,55 @@ func (m *Manager) Open(taskID uint) (*gorm.DB, string, error) {
 	m.mu.Unlock()
 
 	return db, path, nil
+}
+
+type sqliteColumn struct {
+	Name string `gorm:"column:name"`
+}
+
+func ensureSchema(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("db is nil")
+	}
+
+	// Always migrate mapping table (non-breaking).
+	if err := db.AutoMigrate(&LocalMapping{}); err != nil {
+		return err
+	}
+
+	// local_comment had a legacy schema; rebuild it once when detected.
+	{
+		var cols []sqliteColumn
+		_ = db.Raw("PRAGMA table_info(local_comment)").Scan(&cols).Error
+
+		hasLegacy := false
+		hasSourcePostID := false
+		hasCommentMsgID := false
+		for _, c := range cols {
+			switch strings.ToLower(strings.TrimSpace(c.Name)) {
+			case "msg_id", "reply_to_root_id", "status", "attempts", "next_attempt_at":
+				hasLegacy = true
+			case "source_post_id":
+				hasSourcePostID = true
+			case "comment_msg_id":
+				hasCommentMsgID = true
+			}
+		}
+		// If legacy columns exist, drop and recreate the table to avoid NOT NULL constraint issues.
+		// This is task-scoped cache, safe to rebuild.
+		if hasLegacy {
+			if err := db.Migrator().DropTable("local_comment"); err != nil {
+				return err
+			}
+		} else if len(cols) > 0 && (!hasSourcePostID || !hasCommentMsgID) {
+			// Unexpected schema: rebuild to keep the codepath simple and reliable.
+			if err := db.Migrator().DropTable("local_comment"); err != nil {
+				return err
+			}
+		}
+	}
+
+	return db.AutoMigrate(&LocalComment{})
 }
 
 func (m *Manager) Close(taskID uint) error {
