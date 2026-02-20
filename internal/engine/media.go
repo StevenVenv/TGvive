@@ -291,6 +291,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 						}
 
 						if task.ChangeMD5 {
+							recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5(封面): %s", filepath.Base(coverUploadPath)))
 							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
 								return nil, err
 							}
@@ -326,6 +327,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	}
 
 	if wmCandidate {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 		if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 			if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
 				if inputFile, uerr := uploadBytes(ctx, api, "wm.jpg", outBytes); uerr == nil && inputFile != nil {
@@ -360,6 +362,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 
 					upd, err := api.MessagesSendMedia(ctx, req)
 					if err == nil {
+						recordTaskDetailFromCtx(ctx, "水印发送完成")
 						storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
 						return upd, nil
 					}
@@ -369,6 +372,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	}
 
 	if task.ChangeMD5 {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5: %s", filepath.Base(uploadPath)))
 		if err := processor.ModifyFileMD5(uploadPath); err != nil {
 			return nil, err
 		}
@@ -555,6 +559,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 							}
 
 							if task.ChangeMD5 {
+								recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5(封面): %s", filepath.Base(coverUploadPath)))
 								if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
 									return nil, err
 								}
@@ -590,6 +595,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 		}
 
 		if wmCandidate {
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 			if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 				if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
 					if inputFile, uerr := uploadBytes(ctx, api, "wm.jpg", outBytes); uerr == nil && inputFile != nil {
@@ -621,6 +627,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 		}
 
 		if task.ChangeMD5 {
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5: %s", filepath.Base(uploadPath)))
 			if err := processor.ModifyFileMD5(uploadPath); err != nil {
 				return nil, err
 			}
@@ -1031,10 +1038,47 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		return "", mediaMeta{}, nil, err
 	}
 
+	downloadAction := func(meta mediaMeta) string {
+		if meta.Kind == mediaKindPhoto {
+			return "下载图片"
+		}
+		if meta.Kind != mediaKindDocument {
+			return "下载媒体"
+		}
+
+		for _, a := range meta.Attributes {
+			switch a.(type) {
+			case *tg.DocumentAttributeVideo, *tg.DocumentAttributeAnimated:
+				return "下载视频"
+			case *tg.DocumentAttributeAudio:
+				return "下载音频"
+			}
+		}
+
+		mt := strings.ToLower(strings.TrimSpace(meta.MimeType))
+		switch {
+		case strings.HasPrefix(mt, "video/"):
+			return "下载视频"
+		case strings.HasPrefix(mt, "image/"):
+			return "下载图片"
+		case strings.HasPrefix(mt, "audio/"):
+			return "下载音频"
+		default:
+			return "下载文件"
+		}
+	}
+
 	downloadOnce := func(cur *tg.Message, afterRefresh bool) (string, mediaMeta, func() error, error) {
 		spec, err := buildMediaDownloadSpec(cur)
 		if err != nil {
 			return "", mediaMeta{}, nil, err
+		}
+
+		act := downloadAction(spec.meta)
+		if cur != nil && cur.ID > 0 {
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: msg_id=%d", act, cur.ID))
+		} else {
+			recordTaskDetailFromCtx(ctx, act)
 		}
 
 		f, path, err := createUniqueFile(dir, sanitizeFilename(spec.baseName))
@@ -1118,6 +1162,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		if fi, err := f.Stat(); err == nil && fi != nil {
 			if sz := fi.Size(); sz > 0 {
 				global.BroadcastLog(fmt.Sprintf("Downloaded %s (%.1fMB)", filepath.Base(path), float64(sz)/1024.0/1024.0))
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s完成: %s (%.1fMB)", act, filepath.Base(path), float64(sz)/1024.0/1024.0))
 			}
 		}
 
@@ -1134,6 +1179,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 	}
 
 	global.BroadcastLog(fmt.Sprintf("[WARN] Media LOCATION_INVALID, refreshing file reference then retry (msg_id=%d)", msg.ID))
+	recordTaskDetailFromCtx(ctx, fmt.Sprintf("文件引用失效，刷新后重试: msg_id=%d", msg.ID))
 	refreshed, rerr := refreshMessageForDownload(ctx, api, sourcePeer, msg.ID)
 	if rerr != nil || refreshed == nil {
 		return "", mediaMeta{}, nil, err
@@ -1151,6 +1197,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 	if msg.GroupedID != 0 && isFileLocationRefreshable(err) {
 		if key, ok := getMessageMediaKey(msg); ok {
 			global.BroadcastLog(fmt.Sprintf("[WARN] Media LOCATION_INVALID after refresh, refreshing album window then retry (msg_id=%d, grouped_id=%d)", msg.ID, msg.GroupedID))
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("文件引用失效，刷新专辑窗口后重试: msg_id=%d grouped_id=%d", msg.ID, msg.GroupedID))
 			if m2, aerr := refreshAlbumMessageForDownload(ctx, api, sourcePeer, msg.GroupedID, key, msg.ID); aerr == nil && m2 != nil && m2.Media != nil {
 				return downloadOnce(m2, true)
 			}

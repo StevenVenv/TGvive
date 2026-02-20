@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	"my-go-server/internal/global"
@@ -92,13 +93,37 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 	if msg == nil {
 		return nil
 	}
+	if msg.ID > 0 {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("收到消息: msg_id=%d", msg.ID))
+	}
 
 	if task.CloneMode != 3 {
 		task.EnableMediaEdit = false
 	}
 
 	if task.CloneMode == 1 {
-		return m.ForwardMessagesWithFallback(ctx, api, sourcePeer, []*tg.Message{msg}, task, peer)
+		if !task.KeepReply {
+			return m.ForwardMessagesWithFallback(ctx, api, sourcePeer, []*tg.Message{msg}, task, peer)
+		}
+
+		replyTo := tg.InputReplyToClass(nil)
+		if srcReplyID := extractReplyToSourceMsgID(msg); srcReplyID > 0 {
+			replyTo = buildKeepReplyInput(task, msg)
+			if replyTo == nil {
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("保留回复: 映射缺失 reply_to=%d (msg_id=%d)", srcReplyID, msg.ID))
+			}
+		}
+
+		sentIDs, err := m.ForwardMessagesWithFallbackResult(ctx, api, sourcePeer, []*tg.Message{msg}, task, peer, replyTo)
+		if err != nil {
+			return err
+		}
+		if msg.ID > 0 {
+			if targetID := minPositiveInt(sentIDs); targetID > 0 {
+				storeMsgMapping(task, msg.ID, targetID)
+			}
+		}
+		return nil
 	}
 
 	msgToSend := msg
@@ -139,6 +164,10 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sou
 	_ = allowedTypes
 	if task.CloneMode != 3 {
 		task.EnableMediaEdit = false
+	}
+
+	if len(msgs) > 0 && msgs[0] != nil && msgs[0].GroupedID != 0 {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("收到专辑: grouped_id=%d items=%d", msgs[0].GroupedID, len(msgs)))
 	}
 
 	// Filter nil/unsupported messages.
@@ -184,7 +213,30 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sou
 
 	switch task.CloneMode {
 	case 1:
-		return m.ForwardMessagesWithFallback(ctx, api, sourcePeer, filtered, task, peer)
+		if !task.KeepReply {
+			return m.ForwardMessagesWithFallback(ctx, api, sourcePeer, filtered, task, peer)
+		}
+
+		replyCarrier := filtered[0]
+		srcReplyID := 0
+		for _, fm := range filtered {
+			if id := extractReplyToSourceMsgID(fm); id > 0 {
+				replyCarrier = fm
+				srcReplyID = id
+				break
+			}
+		}
+		replyTo := buildKeepReplyInput(task, replyCarrier)
+		if srcReplyID > 0 && replyTo == nil {
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("保留回复: 映射缺失 reply_to=%d (grouped_id=%d)", srcReplyID, replyCarrier.GroupedID))
+		}
+
+		sentIDs, err := m.ForwardMessagesWithFallbackResult(ctx, api, sourcePeer, filtered, task, peer, replyTo)
+		if err != nil {
+			return err
+		}
+		storeMsgMappingsInOrder(task, filtered, sentIDs)
+		return nil
 	case 2:
 		return m.SendAlbumWithFallback(ctx, api, sourcePeer, filtered, task, peer)
 	case 3:

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { apiFetch } from '../api'
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR'
 type LogItem = { id: number; level: LogLevel; text: string; ts: number }
@@ -152,6 +153,7 @@ const modeClass = computed(() => (wsConnected.value ? 'live' : 'offline'))
 const logs = ref<LogItem[]>([])
 const logBoxRef = ref<HTMLElement | null>(null)
 let localLogId = -1
+let lastServerLogID = 0
 
 function pushLog(level: LogLevel, text: string, id?: number, ts?: number) {
   const entry: LogItem = {
@@ -223,6 +225,7 @@ function applyStats(d: StatsSnapshot) {
 
 function applyLog(ev: LogEvent) {
   if (!ev || typeof ev.message !== 'string') return
+  lastServerLogID = Math.max(lastServerLogID, Number(ev.id || 0) || 0)
   const level: LogLevel = ev.level === 'error' ? 'ERROR' : ev.level === 'warn' ? 'WARN' : 'INFO'
   const text = `[${level}] ${fmtTime(ev.ts)} ${ev.message.trim()}`
   pushLog(level, text, Number(ev.id || 0) || undefined, ev.ts || undefined)
@@ -243,6 +246,8 @@ function wsURL(): string {
 
 let ws: WebSocket | null = null
 let reconnectTimer: number | undefined
+let pollTimer: number | undefined
+let pollInFlight = false
 
 function cleanupWS() {
   if (reconnectTimer) {
@@ -261,6 +266,49 @@ function cleanupWS() {
     }
     ws = null
   }
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    window.clearInterval(pollTimer)
+    pollTimer = undefined
+  }
+}
+
+async function pollOnce() {
+  if (pollInFlight) return
+  pollInFlight = true
+  try {
+    try {
+      const snap = await apiFetch<StatsSnapshot>('/api/v1/dashboard/summary', { method: 'GET' })
+      applyStats(snap)
+    } catch {
+      // best-effort
+    }
+
+    try {
+      const evs = await apiFetch<LogEvent[]>(
+        `/api/v1/dashboard/events?after_id=${encodeURIComponent(String(lastServerLogID || 0))}&limit=50`,
+        { method: 'GET' },
+      )
+      for (const ev of evs || []) {
+        applyLog(ev)
+      }
+    } catch {
+      // best-effort
+    }
+  } finally {
+    pollInFlight = false
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  void pollOnce()
+  pollTimer = window.setInterval(() => {
+    if (wsConnected.value) return
+    void pollOnce()
+  }, 2000)
 }
 
 function scheduleReconnect() {
@@ -291,6 +339,7 @@ function connectWS() {
     wsConnected.value = true
     lastWSErr.value = ''
     logs.value = []
+    stopPolling()
     pushLog('INFO', `[INFO] ${fmtTime(Date.now())} WS connected`)
   }
 
@@ -318,6 +367,7 @@ function connectWS() {
     wsConnected.value = false
     if (!lastWSErr.value) lastWSErr.value = 'WebSocket closed'
     pushLog('WARN', `[WARN] ${fmtTime(Date.now())} WS disconnected`)
+    startPolling()
     scheduleReconnect()
   }
 }
@@ -331,10 +381,12 @@ defineExpose({ refresh })
 onMounted(() => {
   loadProxyConfig()
   connectWS()
+  startPolling()
 })
 
 onBeforeUnmount(() => {
   cleanupWS()
+  stopPolling()
 })
 </script>
 

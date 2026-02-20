@@ -20,6 +20,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	if taskID == 0 {
 		return
 	}
+	ctx = withTaskRun(ctx, taskID, runID)
 
 	if global.Logger != nil {
 		global.Logger.Info(
@@ -81,7 +82,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			localDBOpened = true
 			localDBPath = path
 			if task.CloneMode == 1 {
-				m.record(taskID, runID, 0, 0, 0, 0, "保留回复已启用: 注意转发模式下无法保证完整保留回复关系")
+				m.record(taskID, runID, 0, 0, 0, 0, "保留回复已启用: 转发模式下仅当引用消息已建立映射时才能保留回复关系")
 			} else if task.HistoryOrder == model.HistoryOrderNewToOld {
 				m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("保留回复已启用: localdb=%s (从新到旧模式下可能不完整)", path))
 			} else {
@@ -286,6 +287,27 @@ func (m *TaskManager) record(taskID uint, runID uint64, totalDelta int, processe
 	if logLine != "" {
 		st.appendLogLocked(logLine)
 	}
+}
+
+// recordDetail appends a per-task log line without broadcasting to global dashboard logs.
+// It is used for verbose step logs (download/upload/watermark/md5) to avoid flooding.
+func (m *TaskManager) recordDetail(taskID uint, runID uint64, logLine string) {
+	if m == nil || taskID == 0 || runID == 0 {
+		return
+	}
+	logLine = strings.TrimSpace(logLine)
+	if logLine == "" {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	st := m.states[taskID]
+	if st == nil || st.RunID != runID {
+		return
+	}
+	st.appendLogLockedNoBroadcast(logLine)
 }
 
 func (m *TaskManager) markCompleted(taskID uint, runID uint64, stopRun bool) {

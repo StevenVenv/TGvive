@@ -238,7 +238,7 @@ func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 	})
 }
 
-func forwardMessagesUpdates(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msgs []*tg.Message) (tg.UpdatesClass, error) {
+func forwardMessagesUpdates(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msgs []*tg.Message, replyTo tg.InputReplyToClass) (tg.UpdatesClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -269,24 +269,28 @@ func forwardMessagesUpdates(ctx context.Context, api *tg.Client, sourcePeer tg.I
 		return nil, nil
 	}
 
-	return api.MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+	req := &tg.MessagesForwardMessagesRequest{
 		FromPeer: sourcePeer,
 		ToPeer:   peer,
 		ID:       ids,
 		RandomID: rids,
-	})
+	}
+	if replyTo != nil {
+		req.ReplyTo = replyTo
+	}
+	return api.MessagesForwardMessages(ctx, req)
 }
 
 func (m *TaskManager) ForwardMessagesResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msgs []*tg.Message) ([]int, error) {
-	upd, err := forwardMessagesUpdates(ctx, api, sourcePeer, peer, msgs)
+	upd, err := forwardMessagesUpdates(ctx, api, sourcePeer, peer, msgs, nil)
 	if err != nil || upd == nil {
 		return nil, err
 	}
 	return extractSentMsgIDs(upd), nil
 }
 
-func (m *TaskManager) ForwardMessagesWithFallbackResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
-	upd, err := forwardMessagesUpdates(ctx, api, sourcePeer, peer, msgs)
+func (m *TaskManager) ForwardMessagesWithFallbackResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, peer tg.InputPeerClass, replyTo tg.InputReplyToClass) ([]int, error) {
+	upd, err := forwardMessagesUpdates(ctx, api, sourcePeer, peer, msgs, replyTo)
 	if err == nil {
 		return extractSentMsgIDs(upd), nil
 	}

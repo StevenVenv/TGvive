@@ -417,6 +417,14 @@ func (st *taskState) appendLogLocked(msg string) {
 	}
 }
 
+func (st *taskState) appendLogLockedNoBroadcast(msg string) {
+	ts := time.Now().Format("15:04:05")
+	st.Logs = append(st.Logs, fmt.Sprintf("[%s] %s", ts, msg))
+	if len(st.Logs) > maxLogs {
+		st.Logs = st.Logs[len(st.Logs)-maxLogs:]
+	}
+}
+
 func statusTextByCode(code int) string {
 	switch code {
 	case model.TaskStatusStopped:

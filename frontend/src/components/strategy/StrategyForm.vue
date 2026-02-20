@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
 import { apiFetchBlob, uploadWatermarkFont, uploadWatermarkPNG, type CommentRule, type WatermarkRule } from '../../api'
@@ -462,6 +462,40 @@ const watermarkImagePreviewSrc = ref('')
 const watermarkImagePreviewLoading = ref(false)
 const watermarkImagePreviewOK = ref(true)
 
+const wmPreviewStageRef = ref<HTMLElement | null>(null)
+const wmPreviewStageW = ref(0)
+const wmPreviewStageH = ref(0)
+let wmPreviewRO: ResizeObserver | undefined
+
+function refreshWmPreviewStageSize() {
+  const el = wmPreviewStageRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  wmPreviewStageW.value = Math.max(0, Math.round(rect.width || 0))
+  wmPreviewStageH.value = Math.max(0, Math.round(rect.height || 0))
+}
+
+onMounted(() => {
+  refreshWmPreviewStageSize()
+  if (typeof ResizeObserver !== 'undefined') {
+    wmPreviewRO = new ResizeObserver(() => refreshWmPreviewStageSize())
+    if (wmPreviewStageRef.value) wmPreviewRO.observe(wmPreviewStageRef.value)
+  } else if (typeof window !== 'undefined') {
+    window.addEventListener('resize', refreshWmPreviewStageSize)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (wmPreviewRO) wmPreviewRO.disconnect()
+  if (typeof window !== 'undefined') window.removeEventListener('resize', refreshWmPreviewStageSize)
+})
+
+watch(wmPreviewStageRef, (el, prev) => {
+  if (wmPreviewRO && prev) wmPreviewRO.unobserve(prev)
+  if (wmPreviewRO && el) wmPreviewRO.observe(el)
+  refreshWmPreviewStageSize()
+})
+
 watch(
   () => [watermarkEnable.value, watermarkType.value, watermarkImagePreviewURL.value] as const,
   async ([enable, typ, url], _, onCleanup) => {
@@ -613,11 +647,10 @@ function previewTextShadow(style: WatermarkTextStyleKey, strokeColor: string, sh
 
 const watermarkPreviewTextStyle = computed<Record<string, string>>(() => {
   const r = ensureWatermarkRule()
-  const baseW = 1080
+  const baseW = wmPreviewStageW.value > 0 ? wmPreviewStageW.value : 360
   let fontSize = baseW * clampFloat01(Number(r.scale_ratio || 0))
   if (!Number.isFinite(fontSize) || fontSize <= 0) fontSize = 32
-  if (fontSize < 12) fontSize = 12
-  if (fontSize > 72) fontSize = 72
+  if (fontSize < 8) fontSize = 8
 
   const ff = watermarkPreviewFontFamily.value
   const family = ff ? `'${ff}', sans-serif` : 'inherit'
@@ -626,10 +659,68 @@ const watermarkPreviewTextStyle = computed<Record<string, string>>(() => {
     fontFamily: family,
     fontSize: `${Math.round(fontSize)}px`,
     color: watermarkTextColor.value,
-    opacity: String(clampFloat01(Number(r.opacity || 0.35)) || 0.35),
     textShadow: previewTextShadow(watermarkTextStyle.value, watermarkStrokeColor.value, watermarkShadowColor.value),
     whiteSpace: 'pre-line',
     lineHeight: '1.2',
+  }
+})
+
+const watermarkPreviewOverlayStyle = computed<Record<string, string>>(() => {
+  const r = ensureWatermarkRule()
+  const stageW = wmPreviewStageW.value > 0 ? wmPreviewStageW.value : 360
+  const stageH = wmPreviewStageH.value > 0 ? wmPreviewStageH.value : 200
+  const marginPx = Math.round(stageW * clampFloat01(Number(r.margin || 0)))
+
+  const opacity = clampFloat01(Number(r.opacity || 0.35)) || 0.35
+
+  const pos = String(r.position || '')
+    .trim()
+    .toLowerCase()
+  const st: Record<string, string> = {
+    position: 'absolute',
+    pointerEvents: 'none',
+    opacity: String(opacity),
+  }
+
+  switch (pos) {
+    case 'center':
+      st.left = '50%'
+      st.top = '50%'
+      st.transform = 'translate(-50%, -50%)'
+      return st
+    case 'top_right':
+      st.right = `${marginPx}px`
+      st.top = `${marginPx}px`
+      return st
+    case 'top_left':
+      st.left = `${marginPx}px`
+      st.top = `${marginPx}px`
+      return st
+    case 'bottom_left':
+      st.left = `${marginPx}px`
+      st.bottom = `${marginPx}px`
+      return st
+    case 'custom':
+      st.left = `${Math.round(stageW * clampFloat01(Number(r.custom_x || 0)))}px`
+      st.top = `${Math.round(stageH * clampFloat01(Number(r.custom_y || 0)))}px`
+      return st
+    case 'bottom_right':
+    default:
+      st.right = `${marginPx}px`
+      st.bottom = `${marginPx}px`
+      return st
+  }
+})
+
+const watermarkPreviewImageStyle = computed<Record<string, string>>(() => {
+  const r = ensureWatermarkRule()
+  const stageW = wmPreviewStageW.value > 0 ? wmPreviewStageW.value : 360
+  const scale = clampFloat01(Number(r.scale_ratio || 0))
+  const widthPx = clampInt(1, Math.round(stageW * scale), stageW)
+  return {
+    width: `${widthPx}px`,
+    height: 'auto',
+    display: 'block',
   }
 })
 
@@ -1599,22 +1690,28 @@ defineExpose<StrategyFormExpose>({
 	                  <i class="ri-eye-line" />
 	                  <span>水印预览</span>
 	                </div>
-	                <div class="wm-preview-stage">
+	                <div class="wm-preview-stage" ref="wmPreviewStageRef">
 	                  <template v-if="watermarkType === 'text'">
-	                    <div class="wm-preview-text" :style="watermarkPreviewTextStyle">
-	                      {{ watermarkText || '@Preview' }}
+	                    <div class="wm-preview-overlay" :style="watermarkPreviewOverlayStyle">
+	                      <div class="wm-preview-text" :style="watermarkPreviewTextStyle">
+	                        {{ watermarkText || '@Preview' }}
+	                      </div>
 	                    </div>
-		                  </template>
-		                  <template v-else>
-		                    <img
-		                      v-if="watermarkImagePreviewSrc && watermarkImagePreviewOK"
-		                      :src="watermarkImagePreviewSrc"
-		                      class="wm-preview-img"
-		                      @error="watermarkImagePreviewOK = false"
-		                    />
-		                    <div v-else class="hint compact">{{ watermarkImagePreviewLoading ? '水印加载中…' : '无可预览图片（请先上传 PNG）' }}</div>
-		                  </template>
-		                </div>
+	                  </template>
+	                  <template v-else>
+	                    <div v-if="watermarkImagePreviewSrc && watermarkImagePreviewOK" class="wm-preview-overlay" :style="watermarkPreviewOverlayStyle">
+	                      <img
+	                        :src="watermarkImagePreviewSrc"
+	                        class="wm-preview-img"
+	                        :style="watermarkPreviewImageStyle"
+	                        @error="watermarkImagePreviewOK = false"
+	                      />
+	                    </div>
+	                    <div v-else class="wm-preview-empty hint compact">
+	                      {{ watermarkImagePreviewLoading ? '水印加载中…' : '无可预览图片（请先上传 PNG）' }}
+	                    </div>
+	                  </template>
+	                </div>
 		              </div>
 		            </el-collapse-item>
 	          </el-collapse>
@@ -1741,27 +1838,38 @@ defineExpose<StrategyFormExpose>({
 }
 
 .wm-preview-stage {
-  padding: 12px;
-  min-height: 84px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  aspect-ratio: 16 / 9;
+  min-height: 180px;
   background:
     linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
     linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%);
   background-position: 0 0, 10px 10px;
   background-size: 20px 20px;
+  overflow: hidden;
+}
+
+.wm-preview-empty {
+  position: absolute;
+  inset: 0;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .wm-preview-text {
   max-width: 100%;
-  text-align: center;
+  text-align: left;
   word-break: break-word;
 }
 
 .wm-preview-img {
-  max-width: 220px;
-  max-height: 120px;
+  max-width: 100%;
   object-fit: contain;
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.2);

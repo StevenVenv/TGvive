@@ -85,6 +85,7 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 
 	if size > 0 {
 		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%.1fMB)", filepath.Base(localPath), float64(size)/1024.0/1024.0))
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%.1fMB)", filepath.Base(localPath), float64(size)/1024.0/1024.0))
 	}
 	return inputFile, nil
 }
