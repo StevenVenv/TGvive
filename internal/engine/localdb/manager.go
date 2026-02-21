@@ -135,47 +135,86 @@ func ensureSchema(db *gorm.DB) error {
 		return errors.New("db is nil")
 	}
 
-	// Always migrate mapping table (non-breaking).
-	if err := db.AutoMigrate(&LocalMapping{}); err != nil {
-		return err
-	}
-	if err := db.AutoMigrate(&LocalMsgMapping{}); err != nil {
-		return err
+	// Drop obsolete tables from old schema versions (task-scoped cache, safe to rebuild).
+	{
+		// v2 legacy names.
+		if db.Migrator().HasTable("local_mapping") {
+			if err := db.Migrator().DropTable("local_mapping"); err != nil {
+				return err
+			}
+		}
+		if db.Migrator().HasTable("local_comment") {
+			if err := db.Migrator().DropTable("local_comment"); err != nil {
+				return err
+			}
+		}
 	}
 
-	// local_comment had a legacy schema; rebuild it once when detected.
+	// Validate root_mapping schema (drop on unexpected columns to keep codepath simple).
 	{
 		var cols []sqliteColumn
-		_ = db.Raw("PRAGMA table_info(local_comment)").Scan(&cols).Error
+		_ = db.Raw("PRAGMA table_info(root_mapping)").Scan(&cols).Error
 
-		hasLegacy := false
-		hasSourcePostID := false
-		hasCommentMsgID := false
+		hasID := false
+		hasSourceRootID := false
+		hasTargetRootID := false
 		for _, c := range cols {
 			switch strings.ToLower(strings.TrimSpace(c.Name)) {
-			case "msg_id", "reply_to_root_id", "status", "attempts", "next_attempt_at":
-				hasLegacy = true
-			case "source_post_id":
-				hasSourcePostID = true
-			case "comment_msg_id":
-				hasCommentMsgID = true
+			case "id":
+				hasID = true
+			case "source_root_id":
+				hasSourceRootID = true
+			case "target_root_id":
+				hasTargetRootID = true
 			}
 		}
-		// If legacy columns exist, drop and recreate the table to avoid NOT NULL constraint issues.
-		// This is task-scoped cache, safe to rebuild.
-		if hasLegacy {
-			if err := db.Migrator().DropTable("local_comment"); err != nil {
-				return err
-			}
-		} else if len(cols) > 0 && (!hasSourcePostID || !hasCommentMsgID) {
-			// Unexpected schema: rebuild to keep the codepath simple and reliable.
-			if err := db.Migrator().DropTable("local_comment"); err != nil {
+
+		if len(cols) > 0 && (hasID || !hasSourceRootID || !hasTargetRootID) {
+			if err := db.Migrator().DropTable("root_mapping"); err != nil {
 				return err
 			}
 		}
 	}
 
-	return db.AutoMigrate(&LocalComment{})
+	// Validate comment_queue schema.
+	{
+		var cols []sqliteColumn
+		_ = db.Raw("PRAGMA table_info(comment_queue)").Scan(&cols).Error
+
+		hasID := false
+		hasMsgID := false
+		hasReplyToRootID := false
+		hasGroupedID := false
+		hasStatus := false
+		hasTargetMsgID := false
+		for _, c := range cols {
+			switch strings.ToLower(strings.TrimSpace(c.Name)) {
+			case "id":
+				hasID = true
+			case "msg_id":
+				hasMsgID = true
+			case "reply_to_root_id":
+				hasReplyToRootID = true
+			case "grouped_id":
+				hasGroupedID = true
+			case "status":
+				hasStatus = true
+			case "target_msg_id":
+				hasTargetMsgID = true
+			case "payload":
+				// ok
+			case "created_at", "updated_at":
+				// ok
+			}
+		}
+		if len(cols) > 0 && (hasID || !hasMsgID || !hasReplyToRootID || !hasGroupedID || !hasStatus || !hasTargetMsgID) {
+			if err := db.Migrator().DropTable("comment_queue"); err != nil {
+				return err
+			}
+		}
+	}
+
+	return AutoMigrateTaskDB(db)
 }
 
 func (m *Manager) Close(taskID uint) error {

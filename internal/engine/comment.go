@@ -80,9 +80,21 @@ type commentProducerTask struct {
 	allowedTypesKey string
 	blockKeywords   []string // lower-case
 
-	queue    chan *tg.Message
+	queue    chan commentEvent
 	done     chan struct{}
 	stopOnce sync.Once
+}
+
+type commentEventKind uint8
+
+const (
+	commentEventNew commentEventKind = iota
+	commentEventEdit
+)
+
+type commentEvent struct {
+	kind commentEventKind
+	msg  *tg.Message
 }
 
 func newCommentProducerTask(cfg commentProducerTaskConfig) *commentProducerTask {
@@ -94,7 +106,7 @@ func newCommentProducerTask(cfg commentProducerTaskConfig) *commentProducerTask 
 
 		comment: cfg.Comment,
 
-		queue: make(chan *tg.Message, 512),
+		queue: make(chan commentEvent, 512),
 		done:  make(chan struct{}),
 	}
 
@@ -111,7 +123,7 @@ func (t *commentProducerTask) stop() {
 	})
 }
 
-func (t *commentProducerTask) enqueue(msg *tg.Message) bool {
+func (t *commentProducerTask) enqueue(kind commentEventKind, msg *tg.Message) bool {
 	if t == nil || msg == nil {
 		return false
 	}
@@ -124,7 +136,7 @@ func (t *commentProducerTask) enqueue(msg *tg.Message) bool {
 	default:
 	}
 	select {
-	case t.queue <- msg:
+	case t.queue <- commentEvent{kind: kind, msg: msg}:
 		return true
 	default:
 		// drop on overload
@@ -208,6 +220,25 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 		return
 	}
 
+	loadTargetRootID := func(sourceRootID int) int {
+		if sourceRootID <= 0 {
+			return 0
+		}
+		var mapping localdb.RootMapping
+		if err := t.comment.LocalDB.Where("source_root_id = ?", sourceRootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
+			return 0
+		}
+		return mapping.TargetRootID
+	}
+
+	flushRoot := func(sourceRootID int) {
+		targetRootID := loadTargetRootID(sourceRootID)
+		if targetRootID <= 0 {
+			return
+		}
+		m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, sourceRootID, targetRootID)
+	}
+
 	var (
 		pendingGroupedID int64
 		pendingRootID    int
@@ -261,11 +292,7 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 			stopFlushTimer()
 		}()
 
-		var mapping localdb.LocalMapping
-		if err := t.comment.LocalDB.Where("source_root_id = ?", pendingRootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
-			return
-		}
-		m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, pendingRootID, mapping.TargetRootID)
+		flushRoot(pendingRootID)
 	}
 	defer stopFlushTimer()
 
@@ -277,10 +304,11 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 			return
 		case <-flushC:
 			flushPendingGrouped()
-		case msg, ok := <-t.queue:
+		case ev, ok := <-t.queue:
 			if !ok {
 				return
 			}
+			msg := ev.msg
 			if msg == nil || msg.ID <= 0 {
 				continue
 			}
@@ -304,78 +332,112 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 				continue
 			}
 
-			rootID := extractCommentRootMsgID(msg)
-			if rootID <= 0 {
-				continue
-			}
-
-			// If a previous grouped (album) comment is pending and the new message is not part of it,
-			// flush the previous group first to preserve ordering.
-			if pendingGroupedID != 0 && pendingRootID > 0 {
-				if msg.GroupedID == 0 || msg.GroupedID != pendingGroupedID || rootID != pendingRootID {
-					flushPendingGrouped()
-				}
-			}
-
-			if !shouldCloneCommentByIdentity(msg, t.comment.SourceChannelID, filterMode, trusted, allowAnonymous) {
-				continue
-			}
-
-			// Type filter.
-			if allowedTypes != nil {
-				ct := m.DetectContentType(msg)
-				if _, ok := allowedTypes[ct]; !ok {
+			switch ev.kind {
+			case commentEventNew:
+				rootID := extractCommentRootMsgID(msg)
+				if rootID <= 0 {
 					continue
 				}
-			}
 
-			// Keyword blacklist.
-			if hitBlockKeywords(msg.Message, blockKeywords) {
+				// If a previous grouped (album) comment is pending and the new message is not part of it,
+				// flush the previous group first to preserve ordering.
+				if pendingGroupedID != 0 && pendingRootID > 0 {
+					if msg.GroupedID == 0 || msg.GroupedID != pendingGroupedID || rootID != pendingRootID {
+						flushPendingGrouped()
+					}
+				}
+
+				if !shouldCloneCommentByIdentity(msg, t.comment.SourceChannelID, filterMode, trusted, allowAnonymous) {
+					continue
+				}
+
+				// Type filter.
+				if allowedTypes != nil {
+					ct := m.DetectContentType(msg)
+					if _, ok := allowedTypes[ct]; !ok {
+						continue
+					}
+				}
+
+				// Keyword blacklist.
+				if hitBlockKeywords(msg.Message, blockKeywords) {
+					continue
+				}
+
+				payload, err := localdb.WashMessage(msg, m.DetectContentType)
+				if err != nil || payload == nil {
+					continue
+				}
+				b, err := json.Marshal(payload)
+				if err != nil {
+					continue
+				}
+
+				rec := localdb.CommentQueue{
+					MsgID:         msg.ID,
+					ReplyToRootID: rootID,
+					GroupedID:     msg.GroupedID,
+					Status:        localdb.CommentStatusPending,
+					TargetMsgID:   0,
+					Payload:       b,
+				}
+				if err := t.comment.LocalDB.
+					Clauses(clause.OnConflict{
+						Columns:   []clause.Column{{Name: "msg_id"}},
+						DoNothing: true,
+					}).
+					Create(&rec).Error; err != nil && global.Logger != nil {
+					global.Logger.Warn("store comment queue failed", zap.Uint("task_id", t.Task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
+					continue
+				}
+
+				// For grouped media (album), delay flush slightly to collect the whole group.
+				if msg.GroupedID != 0 {
+					pendingGroupedID = msg.GroupedID
+					pendingRootID = rootID
+					scheduleGroupedFlush()
+					continue
+				}
+
+				flushRoot(rootID)
+			case commentEventEdit:
+				// Edit only matters for comments (replies in linked chat).
+				if extractCommentRootMsgID(msg) <= 0 {
+					continue
+				}
+
+				payload, err := localdb.WashMessage(msg, m.DetectContentType)
+				if err != nil || payload == nil {
+					continue
+				}
+				b, err := json.Marshal(payload)
+				if err != nil {
+					continue
+				}
+
+				// Branch A: pending (update payload only, no network send).
+				res := t.comment.LocalDB.Model(&localdb.CommentQueue{}).
+					Where("msg_id = ? AND status = ?", msg.ID, localdb.CommentStatusPending).
+					Update("payload", b)
+				if res.Error == nil && res.RowsAffected == 1 {
+					continue
+				}
+
+				// Branch B: success (async edit to target linked group).
+				var rec localdb.CommentQueue
+				if err := t.comment.LocalDB.Select("status", "target_msg_id").
+					First(&rec, "msg_id = ?", msg.ID).Error; err != nil {
+					continue
+				}
+				_ = t.comment.LocalDB.Model(&localdb.CommentQueue{}).
+					Where("msg_id = ?", msg.ID).
+					Update("payload", b).Error
+				if rec.Status == localdb.CommentStatusSuccess && rec.TargetMsgID > 0 {
+					m.submitCommentEdit(t.Ctx, api, t.Task.ID, t.comment, msg.ID, rec.TargetMsgID)
+				}
+			default:
 				continue
 			}
-
-			payload, err := localdb.WashMessage(msg, m.DetectContentType)
-			if err != nil || payload == nil {
-				continue
-			}
-			b, err := json.Marshal(payload)
-			if err != nil {
-				continue
-			}
-
-			rec := localdb.LocalComment{
-				SourcePostID: rootID,
-				CommentMsgID: msg.ID,
-				GroupedID:    msg.GroupedID,
-				IsForwarded:  false,
-				LightPayload: b,
-			}
-			if err := t.comment.LocalDB.
-				Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "comment_msg_id"}},
-					DoNothing: true,
-				}).
-				Create(&rec).Error; err != nil && global.Logger != nil {
-				global.Logger.Warn("store local comment failed", zap.Uint("task_id", t.Task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
-				continue
-			}
-
-			// Try mirror immediately (strict sequential per-task), best-effort.
-			var mapping localdb.LocalMapping
-			if err := t.comment.LocalDB.Where("source_root_id = ?", rootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
-				// Mapping may arrive slightly later (trunk not mirrored yet); keep cached row for retry.
-				continue
-			}
-
-			// For grouped media (album), delay flush slightly to collect the whole group.
-			if msg.GroupedID != 0 {
-				pendingGroupedID = msg.GroupedID
-				pendingRootID = rootID
-				scheduleGroupedFlush()
-				continue
-			}
-
-			m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, rootID, mapping.TargetRootID)
 		}
 	}
 }
@@ -737,7 +799,15 @@ func (m *TaskManager) registerCommentProducerTask(tgRT *telegramRuntime, cfg com
 	return nil
 }
 
-func (m *TaskManager) dispatchCommentMessage(tgRT *telegramRuntime, channelID int64, msg *tg.Message) {
+func (m *TaskManager) dispatchCommentNew(tgRT *telegramRuntime, channelID int64, msg *tg.Message) {
+	m.dispatchCommentEvent(tgRT, channelID, commentEventNew, msg)
+}
+
+func (m *TaskManager) dispatchCommentEdit(tgRT *telegramRuntime, channelID int64, msg *tg.Message) {
+	m.dispatchCommentEvent(tgRT, channelID, commentEventEdit, msg)
+}
+
+func (m *TaskManager) dispatchCommentEvent(tgRT *telegramRuntime, channelID int64, kind commentEventKind, msg *tg.Message) {
 	if m == nil || tgRT == nil || channelID == 0 || msg == nil {
 		return
 	}
@@ -760,25 +830,30 @@ func (m *TaskManager) dispatchCommentMessage(tgRT *telegramRuntime, channelID in
 		if rt == nil || rt.Ctx == nil || rt.Ctx.Err() != nil {
 			continue
 		}
-		_ = rt.enqueue(msg)
+		_ = rt.enqueue(kind, msg)
 	}
 }
 
-func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msg *tg.Message, replyToMsgID int, task model.Task) error {
+// dispatchCommentMessage is kept for backward compatibility (treated as "new").
+func (m *TaskManager) dispatchCommentMessage(tgRT *telegramRuntime, channelID int64, msg *tg.Message) {
+	m.dispatchCommentNew(tgRT, channelID, msg)
+}
+
+func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msg *tg.Message, replyToMsgID int, task model.Task) ([]int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if api == nil {
-		return errors.New("tg api is nil")
+		return nil, errors.New("tg api is nil")
 	}
 	if peer == nil {
-		return errors.New("tg peer is nil")
+		return nil, errors.New("tg peer is nil")
 	}
 	if msg == nil {
-		return nil
+		return nil, nil
 	}
 	if replyToMsgID <= 0 {
-		return errors.New("reply_to_msg_id is required")
+		return nil, errors.New("reply_to_msg_id is required")
 	}
 
 	replyTo := &tg.InputReplyToMessage{ReplyToMsgID: replyToMsgID}
@@ -786,11 +861,11 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 	// Text-only.
 	if msg.Media == nil {
 		if strings.TrimSpace(msg.Message) == "" {
-			return nil
+			return nil, nil
 		}
 		rid, err := randomID()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		req := &tg.MessagesSendMessageRequest{
 			Peer:     peer,
@@ -801,8 +876,8 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 		if len(msg.Entities) > 0 {
 			req.Entities = msg.Entities
 		}
-		_, err = api.MessagesSendMessage(ctx, req)
-		return err
+		upd, err := api.MessagesSendMessage(ctx, req)
+		return extractSentMsgIDs(upd), err
 	}
 
 	// Try send-by-reference (CloneMode=2 behavior).
@@ -811,11 +886,11 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 		if errors.Is(err, ErrUnsupportedMedia) {
 			// Fallback to caption-only.
 			if strings.TrimSpace(msg.Message) == "" {
-				return nil
+				return nil, nil
 			}
 			rid, rerr := randomID()
 			if rerr != nil {
-				return rerr
+				return nil, rerr
 			}
 			req := &tg.MessagesSendMessageRequest{
 				Peer:     peer,
@@ -826,10 +901,10 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 			if len(msg.Entities) > 0 {
 				req.Entities = msg.Entities
 			}
-			_, err = api.MessagesSendMessage(ctx, req)
-			return err
+			upd, err := api.MessagesSendMessage(ctx, req)
+			return extractSentMsgIDs(upd), err
 		}
-		return err
+		return nil, err
 	}
 
 	caption := msg.Message
@@ -841,7 +916,7 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 
 	rid, err := randomID()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
@@ -853,16 +928,16 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 	if len(entities) > 0 {
 		req.Entities = entities
 	}
-	if _, err := api.MessagesSendMedia(ctx, req); err == nil {
-		return nil
+	if upd, err := api.MessagesSendMedia(ctx, req); err == nil {
+		return extractSentMsgIDs(upd), nil
 	} else if !isForwardOrCopyRestricted(err) {
-		return err
+		return nil, err
 	}
 
 	// Upload fallback (CloneMode=3 behavior, without processors/MD5 changes).
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if cleanup != nil {
 		defer func() { _ = cleanup() }()
@@ -870,20 +945,20 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 
 	inputFile, err := m.UploadFile(ctx, api, localPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if uploaded == nil {
-		return ErrUnsupportedMedia
+		return nil, ErrUnsupportedMedia
 	}
 
 	rid2, err := randomID()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	caption2 := msg.Message
 	entities2 := msg.Entities
@@ -901,6 +976,6 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 	if len(entities2) > 0 {
 		req2.Entities = entities2
 	}
-	_, err = api.MessagesSendMedia(ctx, req2)
-	return err
+	upd, err := api.MessagesSendMedia(ctx, req2)
+	return extractSentMsgIDs(upd), err
 }

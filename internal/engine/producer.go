@@ -89,7 +89,7 @@ func (m *TaskManager) StoreMappingForTrunk(
 		return sourceRootID, 0, nil
 	}
 
-	rec := localdb.LocalMapping{
+	rec := localdb.RootMapping{
 		SourceRootID: sourceRootID,
 		TargetRootID: targetRootID,
 	}
@@ -104,7 +104,7 @@ func (m *TaskManager) StoreMappingForTrunk(
 		}).
 		Create(&rec).Error; err != nil {
 		if global.Logger != nil {
-			global.Logger.Warn("store local mapping failed", zap.Uint("task_id", task.ID), zap.Error(err))
+			global.Logger.Warn("store root mapping failed", zap.Uint("task_id", task.ID), zap.Error(err))
 		}
 		return sourceRootID, targetRootID, err
 	}
@@ -211,17 +211,18 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 			continue
 		}
 
-			rec := localdb.LocalComment{
-				SourcePostID: srcRoot,
-				CommentMsgID: msg.ID,
-				GroupedID:    msg.GroupedID,
-				IsForwarded:  false,
-				LightPayload: b,
-			}
+		rec := localdb.CommentQueue{
+			MsgID:         msg.ID,
+			ReplyToRootID: srcRoot,
+			GroupedID:     msg.GroupedID,
+			Status:        localdb.CommentStatusPending,
+			TargetMsgID:   0,
+			Payload:       b,
+		}
 
 		if err := cfg.LocalDB.
 			Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "comment_msg_id"}},
+				Columns:   []clause.Column{{Name: "msg_id"}},
 				DoNothing: true,
 			}).
 			Create(&rec).Error; err != nil && global.Logger != nil {
@@ -290,16 +291,17 @@ func (m *TaskManager) StoreRealtimeComment(ctx context.Context, task model.Task,
 		return
 	}
 
-	rec := localdb.LocalComment{
-		SourcePostID: rootID,
-		CommentMsgID: msg.ID,
-		GroupedID:    msg.GroupedID,
-		IsForwarded:  false,
-		LightPayload: b,
+	rec := localdb.CommentQueue{
+		MsgID:         msg.ID,
+		ReplyToRootID: rootID,
+		GroupedID:     msg.GroupedID,
+		Status:        localdb.CommentStatusPending,
+		TargetMsgID:   0,
+		Payload:       b,
 	}
 	if err := cfg.LocalDB.
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "comment_msg_id"}},
+			Columns:   []clause.Column{{Name: "msg_id"}},
 			DoNothing: true,
 		}).
 		Create(&rec).Error; err != nil && global.Logger != nil {

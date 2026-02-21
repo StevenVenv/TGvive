@@ -11,18 +11,18 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-func (m *TaskManager) sendLightPayloadAsComment(ctx context.Context, api *tg.Client, cfg *commentPipelineConfig, payload localdb.LightPayload, replyToRootID int) error {
+func (m *TaskManager) sendLightPayloadAsComment(ctx context.Context, api *tg.Client, cfg *commentPipelineConfig, payload localdb.LightPayload, replyToRootID int) ([]int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if api == nil {
-		return errors.New("tg api is nil")
+		return nil, errors.New("tg api is nil")
 	}
 	if cfg == nil || cfg.TargetLinkedPeer == nil {
-		return errors.New("target peer is nil")
+		return nil, errors.New("target peer is nil")
 	}
 	if replyToRootID <= 0 {
-		return errors.New("reply_to_root_id is required")
+		return nil, errors.New("reply_to_root_id is required")
 	}
 
 	replyTo := &tg.InputReplyToMessage{ReplyToMsgID: replyToRootID}
@@ -33,56 +33,56 @@ func (m *TaskManager) sendLightPayloadAsComment(ctx context.Context, api *tg.Cli
 		if err == nil && im != nil {
 			rid, err := randomID()
 			if err != nil {
-				return err
+				return nil, err
 			}
 			caption := payload.Text
 			if out, truncated := sanitizeMediaCaptionText(caption); truncated {
 				caption = out
 			}
-			_, err = api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			upd, err := api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 				Peer:     cfg.TargetLinkedPeer,
 				ReplyTo:  replyTo,
 				Media:    im,
 				Message:  caption,
 				RandomID: rid,
 			})
-			return err
+			return extractSentMsgIDs(upd), err
 		}
 	}
 
 	// Text-only.
 	if strings.TrimSpace(payload.Text) == "" {
-		return nil
+		return nil, nil
 	}
 	rid, err := randomID()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+	upd, err := api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
 		Peer:     cfg.TargetLinkedPeer,
 		ReplyTo:  replyTo,
 		Message:  payload.Text,
 		RandomID: rid,
 	})
-	return err
+	return extractSentMsgIDs(upd), err
 }
 
-func (m *TaskManager) sendLightPayloadAlbumAsComment(ctx context.Context, api *tg.Client, cfg *commentPipelineConfig, payloads []localdb.LightPayload, replyToRootID int) error {
+func (m *TaskManager) sendLightPayloadAlbumAsComment(ctx context.Context, api *tg.Client, cfg *commentPipelineConfig, payloads []localdb.LightPayload, replyToRootID int) ([]int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if api == nil {
-		return errors.New("tg api is nil")
+		return nil, errors.New("tg api is nil")
 	}
 	if cfg == nil || cfg.TargetLinkedPeer == nil {
-		return errors.New("target peer is nil")
+		return nil, errors.New("target peer is nil")
 	}
 	if replyToRootID <= 0 {
-		return errors.New("reply_to_root_id is required")
+		return nil, errors.New("reply_to_root_id is required")
 	}
 
 	if len(payloads) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(payloads) == 1 {
 		return m.sendLightPayloadAsComment(ctx, api, cfg, payloads[0], replyToRootID)
@@ -93,18 +93,18 @@ func (m *TaskManager) sendLightPayloadAlbumAsComment(ctx context.Context, api *t
 	multi := make([]tg.InputSingleMedia, 0, len(payloads))
 	for i, p := range payloads {
 		if len(p.MediaBytes) == 0 {
-			return errors.New("album item missing media_bytes")
+			return nil, errors.New("album item missing media_bytes")
 		}
 		im, err := tg.DecodeInputMedia(&bin.Buffer{Buf: p.MediaBytes})
 		if err != nil || im == nil {
 			if err == nil {
 				err = errors.New("decode input media returned nil")
 			}
-			return err
+			return nil, err
 		}
 		rid, err := randomID()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		item := tg.InputSingleMedia{
@@ -122,10 +122,10 @@ func (m *TaskManager) sendLightPayloadAlbumAsComment(ctx context.Context, api *t
 		multi = append(multi, item)
 	}
 
-	_, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+	upd, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
 		Peer:       cfg.TargetLinkedPeer,
 		ReplyTo:    replyTo,
 		MultiMedia: multi,
 	})
-	return err
+	return extractSentMsgIDs(upd), err
 }

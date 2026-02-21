@@ -1083,7 +1083,7 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 		}
 		if chID, ok := peerToChannelID(msg.PeerID); ok {
 			m.dispatchChannelMessage(rt, chID, msg)
-			m.dispatchCommentMessage(rt, chID, msg)
+			m.dispatchCommentNew(rt, chID, msg)
 		}
 		return nil
 	})
@@ -1094,7 +1094,27 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 		}
 		if chID, ok := peerToChannelID(msg.PeerID); ok {
 			m.dispatchChannelMessage(rt, chID, msg)
-			m.dispatchCommentMessage(rt, chID, msg)
+			m.dispatchCommentNew(rt, chID, msg)
+		}
+		return nil
+	})
+	d.OnEditMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditMessage) error {
+		msg, ok := update.Message.(*tg.Message)
+		if !ok || msg == nil {
+			return nil
+		}
+		if chID, ok := peerToChannelID(msg.PeerID); ok {
+			m.dispatchCommentEdit(rt, chID, msg)
+		}
+		return nil
+	})
+	d.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditChannelMessage) error {
+		msg, ok := update.Message.(*tg.Message)
+		if !ok || msg == nil {
+			return nil
+		}
+		if chID, ok := peerToChannelID(msg.PeerID); ok {
+			m.dispatchCommentEdit(rt, chID, msg)
 		}
 		return nil
 	})
