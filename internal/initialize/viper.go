@@ -3,6 +3,7 @@ package initialize
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"my-go-server/internal/global"
@@ -78,6 +79,21 @@ func InitConfig() error {
 	v.SetEnvPrefix("TGVIVE")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+
+	// Prefer a local, ignored config file for secrets:
+	// - configs/config.local.yaml (recommended)
+	// - config.local.yaml
+	//
+	// Or override explicitly via env: TGVIVE_CONFIG_FILE=/path/to/config.yaml
+	if p := strings.TrimSpace(os.Getenv("TGVIVE_CONFIG_FILE")); p != "" {
+		v.SetConfigFile(p)
+	} else {
+		if _, err := os.Stat("./configs/config.local.yaml"); err == nil {
+			v.SetConfigFile("./configs/config.local.yaml")
+		} else if _, err := os.Stat("./config.local.yaml"); err == nil {
+			v.SetConfigFile("./config.local.yaml")
+		}
+	}
 
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError

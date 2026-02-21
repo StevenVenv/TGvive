@@ -2,6 +2,8 @@ logs/
 sessions/
 tmp/
 data/
+configs/config.local.yaml
+config.local.yaml
 .DS_Store
 test/
 .trunk/
