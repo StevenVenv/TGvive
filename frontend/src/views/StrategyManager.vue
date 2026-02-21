@@ -738,7 +738,7 @@ onMounted(() => {
 
       <el-tab-pane label="新建行为策略" name="create">
         <div class="create-wrap">
-          <el-card class="bt-card pane-card pane-card-auto" shadow="never">
+          <el-card class="bt-card pane-card" shadow="never">
             <template #header>
               <div class="card-header">
                 <div class="card-title">
@@ -750,7 +750,7 @@ onMounted(() => {
             </template>
 
             <div class="pane pane-create">
-              <StrategyForm ref="createFormRef" v-model="createModel" :loading="createSaving">
+              <StrategyForm ref="createFormRef" v-model="createModel" :loading="createSaving" full-width>
                 <template #actions>
                   <el-space>
                     <el-button @click="resetCreate">
@@ -932,18 +932,10 @@ onMounted(() => {
 
 .create-wrap {
   width: 100%;
-  max-width: 1200px;
-  margin: 0 auto;
 }
 
 .pane-create {
-  flex: 0 0 auto;
-  min-height: auto;
-  overflow: visible;
-}
-
-.pane-card-auto :deep(.el-card__body) {
-  overflow: visible;
+  overflow: hidden;
 }
 
 .table-body {

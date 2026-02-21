@@ -58,12 +58,14 @@ const props = withDefaults(
     submitText?: string
     cancelText?: string
     showActions?: boolean
+    fullWidth?: boolean
   }>(),
   {
     loading: false,
     submitText: '保存',
     cancelText: '取消',
     showActions: true,
+    fullWidth: false,
   },
 )
 
@@ -75,6 +77,7 @@ const emit = defineEmits<{
 
 const formRef = ref<FormInstance>()
 const form = computed(() => props.modelValue)
+const fullWidth = computed(() => Boolean(props.fullWidth))
 
 const isUploadMode = computed(() => Number(form.value.clone_mode || 3) === 3)
 const mediaEditDisabled = computed(() => !isUploadMode.value)
@@ -1222,7 +1225,7 @@ defineExpose<StrategyFormExpose>({
 </script>
 
 <template>
-  <div class="strategy-form">
+  <div class="strategy-form" :class="{ 'layout-full': fullWidth }">
     <div class="form-scroll" v-loading="loading">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-card class="panel-card" shadow="never">
@@ -1908,6 +1911,14 @@ defineExpose<StrategyFormExpose>({
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+}
+
+.strategy-form.layout-full {
+  .form,
+  .actions {
+    max-width: none;
+    margin: 0;
+  }
 }
 
 .form-scroll {
