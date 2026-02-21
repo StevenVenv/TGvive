@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 )
@@ -251,9 +250,14 @@ func (m *TaskManager) StartCodeAuth(ctx context.Context, sessionID, phone string
 	}
 
 	accountKey := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(finalSessionPath), ".json"), "session_")
-	client := telegram.NewClient(apiID, apiHash, telegram.Options{
-		SessionStorage: &FileSessionStorage{Path: sessionPath},
-	})
+	client, err := newTelegramClient(apiID, apiHash, sessionPath, nil)
+	if err != nil {
+		if usePending {
+			cleanupPendingSession(pendingPath)
+		}
+		publishCodeState(sessionID, CodeAuthState{Phone: phone, Status: CodeStatusError, Error: err.Error()})
+		return err
+	}
 
 	a := apiCodeAuth{
 		sessionID: sessionID,

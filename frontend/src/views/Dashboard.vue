@@ -42,7 +42,6 @@ type WSMessage =
   | { type: 'stats'; data: StatsSnapshot }
   | { type: 'log'; data: LogEvent }
 
-const storageProxyKey = 'tgvive_proxy_config'
 const tokenStorageKey = 'tgvive_jwt_token'
 
 function clamp(n: number, min: number, max: number): number {
@@ -170,15 +169,14 @@ function pushLog(level: LogLevel, text: string, id?: number, ts?: number) {
   })
 }
 
-function loadProxyConfig() {
+let lastProxyFetchAt = 0
+async function loadProxyConfig(force = false) {
+  const now = Date.now()
+  if (!force && now - lastProxyFetchAt < 5000) return
+  lastProxyFetchAt = now
+
   try {
-    const raw = (localStorage.getItem(storageProxyKey) || '').trim()
-    if (!raw) {
-      service.proxyEnabled = false
-      service.proxyEndpoint = ''
-      return
-    }
-    const cfg = JSON.parse(raw || '{}') as any
+    const cfg = (await apiFetch<any>('/api/v1/settings/proxy', { method: 'GET' })) || {}
     const enabled = !!cfg?.enabled
     const host = String(cfg?.host || '').trim()
     const port = Number(cfg?.port || 0)
@@ -190,8 +188,7 @@ function loadProxyConfig() {
     service.proxyEnabled = true
     service.proxyEndpoint = `${host}:${port}`
   } catch {
-    service.proxyEnabled = false
-    service.proxyEndpoint = ''
+    // ignore (e.g. not logged in yet)
   }
 }
 
@@ -220,7 +217,7 @@ function applyStats(d: StatsSnapshot) {
   service.ffmpegQueue = Math.max(0, Number(d.ffmpeg_active || 0))
   service.ffmpegThreads = Math.max(0, Number(d.ffmpeg_threads || 0))
 
-  loadProxyConfig()
+  void loadProxyConfig()
 }
 
 function applyLog(ev: LogEvent) {
@@ -379,7 +376,7 @@ function refresh() {
 defineExpose({ refresh })
 
 onMounted(() => {
-  loadProxyConfig()
+  void loadProxyConfig(true)
   connectWS()
   startPolling()
 })

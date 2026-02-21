@@ -1099,10 +1099,11 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 		return nil
 	})
 
-	client := telegram.NewClient(apiID, apiHash, telegram.Options{
-		SessionStorage: &FileSessionStorage{Path: sessionPath},
-		UpdateHandler:  d,
-	})
+	client, err := newTelegramClient(apiID, apiHash, sessionPath, d)
+	if err != nil {
+		rt.finishStart(err, ready)
+		return err
+	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 

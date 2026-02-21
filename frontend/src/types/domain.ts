@@ -173,3 +173,17 @@ export type CodeAuthState = {
   updated_at?: number
 }
 
+export type ProxyConfig = {
+  enabled: boolean
+  type: 'http' | 'socks5' | string
+  host: string
+  port: number
+  username: string
+  password_set?: boolean
+  updated_at?: number
+}
+
+export type ProxyTestResult = {
+  target: string
+  ping_ms: number
+}

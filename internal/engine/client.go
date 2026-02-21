@@ -33,9 +33,10 @@ func NewTGClient(ctx context.Context, phone string) (*TGClient, error) {
 
 	sessionPath := GetSessionPath(phone)
 
-	client := telegram.NewClient(apiID, apiHash, telegram.Options{
-		SessionStorage: &FileSessionStorage{Path: sessionPath},
-	})
+	client, err := newTelegramClient(apiID, apiHash, sessionPath, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return &TGClient{
 		Client:      client,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { getProxyConfig, testProxyConfig, updateProxyConfig } from '../api'
 
 type ProxyType = 'http' | 'socks5'
 type ProxyConfig = {
@@ -11,8 +12,6 @@ type ProxyConfig = {
   username?: string
   password?: string
 }
-
-const storageProxyKey = 'tgvive_proxy_config'
 
 const form = reactive<ProxyConfig>({
   enabled: false,
@@ -26,6 +25,9 @@ const form = reactive<ProxyConfig>({
 const testing = ref(false)
 const saving = ref(false)
 const lastPing = ref<number | null>(null)
+const passwordSet = ref(false)
+const passwordDirty = ref(false)
+const suppressDirty = ref(false)
 
 const endpoint = computed(() => {
   const host = (form.host || '').trim()
@@ -34,20 +36,26 @@ const endpoint = computed(() => {
   return `${host}:${port}`
 })
 
+const passwordPlaceholder = computed(() => (passwordSet.value ? '已设置（留空不修改）' : '可留空'))
+
 function loadConfig() {
-  try {
-    const raw = (localStorage.getItem(storageProxyKey) || '').trim()
-    if (!raw) return
-    const cfg = JSON.parse(raw) as Partial<ProxyConfig>
-    if (typeof cfg.enabled === 'boolean') form.enabled = cfg.enabled
-    if (cfg.type === 'http' || cfg.type === 'socks5') form.type = cfg.type
-    if (typeof cfg.host === 'string') form.host = cfg.host
-    if (typeof cfg.port === 'number' && Number.isFinite(cfg.port)) form.port = cfg.port
-    if (typeof cfg.username === 'string') form.username = cfg.username
-    if (typeof cfg.password === 'string') form.password = cfg.password
-  } catch {
-    // ignore
-  }
+  return getProxyConfig()
+    .then((cfg) => {
+      form.enabled = !!cfg?.enabled
+      if (cfg?.type === 'http' || cfg?.type === 'socks5') form.type = cfg.type
+      if (typeof cfg?.host === 'string') form.host = cfg.host
+      if (typeof cfg?.port === 'number' && Number.isFinite(cfg.port)) form.port = cfg.port
+      if (typeof cfg?.username === 'string') form.username = cfg.username
+
+      passwordSet.value = !!cfg?.password_set
+      suppressDirty.value = true
+      form.password = ''
+      suppressDirty.value = false
+      passwordDirty.value = false
+    })
+    .catch(() => {
+      // ignore (e.g. not logged in yet)
+    })
 }
 
 function reload() {
@@ -80,14 +88,19 @@ async function testConnection() {
 
   testing.value = true
   try {
-    await new Promise((r) => window.setTimeout(r, 650))
-    const base = form.type === 'socks5' ? 30 : 18
-    const jitter = Math.random() * 180
-    const ping = Math.round(base + jitter)
-    lastPing.value = ping
-    ElMessage.success(`连接成功：${endpoint.value} (${ping}ms)`)
+    const res = await testProxyConfig({
+      enabled: true,
+      type: form.type,
+      host: (form.host || '').trim(),
+      port: Number(form.port || 0),
+      username: (form.username || '').trim(),
+      password: String(form.password || ''),
+      timeout_ms: 8000,
+    })
+    lastPing.value = Math.max(0, Number(res?.ping_ms || 0) || 0)
+    ElMessage.success(`连接成功：${endpoint.value} (${lastPing.value}ms)`)
   } catch {
-    ElMessage.error('测试失败')
+    ElMessage.error('测试失败（请确认代理可用/鉴权信息正确）')
   } finally {
     testing.value = false
   }
@@ -102,17 +115,22 @@ async function saveConfig() {
 
   saving.value = true
   try {
-    await new Promise((r) => window.setTimeout(r, 450))
-    const payload: ProxyConfig = {
+    const payload: any = {
       enabled: form.enabled,
       type: form.type,
       host: (form.host || '').trim(),
       port: Number(form.port || 0),
-      username: (form.username || '').trim() || undefined,
-      password: (form.password || '').trim() || undefined,
+      username: (form.username || '').trim(),
     }
-    localStorage.setItem(storageProxyKey, JSON.stringify(payload))
-    ElMessage.success('已保存配置')
+    if (passwordDirty.value) payload.password = String(form.password || '')
+
+    const saved = await updateProxyConfig(payload)
+    passwordSet.value = !!saved?.password_set
+    suppressDirty.value = true
+    form.password = ''
+    suppressDirty.value = false
+    passwordDirty.value = false
+    ElMessage.success('已保存并热生效')
   } catch {
     ElMessage.error('保存失败')
   } finally {
@@ -121,8 +139,16 @@ async function saveConfig() {
 }
 
 onMounted(() => {
-  loadConfig()
+  void loadConfig()
 })
+
+watch(
+  () => form.password,
+  () => {
+    if (suppressDirty.value) return
+    passwordDirty.value = true
+  },
+)
 </script>
 
 <template>
@@ -185,7 +211,7 @@ onMounted(() => {
               </el-col>
               <el-col :xs="24" :sm="12">
                 <el-form-item label="鉴权（可选）密码">
-                  <el-input v-model="form.password" type="password" show-password placeholder="可留空" />
+                  <el-input v-model="form.password" type="password" show-password :placeholder="passwordPlaceholder" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -219,7 +245,7 @@ onMounted(() => {
           <div class="note">
             <div class="note-item">
               <div class="k muted">生效范围</div>
-              <div class="v">当前为前端预览 Mock，仅保存到本地 localStorage。</div>
+              <div class="v">保存到后端并立即热生效（不会修改 config.yaml）。</div>
             </div>
             <div class="note-item">
               <div class="k muted">仪表盘展示</div>

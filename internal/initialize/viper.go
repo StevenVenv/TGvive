@@ -47,6 +47,14 @@ func InitConfig() error {
 	v.SetDefault("telegram.api_hash", "")
 	v.SetDefault("telegram.session_path", "./sessions/")
 
+	// Proxy defaults (disabled by default).
+	v.SetDefault("proxy.enabled", false)
+	v.SetDefault("proxy.type", "http")
+	v.SetDefault("proxy.host", "127.0.0.1")
+	v.SetDefault("proxy.port", 7890)
+	v.SetDefault("proxy.username", "")
+	v.SetDefault("proxy.password", "")
+
 	// Processor defaults (all disabled by default).
 	v.SetDefault("processor.text.enabled", false)
 	v.SetDefault("processor.text.trim_space", true)
@@ -116,5 +124,9 @@ func InitConfig() error {
 
 	global.Viper = v
 	global.Config = cfg
+
+	// Runtime proxy config is loaded from a separate store file (data/proxy.runtime.json),
+	// and is intentionally NOT written back to configs/config.yaml.
+	global.ProxyRuntime.Init(cfg.Proxy)
 	return nil
 }

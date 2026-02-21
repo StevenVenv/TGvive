@@ -1,6 +1,8 @@
 import type {
   CodeAuthState,
   KeywordProfile,
+  ProxyConfig,
+  ProxyTestResult,
   QRState,
   Strategy,
   Task,
@@ -19,6 +21,8 @@ export type {
   CommentRule,
   KeywordProfile,
   KeywordRule,
+  ProxyConfig,
+  ProxyTestResult,
   QRState,
   ReplaceRule,
   Strategy,
@@ -235,6 +239,40 @@ export function submitCode(sessionId: string, code: string): Promise<{ ok: boole
   return apiFetch<{ ok: boolean }>('/api/v1/tg/accounts/code/submit', {
     method: 'POST',
     body: JSON.stringify({ session_id: sessionId, code }),
+  })
+}
+
+export function getProxyConfig(): Promise<ProxyConfig> {
+  return apiFetch<ProxyConfig>('/api/v1/settings/proxy', { method: 'GET' })
+}
+
+export function updateProxyConfig(payload: {
+  enabled: boolean
+  type: string
+  host: string
+  port: number
+  username: string
+  password?: string
+}): Promise<ProxyConfig> {
+  return apiFetch<ProxyConfig>('/api/v1/settings/proxy', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function testProxyConfig(payload: {
+  enabled: boolean
+  type: string
+  host: string
+  port: number
+  username: string
+  password: string
+  target?: string
+  timeout_ms?: number
+}): Promise<ProxyTestResult> {
+  return apiFetch<ProxyTestResult>('/api/v1/settings/proxy/test', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

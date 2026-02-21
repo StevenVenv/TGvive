@@ -5,6 +5,7 @@ type AppConfig struct {
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	Telegram  TelegramConfig  `mapstructure:"telegram"`
+	Proxy     ProxyConfig     `mapstructure:"proxy"`
 	Processor ProcessorConfig `mapstructure:"processor"`
 }
 
@@ -46,6 +47,15 @@ type TelegramConfig struct {
 	APIID       int    `mapstructure:"api_id"`
 	APIHash     string `mapstructure:"api_hash"`
 	SessionPath string `mapstructure:"session_path"`
+}
+
+type ProxyConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Type     string `mapstructure:"type"` // http|socks5
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
 }
 
 type ProcessorConfig struct {

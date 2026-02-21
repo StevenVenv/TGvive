@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gotd/td/telegram"
 	tgauth "github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/tg"
@@ -243,10 +242,18 @@ func (m *TaskManager) StartQRAuthForKey(ctx context.Context, sessionID, key stri
 		return nil
 	})
 
-	client := telegram.NewClient(apiID, apiHash, telegram.Options{
-		SessionStorage: &FileSessionStorage{Path: sessionPath},
-		UpdateHandler:  d,
-	})
+	client, err := newTelegramClient(apiID, apiHash, sessionPath, d)
+	if err != nil {
+		if usePending {
+			cleanupPendingSession(pendingPath)
+		}
+		qr.publish(sessionID, QRState{
+			Key:    key,
+			Status: QRStatusError,
+			Error:  err.Error(),
+		})
+		return err
+	}
 
 	authorized := false
 	err = client.Run(ctx, func(ctx context.Context) error {
