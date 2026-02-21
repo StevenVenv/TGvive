@@ -39,6 +39,10 @@ func TestShouldCloneComment_OwnerOnly(t *testing.T) {
 	if !ShouldCloneComment(anonGroupMsg, sourceChannelID, rule) {
 		t.Fatalf("expected anonymous 'send as group' allowed (linked chat treated as official)")
 	}
+	missingFrom := &tg.Message{PeerID: &tg.PeerChannel{ChannelID: linkedChatID}}
+	if !ShouldCloneComment(missingFrom, sourceChannelID, rule) {
+		t.Fatalf("expected missing from_id treated as linked chat identity")
+	}
 	if !ShouldCloneComment(trustedMsg, sourceChannelID, rule) {
 		t.Fatalf("expected trusted user allowed")
 	}

@@ -41,6 +41,10 @@ func WashMessage(msg *tg.Message, detectType func(*tg.Message) string) (*LightPa
 				p.SenderID = v.ChannelID
 			}
 		}
+	} else if peer, ok := msg.PeerID.(*tg.PeerChannel); ok && peer != nil && peer.ChannelID != 0 {
+		// Channel/supergroup messages may omit from_id when posted by the channel itself.
+		p.SenderType = "channel"
+		p.SenderID = peer.ChannelID
 	}
 
 	mediaType := "other"

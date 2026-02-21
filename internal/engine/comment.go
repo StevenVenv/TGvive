@@ -435,7 +435,13 @@ func shouldCloneCommentByIdentity(msg *tg.Message, sourceChannelID int64, filter
 
 	from, ok := msg.GetFromID()
 	if !ok || from == nil {
-		return false
+		// Some channel/supergroup messages may omit from_id when posted by the channel itself.
+		// Treat them as "send as group/channel" identity based on peer_id.
+		if peerChID, ok := peerToChannelID(msg.PeerID); ok && peerChID != 0 {
+			from = &tg.PeerChannel{ChannelID: peerChID}
+		} else {
+			return false
+		}
 	}
 
 	// Owner (send-as-channel in linked discussion).

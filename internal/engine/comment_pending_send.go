@@ -58,6 +58,90 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 
 	wmRule, wmEnabled := watermarkRuleForTask(task)
 
+	st := ResolveRuntimeStrategy(task)
+	rule, enabled, _ := resolveCommentRule(task, st)
+	if !enabled {
+		return
+	}
+
+	trustedSet := make(map[int64]struct{}, len(rule.TrustedUserIDs))
+	for _, id := range rule.TrustedUserIDs {
+		if id > 0 {
+			trustedSet[id] = struct{}{}
+		}
+	}
+
+	typeList := normalizeRuntimeTypeList(rule.AllowedTypes)
+	allowedSet := map[string]struct{}(nil)
+	if len(typeList) > 0 {
+		allowedSet = normalizeTypeSet(typeList)
+	}
+	blockLower := lowerKeywordList(rule.BlockKeywords)
+
+	payloadAllowed := func(p localdb.LightPayload) bool {
+		filterMode := strings.ToLower(strings.TrimSpace(rule.FilterMode))
+		if filterMode == "all" {
+			return true
+		}
+		if filterMode == "whitelist" {
+			filterMode = "owner_only"
+		}
+		if filterMode != "owner_only" && filterMode != "owner_or_linked" {
+			filterMode = "owner_only"
+		}
+
+		allowAnonymous := rule.AllowAnonymous
+		if filterMode == "owner_or_linked" {
+			allowAnonymous = true
+		}
+
+		senderType := strings.ToLower(strings.TrimSpace(p.SenderType))
+		senderID := p.SenderID
+		if senderType == "" || senderType == "unknown" {
+			// Backward compatibility: old/corrupted payload may miss sender info.
+			// Treat it as "send as linked discussion group" identity.
+			if cfg.SourceLinkedChatID != 0 {
+				senderType = "channel"
+				senderID = cfg.SourceLinkedChatID
+			}
+		}
+
+		switch senderType {
+		case "channel":
+			if senderID != 0 && (senderID == cfg.SourceChannelID || senderID == cfg.SourceLinkedChatID) {
+				// Channel itself or linked discussion group identity.
+				break
+			}
+			return false
+		case "user":
+			if allowAnonymous && senderID == groupAnonymousBotID {
+				break
+			}
+			if trustedSet != nil {
+				if _, ok := trustedSet[senderID]; ok {
+					break
+				}
+			}
+			return false
+		default:
+			return false
+		}
+
+		if allowedSet != nil {
+			ct := strings.ToLower(strings.TrimSpace(p.MediaType))
+			if ct == "" {
+				ct = "other"
+			}
+			if _, ok := allowedSet[ct]; !ok {
+				return false
+			}
+		}
+		if hitBlockKeywords(p.Text, blockLower) {
+			return false
+		}
+		return true
+	}
+
 	sendWatermarkedImage := func(commentMsgID int, payload localdb.LightPayload) error {
 		if commentMsgID <= 0 {
 			return errors.New("comment_msg_id is required")
@@ -210,12 +294,12 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 
 				// Try to preserve album grouping when possible.
 				if len(group) >= 2 {
+					filteredIDs := make([]int, 0, 4)
 					payloads := make([]localdb.LightPayload, 0, len(group))
 					ids := make([]int, 0, len(group))
 					okAlbum := true
 					needWM := false
 					for _, it := range group {
-						ids = append(ids, it.CommentMsgID)
 						var p localdb.LightPayload
 						if len(it.LightPayload) > 0 {
 							if err := json.Unmarshal(it.LightPayload, &p); err != nil {
@@ -223,6 +307,13 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 								break
 							}
 						}
+
+						if !payloadAllowed(p) {
+							filteredIDs = append(filteredIDs, it.CommentMsgID)
+							continue
+						}
+
+						ids = append(ids, it.CommentMsgID)
 						if strings.EqualFold(p.MediaType, "image") {
 							needWM = needWM || wmEnabled
 						} else if len(p.MediaBytes) == 0 {
@@ -230,6 +321,14 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 							break
 						}
 						payloads = append(payloads, p)
+					}
+
+					if len(filteredIDs) > 0 {
+						markForwarded(filteredIDs)
+					}
+					if len(payloads) == 0 {
+						i = j
+						continue
 					}
 
 					if okAlbum {
@@ -372,6 +471,11 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 						}
 					}
 
+					if !payloadAllowed(payload) {
+						markForwarded([]int{it.CommentMsgID})
+						continue
+					}
+
 					sendErr := sendOne(it, payload)
 					if sendErr != nil {
 						if d, ok := tgerr.AsFloodWait(sendErr); ok {
@@ -421,6 +525,12 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					i++
 					continue
 				}
+			}
+
+			if !payloadAllowed(payload) {
+				markForwarded([]int{item.CommentMsgID})
+				i++
+				continue
 			}
 
 			sendErr := sendOne(item, payload)

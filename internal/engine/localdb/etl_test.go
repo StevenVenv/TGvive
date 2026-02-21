@@ -69,3 +69,18 @@ func TestWashMessage_DocumentMediaBytesDecodable(t *testing.T) {
 		t.Fatalf("expected InputMediaDocument, got %T", im)
 	}
 }
+
+func TestWashMessage_FallbackSenderFromPeerID(t *testing.T) {
+	msg := &tg.Message{Message: "hi", PeerID: &tg.PeerChannel{ChannelID: 777}}
+
+	p, err := WashMessage(msg, func(*tg.Message) string { return "text" })
+	if err != nil {
+		t.Fatalf("WashMessage error: %v", err)
+	}
+	if p == nil {
+		t.Fatalf("expected payload")
+	}
+	if p.SenderType != "channel" || p.SenderID != 777 {
+		t.Fatalf("sender mismatch: %+v", p)
+	}
+}
