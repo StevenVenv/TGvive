@@ -8,19 +8,19 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color-scheme: light;
+  color-scheme: light dark;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--tgv-main-bg, #f5f7fa);
   color: var(--el-text-color-primary);
 }
 
 html.dark body {
-  background: #1e1e1e;
+  background: var(--tgv-main-bg, #1e1e1e);
 }
 
 #app {

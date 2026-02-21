@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { UserFilled } from '@element-plus/icons-vue'
+import { CopyDocument, UserFilled } from '@element-plus/icons-vue'
 
 import {
   getKeywordProfiles,
@@ -19,6 +19,8 @@ import {
   type TGAccount,
 } from '../api'
 import { deleteTask, updateTask } from '../api/task'
+import { useInterval } from '../composables/useInterval'
+import { useTaskLogCache } from '../composables/useTaskLogCache'
 
 const props = defineProps<{
   active?: boolean
@@ -35,116 +37,19 @@ const logProgress = computed(() => (selectedTaskId.value ? progressMap.value[sel
 const autoScroll = ref(true)
 const logBoxRef = ref<HTMLElement | null>(null)
 
-const taskLogStorageKey = 'tgvive_task_logs_v1'
-const maxTaskLogLines = 100
-
-const taskLogCache = ref<Record<number, string[]>>({})
-let logPersistTimer: number | undefined
-
-function loadTaskLogCache(): Record<number, string[]> {
-  try {
-    if (typeof localStorage === 'undefined') return {}
-    const raw = (localStorage.getItem(taskLogStorageKey) || '').trim()
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    if (!parsed || typeof parsed !== 'object') return {}
-
-    const out: Record<number, string[]> = {}
-    for (const [k, v] of Object.entries(parsed)) {
-      const id = Math.floor(Number(k || 0))
-      if (!Number.isFinite(id) || id <= 0) continue
-      if (!Array.isArray(v)) continue
-      const lines = (v as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '')
-      if (lines.length > 0) out[id] = lines.slice(-maxTaskLogLines)
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
-function persistTaskLogCache() {
-  try {
-    if (typeof localStorage === 'undefined') return
-    const out: Record<string, string[]> = {}
-    for (const [k, v] of Object.entries(taskLogCache.value || {})) {
-      const id = Math.floor(Number(k || 0))
-      if (!Number.isFinite(id) || id <= 0) continue
-      if (!Array.isArray(v) || v.length === 0) continue
-      out[String(id)] = v.slice(-maxTaskLogLines)
-    }
-    localStorage.setItem(taskLogStorageKey, JSON.stringify(out))
-  } catch {
-    // ignore
-  }
-}
-
-function schedulePersistLogs() {
-  if (logPersistTimer) window.clearTimeout(logPersistTimer)
-  logPersistTimer = window.setTimeout(() => {
-    logPersistTimer = undefined
-    persistTaskLogCache()
-  }, 250)
-}
-
-function mergeLogLines(existing: string[], incoming: string[]): string[] {
-  if (!Array.isArray(incoming) || incoming.length === 0) return existing
-  if (!Array.isArray(existing) || existing.length === 0) return incoming.slice(-maxTaskLogLines)
-
-  const a = existing
-  const b = incoming
-  const maxOverlap = Math.min(a.length, b.length)
-  let overlap = 0
-  for (let k = maxOverlap; k > 0; k--) {
-    let ok = true
-    for (let i = 0; i < k; i++) {
-      if (a[a.length - k + i] !== b[i]) {
-        ok = false
-        break
-      }
-    }
-    if (ok) {
-      overlap = k
-      break
-    }
-  }
-
-  let merged = overlap > 0 ? a.concat(b.slice(overlap)) : a.concat(b)
-  if (merged.length > maxTaskLogLines) merged = merged.slice(merged.length - maxTaskLogLines)
-  return merged
-}
-
-function ingestTaskLogs(taskID: number, logs: unknown) {
-  const id = Math.floor(Number(taskID || 0))
-  if (!Number.isFinite(id) || id <= 0) return
-  if (!Array.isArray(logs) || logs.length === 0) return
-
-  const incoming = (logs as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '')
-  if (incoming.length === 0) return
-
-  const prev = taskLogCache.value[id] || []
-  const merged = mergeLogLines(prev, incoming)
-  if (merged.length === prev.length && merged[merged.length - 1] === prev[prev.length - 1]) return
-
-  taskLogCache.value[id] = merged
-  schedulePersistLogs()
-}
+const logCache = useTaskLogCache({ storageKey: 'tgvive_task_logs_v1', maxLines: 100 })
 
 function clearTaskLogs(taskID: number) {
-  const id = Math.floor(Number(taskID || 0))
-  if (!Number.isFinite(id) || id <= 0) return
-  if (!taskLogCache.value[id]?.length) return
-  delete taskLogCache.value[id]
-  schedulePersistLogs()
+  logCache.clear(taskID)
 }
 
 const displayLogs = computed(() => {
   const id = selectedTaskId.value
   if (!id) return []
-  const cached = taskLogCache.value[id]
+  const cached = logCache.get(id)
   if (Array.isArray(cached) && cached.length > 0) return cached
   const logs = logProgress.value?.logs
-  if (Array.isArray(logs) && logs.length > 0) return logs.slice(-maxTaskLogLines)
+  if (Array.isArray(logs) && logs.length > 0) return logs.slice(-100)
   return []
 })
 
@@ -166,8 +71,18 @@ const editForm = reactive({
   keyword_profile_id: 0,
 })
 
-let pollTimer: number | undefined
-let logTimer: number | undefined
+const progressPoll = useInterval(() => {
+  if (props.active === false) return
+  if (!autoRefresh.value) return
+  void refreshProgress()
+}, 2000)
+
+const logPoll = useInterval(() => {
+  if (props.active === false) return
+  const id = selectedTaskId.value
+  if (id <= 0) return
+  void refreshOne(id)
+}, 1000)
 
 const selectedAccount = computed(() => accounts.value.find((a) => a.key === editForm.session_key) || null)
 
@@ -303,13 +218,7 @@ async function reloadTasks() {
   loading.value = true
   try {
     tasks.value = await getTasks()
-    const keep = new Set(tasks.value.map((t) => Math.floor(Number(t?.ID || 0))).filter((v) => Number.isFinite(v) && v > 0))
-    for (const k of Object.keys(taskLogCache.value || {})) {
-      const id = Math.floor(Number(k || 0))
-      if (!Number.isFinite(id) || id <= 0) continue
-      if (!keep.has(id)) delete taskLogCache.value[id]
-    }
-    schedulePersistLogs()
+    logCache.prune(tasks.value.map((t) => t.ID))
     if (selectedTaskId.value > 0 && !tasks.value.some((t) => t.ID === selectedTaskId.value)) {
       selectedTaskId.value = 0
     }
@@ -330,12 +239,12 @@ async function refreshProgress() {
   try {
     const res = await getTaskProgressBatch(ids)
     const next = { ...progressMap.value }
-    const entries = Object.entries(res || {}) as Array<[string, TaskProgress]>
+    const entries = Object.entries(res || {})
     for (const [k, v] of entries) {
-      const id = Number(k || 0)
+      const id = Math.floor(Number(k || 0))
       if (!Number.isFinite(id) || id <= 0) continue
-      ingestTaskLogs(id, (v as any)?.logs)
-      next[id] = v
+      logCache.ingest(id, v?.logs)
+      next[id] = v as TaskProgress
     }
     progressMap.value = next
   } catch {
@@ -347,7 +256,7 @@ async function refreshOne(id: number) {
   if (id <= 0) return
   try {
     const p = await getTaskProgress(id)
-    ingestTaskLogs(id, (p as any)?.logs)
+    logCache.ingest(id, p?.logs)
     progressMap.value = { ...progressMap.value, [id]: p }
   } catch {
     // best-effort
@@ -509,79 +418,80 @@ function selectTask(task: Task) {
   void refreshOne(task.ID)
 }
 
-function stopLogPolling() {
-  if (logTimer) {
-    window.clearInterval(logTimer)
-    logTimer = undefined
-  }
-}
-
-function startLogPolling() {
-  stopLogPolling()
-  const id = selectedTaskId.value
-  if (id <= 0) return
-  logTimer = window.setInterval(() => {
-    if (props.active === false) return
-    if (selectedTaskId.value !== id) return
-    void refreshOne(id)
-  }, 1000)
-}
-
 function scrollLogsToBottom() {
   const el = logBoxRef.value
   if (!el) return
   el.scrollTop = el.scrollHeight
 }
 
-function startPolling() {
-  if (pollTimer) window.clearInterval(pollTimer)
-  pollTimer = window.setInterval(() => {
-    if (props.active === false) return
-    if (!autoRefresh.value) return
-    void refreshProgress()
-  }, 2000)
+function fallbackCopyText(text: string): boolean {
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', 'true')
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    ta.style.top = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
 }
 
-function stopPolling() {
-  if (pollTimer) {
-    window.clearInterval(pollTimer)
-    pollTimer = undefined
+async function copyLogs() {
+  const text = displayLogs.value.join('\n').trim()
+  if (!text) {
+    ElMessage.info('暂无可复制日志')
+    return
   }
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success('日志已复制')
+      return
+    }
+  } catch {
+    // ignore and fallback
+  }
+
+  const ok = fallbackCopyText(text)
+  if (ok) ElMessage.success('日志已复制')
+  else ElMessage.error('复制失败')
 }
 
 onMounted(async () => {
-  taskLogCache.value = loadTaskLogCache()
   await reloadTasks()
-  if (props.active !== false) startPolling()
+  if (props.active !== false) progressPoll.start()
 })
 
 onBeforeUnmount(() => {
-  stopPolling()
-  stopLogPolling()
-  if (logPersistTimer) {
-    window.clearTimeout(logPersistTimer)
-    logPersistTimer = undefined
-  }
-  persistTaskLogCache()
+  progressPoll.stop()
+  logPoll.stop()
+  logCache.persistNow()
 })
 
 watch(
   () => props.active,
   (v) => {
     if (v === false) {
-      stopPolling()
-      stopLogPolling()
+      progressPoll.stop()
+      logPoll.stop()
       return
     }
-    startPolling()
-    if (selectedTaskId.value > 0) startLogPolling()
+    progressPoll.start()
+    if (selectedTaskId.value > 0) logPoll.start()
   },
 )
 
 watch(selectedTaskId, (id) => {
   if (props.active === false) return
-  if (id > 0) startLogPolling()
-  else stopLogPolling()
+  if (id > 0) logPoll.start()
+  else logPoll.stop()
 })
 
 watch(
@@ -806,6 +716,10 @@ defineExpose({
                     <i class="ri-refresh-line" />
                     刷新
                   </el-button>
+                  <el-button size="small" @click="copyLogs" :disabled="displayLogs.length === 0">
+                    <el-icon><CopyDocument /></el-icon>
+                    复制
+                  </el-button>
                   <el-button size="small" @click="clearTaskLogs(selectedTask.ID)" :disabled="displayLogs.length === 0">
                     <i class="ri-delete-bin-6-line" />
                     清空
@@ -937,21 +851,6 @@ defineExpose({
   width: 100%;
 }
 
-.bt-card {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.bt-card :deep(.el-card__header) {
-  padding: 12px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.bt-card :deep(.el-card__body) {
-  padding: 14px;
-}
-
 .pane-card {
   height: calc(100vh - 120px);
   display: flex;
@@ -973,35 +872,6 @@ defineExpose({
 .table-body {
   flex: 1;
   overflow: hidden;
-}
-
-.card-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-}
-
-.card-title i {
-  font-size: 16px;
-  color: #409eff;
-}
-
-.card-sub {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
 }
 
 .toolbar {
@@ -1075,6 +945,10 @@ defineExpose({
   flex-wrap: wrap;
 }
 
+.log-head :deep(.el-button .el-icon) {
+  margin-right: 4px;
+}
+
 .log-title {
   display: flex;
   align-items: center;
@@ -1106,9 +980,13 @@ defineExpose({
   flex: 1;
   overflow: auto;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: #000;
+  border: 1px solid var(--el-border-color-lighter);
+  background: #0b1020;
   padding: 12px;
+}
+
+html.dark .log-console {
+  background: #000;
 }
 
 .log-pre {
@@ -1123,7 +1001,7 @@ defineExpose({
 
 .log-empty {
   font-size: 12px;
-  color: rgba(191, 203, 217, 0.6);
+  color: var(--el-text-color-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
@@ -1133,16 +1011,6 @@ defineExpose({
 
 .edit-form :deep(.el-form-item) {
   margin-bottom: 14px;
-}
-
-.hint {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.muted {
-  color: var(--el-text-color-secondary);
 }
 
 :deep(.danger-item) {

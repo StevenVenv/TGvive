@@ -646,50 +646,6 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-.bt-card {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
-
-  :deep(.el-card__header) {
-    padding: 12px 14px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    background: rgba(0, 0, 0, 0.18);
-  }
-
-  :deep(.el-card__body) {
-    padding: 14px;
-  }
-}
-
-.card-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-
-  i {
-    font-size: 16px;
-    color: #409eff;
-  }
-}
-
-.card-sub {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
 .dot {
   opacity: 0.7;
 }
@@ -728,16 +684,6 @@ onBeforeUnmount(() => {
   background: rgba(245, 108, 108, 0.08);
   padding: 2px 6px;
   border-radius: 999px;
-}
-
-.muted {
-  color: var(--el-text-color-secondary);
-}
-
-.split-line {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.06);
-  margin: 12px 0;
 }
 
 .metric {

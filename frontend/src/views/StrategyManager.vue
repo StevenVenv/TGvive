@@ -899,22 +899,6 @@ onMounted(() => {
   margin: 0 0 12px;
 }
 
-.bt-card {
-  border: 1px solid #363637;
-  border-radius: 4px;
-  background: #252525;
-
-  :deep(.el-card__header) {
-    padding: 12px 14px;
-    border-bottom: 1px solid #363637;
-    background: #252525;
-  }
-
-  :deep(.el-card__body) {
-    padding: 14px;
-  }
-}
-
 .pane-card {
   display: flex;
   flex-direction: column;
@@ -951,35 +935,6 @@ onMounted(() => {
 .table-body {
   flex: 1;
   overflow: hidden;
-}
-
-.card-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-
-  i {
-    font-size: 16px;
-    color: var(--el-color-primary);
-  }
-}
-
-.card-sub {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
 }
 
 .toolbar {
@@ -1028,22 +983,6 @@ onMounted(() => {
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(0, 0, 0, 0.18);
-}
-
-.bt-dialog {
-  :deep(.el-dialog) {
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  :deep(.el-dialog__header) {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    margin-right: 0;
-  }
-
-  :deep(.el-dialog__footer) {
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-  }
 }
 
 .kw-dialog {

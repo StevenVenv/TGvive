@@ -208,6 +208,10 @@ function nearlyEqual(a: number, b: number, eps = 1e-6): boolean {
   return Math.abs(a-b) <= eps
 }
 
+function fmtPct(v: number): string {
+  return `${Math.round(Number(v || 0))}%`
+}
+
 function ensureWatermarkRule(): WatermarkRule {
   const f = form.value as any
   let r = f.watermark_rule as WatermarkRule | undefined
@@ -1208,19 +1212,6 @@ defineExpose<StrategyFormExpose>({
   <div class="strategy-form">
     <div class="form-scroll" v-loading="loading">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="small" class="form">
-        <el-row :gutter="12">
-          <el-col :xs="24" :sm="12">
-            <el-form-item label="策略名称" prop="name">
-              <el-input v-model="form.name" placeholder="例如：极速转发 / 去重+转码" />
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="12">
-            <el-form-item label="备注（可选）" prop="remark">
-              <el-input v-model="form.remark" placeholder="用于团队协作/区分用途" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
         <el-card class="panel-card" shadow="never">
           <template #header>
             <div class="panel-head">
@@ -1231,6 +1222,19 @@ defineExpose<StrategyFormExpose>({
               <div class="panel-sub">Base Config</div>
             </div>
           </template>
+
+          <el-row :gutter="12">
+            <el-col :xs="24" :sm="12">
+              <el-form-item label="策略名称" prop="name">
+                <el-input v-model="form.name" placeholder="例如：极速转发 / 去重+转码" />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12">
+              <el-form-item label="备注（可选）" prop="remark">
+                <el-input v-model="form.remark" placeholder="用于团队协作/区分用途" />
+              </el-form-item>
+            </el-col>
+          </el-row>
 
           <el-row :gutter="12">
             <el-col :xs="24" :sm="12" :lg="6">
@@ -1655,12 +1659,36 @@ defineExpose<StrategyFormExpose>({
               <el-row v-if="watermarkEnable && watermarkPosition === 'custom'" :gutter="12">
                 <el-col :xs="24" :sm="12">
                   <el-form-item label="自定义 X（%）">
-                    <el-slider v-model="watermarkCustomX" :min="0" :max="100" :step="1" show-input />
+                    <div class="wm-slider-row">
+                      <span class="wm-bound">0%</span>
+                      <el-slider
+                        v-model="watermarkCustomX"
+                        :min="0"
+                        :max="100"
+                        :step="1"
+                        :format-tooltip="fmtPct"
+                        class="wm-slider"
+                      />
+                      <span class="wm-bound">100%</span>
+                      <el-input-number v-model="watermarkCustomX" :min="0" :max="100" :step="1" controls-position="right" class="wm-num" />
+                    </div>
                   </el-form-item>
                 </el-col>
                 <el-col :xs="24" :sm="12">
                   <el-form-item label="自定义 Y（%）">
-                    <el-slider v-model="watermarkCustomY" :min="0" :max="100" :step="1" show-input />
+                    <div class="wm-slider-row">
+                      <span class="wm-bound">0%</span>
+                      <el-slider
+                        v-model="watermarkCustomY"
+                        :min="0"
+                        :max="100"
+                        :step="1"
+                        :format-tooltip="fmtPct"
+                        class="wm-slider"
+                      />
+                      <span class="wm-bound">100%</span>
+                      <el-input-number v-model="watermarkCustomY" :min="0" :max="100" :step="1" controls-position="right" class="wm-num" />
+                    </div>
                   </el-form-item>
                 </el-col>
               </el-row>
@@ -1668,18 +1696,75 @@ defineExpose<StrategyFormExpose>({
 	              <el-row v-if="watermarkEnable" :gutter="12">
 	                <el-col :xs="24" :sm="8">
 	                  <el-form-item label="边距（0-10%）">
-	                    <el-slider v-model="watermarkMarginPct" :min="0" :max="10" :step="1" show-input />
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">0%</span>
+	                      <el-slider
+	                        v-model="watermarkMarginPct"
+	                        :min="0"
+	                        :max="10"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">10%</span>
+	                      <el-input-number
+	                        v-model="watermarkMarginPct"
+	                        :min="0"
+	                        :max="10"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                      />
+	                    </div>
 	                  </el-form-item>
 	                </el-col>
 	                <el-col :xs="24" :sm="8">
 	                  <el-form-item label="缩放占比（1-50%）">
-	                    <el-slider v-model="watermarkScalePct" :min="1" :max="50" :step="1" show-input />
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">1%</span>
+	                      <el-slider
+	                        v-model="watermarkScalePct"
+	                        :min="1"
+	                        :max="50"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">50%</span>
+	                      <el-input-number
+	                        v-model="watermarkScalePct"
+	                        :min="1"
+	                        :max="50"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                      />
+	                    </div>
 	                    <div class="hint compact">控制水印占画面宽度的比例。</div>
 	                  </el-form-item>
 	                </el-col>
 	                <el-col :xs="24" :sm="8">
 	                  <el-form-item label="透明度（0-100%）">
-	                    <el-slider v-model="watermarkOpacityPct" :min="0" :max="100" :step="1" show-input />
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">0%</span>
+	                      <el-slider
+	                        v-model="watermarkOpacityPct"
+	                        :min="0"
+	                        :max="100"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">100%</span>
+	                      <el-input-number
+	                        v-model="watermarkOpacityPct"
+	                        :min="0"
+	                        :max="100"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                      />
+	                    </div>
 	                    <div class="hint compact">100% 为完全不透明。</div>
 	                  </el-form-item>
 	                </el-col>
@@ -1813,6 +1898,30 @@ defineExpose<StrategyFormExpose>({
   :deep(.el-input) {
     flex: 1 1 auto;
   }
+}
+
+.wm-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wm-bound {
+  flex: none;
+  width: 42px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+.wm-slider {
+  flex: 1 1 260px;
+  min-width: 180px;
+}
+
+.wm-num {
+  width: 120px;
 }
 
 .wm-preview {
