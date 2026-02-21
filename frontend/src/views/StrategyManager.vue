@@ -68,9 +68,9 @@ function emptyModel(): StrategyFormModel {
 
     comment_rule: {
       enable: false,
-      filter_mode: 'owner_only',
+      filter_mode: 'owner_or_linked',
       trusted_user_ids: [],
-      allow_anonymous: false,
+      allow_anonymous: true,
       allowed_types: ['text', 'file', 'audio'],
       block_keywords: [],
     },
@@ -738,7 +738,7 @@ onMounted(() => {
 
       <el-tab-pane label="新建行为策略" name="create">
         <div class="create-wrap">
-          <el-card class="bt-card pane-card" shadow="never">
+          <el-card class="bt-card pane-card pane-card-auto" shadow="never">
             <template #header>
               <div class="card-header">
                 <div class="card-title">
@@ -749,7 +749,7 @@ onMounted(() => {
               </div>
             </template>
 
-            <div class="pane form-host">
+            <div class="pane pane-create">
               <StrategyForm ref="createFormRef" v-model="createModel" :loading="createSaving">
                 <template #actions>
                   <el-space>
@@ -906,6 +906,9 @@ onMounted(() => {
   :deep(.el-card__body) {
     flex: 1;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 }
 
@@ -913,10 +916,15 @@ onMounted(() => {
   .pane-card {
     height: calc(100vh - 160px);
   }
+
+  .pane-card-auto {
+    height: auto;
+  }
 }
 
 .pane {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -924,16 +932,23 @@ onMounted(() => {
 
 .create-wrap {
   width: 100%;
-  max-width: none;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
-.form-host {
-  flex: 1;
-  overflow: hidden;
+.pane-create {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
+}
+
+.pane-card-auto :deep(.el-card__body) {
+  overflow: visible;
 }
 
 .table-body {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 

@@ -4,7 +4,10 @@ package model
 type CommentRule struct {
 	Enable bool `json:"enable"`
 
-	// FilterMode: "owner_only" (recommended) or "all" (risky).
+	// FilterMode:
+	// - "owner_only": only official/whitelist comments (recommended)
+	// - "owner_or_linked": official/whitelist + linked discussion identity ("send as group")
+	// - "all": allow any comment (risky)
 	// Aliases for backward compatibility: "whitelist" -> "owner_only".
 	FilterMode string `json:"filter_mode"`
 

@@ -60,6 +60,30 @@ func TestShouldCloneComment_OwnerOnly(t *testing.T) {
 	}
 }
 
+func TestShouldCloneComment_OwnerOrLinked(t *testing.T) {
+	sourceChannelID := int64(12345)
+	linkedChatID := int64(77777)
+
+	// "Send as group" appears as GroupAnonymousBot in MTProto.
+	sendAsGroup := &tg.Message{PeerID: &tg.PeerChannel{ChannelID: linkedChatID}}
+	sendAsGroup.SetFromID(&tg.PeerUser{UserID: groupAnonymousBotID})
+
+	stranger := &tg.Message{}
+	stranger.SetFromID(&tg.PeerUser{UserID: 999})
+
+	rule := model.CommentRule{
+		FilterMode:     "owner_or_linked",
+		TrustedUserIDs: nil,
+		AllowAnonymous: false, // should be ignored in this mode
+	}
+	if !ShouldCloneComment(sendAsGroup, sourceChannelID, rule) {
+		t.Fatalf("expected 'send as group' allowed in owner_or_linked mode")
+	}
+	if ShouldCloneComment(stranger, sourceChannelID, rule) {
+		t.Fatalf("expected stranger denied in owner_or_linked mode")
+	}
+}
+
 func TestShouldCloneComment_All(t *testing.T) {
 	sourceChannelID := int64(12345)
 	rule := model.CommentRule{FilterMode: "all"}

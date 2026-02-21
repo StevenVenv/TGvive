@@ -123,8 +123,8 @@ const enablePull = computed<boolean>({
   },
 })
 
-const commentCollapse = ref<string[]>(['comment'])
-const mediaCollapse = ref<string[]>(['media'])
+const commentCollapse = ref<string[]>([])
+const mediaCollapse = ref<string[]>([])
 
 type CommentAllowedTypeKey = 'text' | 'image' | 'file' | 'video'
 
@@ -140,9 +140,9 @@ const commentAllowedTypeKeys = commentAllowedTypeOptions.map((x) => x.key)
 function defaultCommentRule(enable: boolean): CommentRule {
   return {
     enable,
-    filter_mode: 'owner_only',
+    filter_mode: 'owner_or_linked',
     trusted_user_ids: [],
-    allow_anonymous: false,
+    allow_anonymous: true,
     allowed_types: ['text', 'file', 'audio'],
     block_keywords: [],
   }
@@ -157,7 +157,7 @@ function ensureCommentRule(): CommentRule {
   }
 
   r.enable = Boolean((r as any).enable)
-  r.filter_mode = String((r as any).filter_mode || 'owner_only')
+  r.filter_mode = String((r as any).filter_mode || 'owner_or_linked')
   r.allow_anonymous = Boolean((r as any).allow_anonymous)
 
   r.trusted_user_ids = Array.isArray((r as any).trusted_user_ids) ? ((r as any).trusted_user_ids as number[]) : []
@@ -826,18 +826,31 @@ watch(
   { immediate: true },
 )
 
-const commentFilterMode = computed<'owner_only' | 'all'>({
+type CommentFilterMode = 'owner_only' | 'owner_or_linked' | 'all'
+
+const commentFilterMode = computed<CommentFilterMode>({
   get() {
     const raw = String(ensureCommentRule().filter_mode || '')
       .trim()
       .toLowerCase()
     if (raw === 'all') return 'all'
+    if (raw === 'owner_or_linked') return 'owner_or_linked'
     return 'owner_only'
   },
   set(v) {
     ensureCommentRule().filter_mode = v
   },
 })
+
+watch(
+  commentFilterMode,
+  (mode) => {
+    if (mode === 'owner_or_linked') {
+      ensureCommentRule().allow_anonymous = true
+    }
+  },
+  { immediate: true },
+)
 
 function normalizeCommentAllowedTypes(input: any): CommentAllowedTypeKey[] {
   const raw = Array.isArray(input) ? input : []
@@ -1269,7 +1282,7 @@ defineExpose<StrategyFormExpose>({
 
             <el-col :xs="24" :sm="16" :lg="8">
               <el-form-item label="范围参数" prop="scope_value">
-                <el-input v-model="form.scope_value" class="ctrl ctrl-md" :placeholder="scopeValuePlaceholder" />
+                <el-input v-model="form.scope_value" class="ctrl" :placeholder="scopeValuePlaceholder" />
               </el-form-item>
             </el-col>
           </el-row>
@@ -1403,31 +1416,6 @@ defineExpose<StrategyFormExpose>({
             </div>
           </div>
 
-          <el-row :gutter="12">
-            <el-col :xs="24" :sm="12" :lg="6">
-              <el-form-item label="最小延时 (ms)" prop="delay_min_ms">
-                <el-input-number v-model="form.delay_min_ms" :min="0" :step="100" controls-position="right" class="ctrl ctrl-num" />
-                <div class="hint compact">每条消息处理后随机 sleep</div>
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="12" :lg="6">
-              <el-form-item label="最大延时 (ms)" prop="delay_max_ms">
-                <el-input-number v-model="form.delay_max_ms" :min="0" :step="100" controls-position="right" class="ctrl ctrl-num" />
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="12" :lg="6">
-              <el-form-item label="每日配额" prop="daily_limit">
-                <el-input-number v-model="form.daily_limit" :min="0" :step="10" controls-position="right" class="ctrl ctrl-num" />
-                <div class="hint compact">0 = 不限制</div>
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="12" :lg="6">
-              <el-form-item label="运行窗口" prop="run_window">
-                <el-input v-model="form.run_window" class="ctrl ctrl-sm" placeholder="09:00-18:00（留空=全天）" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-
           <div class="sub-split">
             <span>分时段计划</span>
           </div>
@@ -1484,6 +1472,63 @@ defineExpose<StrategyFormExpose>({
           <template #header>
             <div class="panel-head">
               <div class="panel-title">
+                <i class="ri-toggle-line" />
+                <span>处理开关与配额</span>
+              </div>
+              <div class="panel-sub">Switches</div>
+            </div>
+          </template>
+
+          <el-row :gutter="12">
+            <el-col :xs="24" :sm="12" :lg="6">
+              <el-form-item label="最小延时 (ms)" prop="delay_min_ms">
+                <el-input-number v-model="form.delay_min_ms" :min="0" :step="100" controls-position="right" class="ctrl ctrl-num" />
+                <div class="hint compact">每条消息处理后随机 sleep</div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :lg="6">
+              <el-form-item label="最大延时 (ms)" prop="delay_max_ms">
+                <el-input-number v-model="form.delay_max_ms" :min="0" :step="100" controls-position="right" class="ctrl ctrl-num" />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :lg="6">
+              <el-form-item label="每日配额" prop="daily_limit">
+                <el-input-number v-model="form.daily_limit" :min="0" :step="10" controls-position="right" class="ctrl ctrl-num" />
+                <div class="hint compact">0 = 不限制</div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :lg="6">
+              <el-form-item label="运行窗口" prop="run_window">
+                <el-input v-model="form.run_window" class="ctrl ctrl-sm" placeholder="09:00-18:00（留空=全天）" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <div class="sub-split">
+            <span>开关项</span>
+          </div>
+
+          <div class="switch-wrap">
+            <el-switch v-model="form.keep_reply" active-text="保留回复" />
+            <el-tooltip effect="dark" placement="top" content="媒体编辑仅在‘上传模式’下可用" :disabled="!mediaEditDisabled">
+              <span class="switch-tooltip">
+                <el-switch v-model="form.enable_media_edit" :disabled="mediaEditDisabled" active-text="媒体编辑" />
+              </span>
+            </el-tooltip>
+            <el-switch v-model="form.gpu_accel" active-text="GPU 加速" />
+            <el-switch v-model="form.change_md5" active-text="修改 MD5" />
+            <el-tooltip effect="dark" placement="top" content="需先开启“修改 MD5”" :disabled="form.change_md5">
+              <span class="switch-tooltip">
+                <el-switch v-model="form.random_filename" :disabled="!form.change_md5" active-text="随机文件名" />
+              </span>
+            </el-tooltip>
+          </div>
+        </el-card>
+
+        <el-card class="panel-card" shadow="never">
+          <template #header>
+            <div class="panel-head">
+              <div class="panel-title">
                 <i class="ri-chat-3-line" />
                 <span>评论规则</span>
               </div>
@@ -1502,9 +1547,13 @@ defineExpose<StrategyFormExpose>({
                 <el-col :xs="24" :sm="16">
                   <el-form-item label="模式">
                     <el-radio-group v-model="commentFilterMode" class="radio-dense" :disabled="!commentEnable">
-                      <el-radio label="owner_only">仅官方/白名单（推荐）</el-radio>
+                      <el-radio label="owner_or_linked">官方/白名单 + 绑定讨论组身份（推荐）</el-radio>
+                      <el-radio label="owner_only">仅频道官方/白名单</el-radio>
                       <el-radio label="all">所有人（慎用）</el-radio>
                     </el-radio-group>
+                    <div class="hint compact">
+                      “绑定讨论组身份”用于兼容「评论是以讨论组身份发言」的场景；“所有人”表示任何成员评论都会被搬运（风险更高）。
+                    </div>
                     <div class="hint compact">采用任务级独立本地库缓存机制，主频道配额不受评论影响。支持 FloodWait 断点续传。</div>
                   </el-form-item>
                 </el-col>
@@ -1524,9 +1573,18 @@ defineExpose<StrategyFormExpose>({
                   </el-form-item>
                 </el-col>
                 <el-col :xs="24" :sm="8">
-                  <el-form-item label="匿名管理员">
-                    <el-switch v-model="commentAllowAnonymous" inline-prompt active-text="允" inactive-text="拒" :disabled="!commentEnable" />
-                    <div class="hint compact">允许 GroupAnonymousBot</div>
+                  <el-form-item label="讨论组身份">
+                    <el-switch
+                      v-model="commentAllowAnonymous"
+                      inline-prompt
+                      active-text="允"
+                      inactive-text="拒"
+                      :disabled="!commentEnable || commentFilterMode === 'owner_or_linked'"
+                    />
+                    <div class="hint compact">
+                      <span v-if="commentFilterMode === 'owner_or_linked'">该模式默认允许「以讨论组身份发言」。</span>
+                      <span v-else>允许“以讨论组身份发言”（匿名管理员 / GroupAnonymousBot）。</span>
+                    </div>
                   </el-form-item>
                 </el-col>
               </el-row>
@@ -1826,36 +1884,8 @@ defineExpose<StrategyFormExpose>({
 	                  </template>
 	                </div>
 		              </div>
-		            </el-collapse-item>
+	            </el-collapse-item>
 	          </el-collapse>
-        </el-card>
-
-        <el-card class="panel-card" shadow="never">
-          <template #header>
-            <div class="panel-head">
-              <div class="panel-title">
-                <i class="ri-toggle-line" />
-                <span>处理开关</span>
-              </div>
-              <div class="panel-sub">Switches</div>
-            </div>
-          </template>
-
-          <div class="switch-wrap">
-            <el-switch v-model="form.keep_reply" active-text="保留回复" />
-            <el-tooltip effect="dark" placement="top" content="媒体编辑仅在‘上传模式’下可用" :disabled="!mediaEditDisabled">
-              <span class="switch-tooltip">
-                <el-switch v-model="form.enable_media_edit" :disabled="mediaEditDisabled" active-text="媒体编辑" />
-              </span>
-            </el-tooltip>
-            <el-switch v-model="form.gpu_accel" active-text="GPU 加速" />
-            <el-switch v-model="form.change_md5" active-text="修改 MD5" />
-            <el-tooltip effect="dark" placement="top" content="需先开启“修改 MD5”" :disabled="form.change_md5">
-              <span class="switch-tooltip">
-                <el-switch v-model="form.random_filename" :disabled="!form.change_md5" active-text="随机文件名" />
-              </span>
-            </el-tooltip>
-          </div>
         </el-card>
       </el-form>
     </div>
@@ -1877,18 +1907,20 @@ defineExpose<StrategyFormExpose>({
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .form-scroll {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding-right: 2px;
 }
 
 .form {
   width: 100%;
-  max-width: 100%;
-  margin: 0;
+  max-width: 1120px;
+  margin: 0 auto;
 }
 
 .form :deep(.el-form-item) {
@@ -2023,6 +2055,9 @@ defineExpose<StrategyFormExpose>({
 .actions {
   display: flex;
   justify-content: flex-end;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
 }
 
 .panel-card {
@@ -2157,9 +2192,6 @@ defineExpose<StrategyFormExpose>({
   }
   .ctrl-num {
     width: min(100%, 180px);
-  }
-  .ctrl-md {
-    width: min(100%, 320px);
   }
 }
 

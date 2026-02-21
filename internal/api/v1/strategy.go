@@ -147,9 +147,14 @@ func normalizeCommentRule(in model.CommentRule) model.CommentRule {
 	switch out.FilterMode {
 	case "whitelist":
 		out.FilterMode = "owner_only"
-	case "owner_only", "all":
+	case "owner_only", "owner_or_linked", "all":
 	default:
 		out.FilterMode = "owner_only"
+	}
+
+	// In linked mode, always allow "send as group" identity.
+	if out.FilterMode == "owner_or_linked" {
+		out.AllowAnonymous = true
 	}
 
 	// Normalize trusted user IDs (unique, >0).

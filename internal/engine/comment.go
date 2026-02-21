@@ -426,8 +426,11 @@ func shouldCloneCommentByIdentity(msg *tg.Message, sourceChannelID int64, filter
 		filterMode = "owner_only"
 	}
 
-	if filterMode != "owner_only" {
+	if filterMode != "owner_only" && filterMode != "owner_or_linked" {
 		filterMode = "owner_only"
+	}
+	if filterMode == "owner_or_linked" {
+		allowAnonymous = true
 	}
 
 	from, ok := msg.GetFromID()
@@ -508,9 +511,14 @@ func normalizeRuntimeCommentRule(in model.CommentRule) model.CommentRule {
 	switch out.FilterMode {
 	case "whitelist":
 		out.FilterMode = "owner_only"
-	case "owner_only", "all":
+	case "owner_only", "owner_or_linked", "all":
 	default:
 		out.FilterMode = "owner_only"
+	}
+
+	// In linked mode, always allow "send as group" identity.
+	if out.FilterMode == "owner_or_linked" {
+		out.AllowAnonymous = true
 	}
 
 	// Normalize IDs.
