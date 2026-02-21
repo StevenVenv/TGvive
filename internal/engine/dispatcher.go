@@ -77,8 +77,8 @@ type taskState struct {
 
 const (
 	defaultTotalMsg = 0
-	maxLogs         = 50
-	maxRespLogs     = maxLogs
+	maxLogs         = 200
+	maxRespLogs     = 100
 )
 
 func (m *TaskManager) StartTask(t model.Task) {
@@ -138,7 +138,21 @@ func (m *TaskManager) RestartTask(t model.Task) {
 	if t.ID == 0 {
 		return
 	}
+
 	m.StopTask(t.ID)
+	m.mu.Lock()
+	if st := m.states[t.ID]; st != nil {
+		st.Completed = false
+		st.Total = 0
+		st.Processed = 0
+		st.Success = 0
+		st.Fail = 0
+		st.SpeedBaseTime = time.Time{}
+		st.SpeedBaseProcessed = 0
+		st.Logs = nil
+	}
+	m.mu.Unlock()
+
 	m.StartTask(t)
 }
 
@@ -199,14 +213,8 @@ func (m *TaskManager) StopTask(taskID uint) {
 
 	st.RunID++
 	st.Status = model.TaskStatusStopped
-	st.Realtime = false
-	st.Completed = false
-	st.Processed = 0
-	st.Success = 0
-	st.Fail = 0
 	st.SpeedBaseTime = time.Time{}
-	st.SpeedBaseProcessed = 0
-	st.Logs = nil
+	st.SpeedBaseProcessed = st.Processed
 	st.appendLogLocked("任务已停止")
 }
 

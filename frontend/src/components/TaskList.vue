@@ -35,6 +35,119 @@ const logProgress = computed(() => (selectedTaskId.value ? progressMap.value[sel
 const autoScroll = ref(true)
 const logBoxRef = ref<HTMLElement | null>(null)
 
+const taskLogStorageKey = 'tgvive_task_logs_v1'
+const maxTaskLogLines = 100
+
+const taskLogCache = ref<Record<number, string[]>>({})
+let logPersistTimer: number | undefined
+
+function loadTaskLogCache(): Record<number, string[]> {
+  try {
+    if (typeof localStorage === 'undefined') return {}
+    const raw = (localStorage.getItem(taskLogStorageKey) || '').trim()
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object') return {}
+
+    const out: Record<number, string[]> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      const id = Math.floor(Number(k || 0))
+      if (!Number.isFinite(id) || id <= 0) continue
+      if (!Array.isArray(v)) continue
+      const lines = (v as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+      if (lines.length > 0) out[id] = lines.slice(-maxTaskLogLines)
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function persistTaskLogCache() {
+  try {
+    if (typeof localStorage === 'undefined') return
+    const out: Record<string, string[]> = {}
+    for (const [k, v] of Object.entries(taskLogCache.value || {})) {
+      const id = Math.floor(Number(k || 0))
+      if (!Number.isFinite(id) || id <= 0) continue
+      if (!Array.isArray(v) || v.length === 0) continue
+      out[String(id)] = v.slice(-maxTaskLogLines)
+    }
+    localStorage.setItem(taskLogStorageKey, JSON.stringify(out))
+  } catch {
+    // ignore
+  }
+}
+
+function schedulePersistLogs() {
+  if (logPersistTimer) window.clearTimeout(logPersistTimer)
+  logPersistTimer = window.setTimeout(() => {
+    logPersistTimer = undefined
+    persistTaskLogCache()
+  }, 250)
+}
+
+function mergeLogLines(existing: string[], incoming: string[]): string[] {
+  if (!Array.isArray(incoming) || incoming.length === 0) return existing
+  if (!Array.isArray(existing) || existing.length === 0) return incoming.slice(-maxTaskLogLines)
+
+  const a = existing
+  const b = incoming
+  const maxOverlap = Math.min(a.length, b.length)
+  let overlap = 0
+  for (let k = maxOverlap; k > 0; k--) {
+    let ok = true
+    for (let i = 0; i < k; i++) {
+      if (a[a.length - k + i] !== b[i]) {
+        ok = false
+        break
+      }
+    }
+    if (ok) {
+      overlap = k
+      break
+    }
+  }
+
+  let merged = overlap > 0 ? a.concat(b.slice(overlap)) : a.concat(b)
+  if (merged.length > maxTaskLogLines) merged = merged.slice(merged.length - maxTaskLogLines)
+  return merged
+}
+
+function ingestTaskLogs(taskID: number, logs: unknown) {
+  const id = Math.floor(Number(taskID || 0))
+  if (!Number.isFinite(id) || id <= 0) return
+  if (!Array.isArray(logs) || logs.length === 0) return
+
+  const incoming = (logs as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  if (incoming.length === 0) return
+
+  const prev = taskLogCache.value[id] || []
+  const merged = mergeLogLines(prev, incoming)
+  if (merged.length === prev.length && merged[merged.length - 1] === prev[prev.length - 1]) return
+
+  taskLogCache.value[id] = merged
+  schedulePersistLogs()
+}
+
+function clearTaskLogs(taskID: number) {
+  const id = Math.floor(Number(taskID || 0))
+  if (!Number.isFinite(id) || id <= 0) return
+  if (!taskLogCache.value[id]?.length) return
+  delete taskLogCache.value[id]
+  schedulePersistLogs()
+}
+
+const displayLogs = computed(() => {
+  const id = selectedTaskId.value
+  if (!id) return []
+  const cached = taskLogCache.value[id]
+  if (Array.isArray(cached) && cached.length > 0) return cached
+  const logs = logProgress.value?.logs
+  if (Array.isArray(logs) && logs.length > 0) return logs.slice(-maxTaskLogLines)
+  return []
+})
+
 const editVisible = ref(false)
 const editLoading = ref(false)
 const editSubmitting = ref(false)
@@ -190,6 +303,13 @@ async function reloadTasks() {
   loading.value = true
   try {
     tasks.value = await getTasks()
+    const keep = new Set(tasks.value.map((t) => Math.floor(Number(t?.ID || 0))).filter((v) => Number.isFinite(v) && v > 0))
+    for (const k of Object.keys(taskLogCache.value || {})) {
+      const id = Math.floor(Number(k || 0))
+      if (!Number.isFinite(id) || id <= 0) continue
+      if (!keep.has(id)) delete taskLogCache.value[id]
+    }
+    schedulePersistLogs()
     if (selectedTaskId.value > 0 && !tasks.value.some((t) => t.ID === selectedTaskId.value)) {
       selectedTaskId.value = 0
     }
@@ -214,6 +334,7 @@ async function refreshProgress() {
     for (const [k, v] of entries) {
       const id = Number(k || 0)
       if (!Number.isFinite(id) || id <= 0) continue
+      ingestTaskLogs(id, (v as any)?.logs)
       next[id] = v
     }
     progressMap.value = next
@@ -226,6 +347,7 @@ async function refreshOne(id: number) {
   if (id <= 0) return
   try {
     const p = await getTaskProgress(id)
+    ingestTaskLogs(id, (p as any)?.logs)
     progressMap.value = { ...progressMap.value, [id]: p }
   } catch {
     // best-effort
@@ -252,6 +374,7 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop' | 'restar
 
   try {
     await taskAction(task.ID, action)
+    if (action === 'restart') clearTaskLogs(task.ID)
     await reloadTasks()
     await refreshOne(task.ID)
     ElMessage.success('指令已发送')
@@ -342,6 +465,7 @@ async function removeTask(task: Task) {
 
   try {
     await deleteTask(id)
+    clearTaskLogs(id)
     ElMessage.success('已删除')
     if (selectedTaskId.value === id) selectedTaskId.value = 0
     await reloadTasks()
@@ -426,6 +550,7 @@ function stopPolling() {
 }
 
 onMounted(async () => {
+  taskLogCache.value = loadTaskLogCache()
   await reloadTasks()
   if (props.active !== false) startPolling()
 })
@@ -433,6 +558,11 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopPolling()
   stopLogPolling()
+  if (logPersistTimer) {
+    window.clearTimeout(logPersistTimer)
+    logPersistTimer = undefined
+  }
+  persistTaskLogCache()
 })
 
 watch(
@@ -455,7 +585,7 @@ watch(selectedTaskId, (id) => {
 })
 
 watch(
-  () => (logProgress.value?.logs?.length ?? 0),
+  () => displayLogs.value.length,
   async () => {
     if (!autoScroll.value) return
     await nextTick()
@@ -676,6 +806,10 @@ defineExpose({
                     <i class="ri-refresh-line" />
                     刷新
                   </el-button>
+                  <el-button size="small" @click="clearTaskLogs(selectedTask.ID)" :disabled="displayLogs.length === 0">
+                    <i class="ri-delete-bin-6-line" />
+                    清空
+                  </el-button>
                   <el-switch v-model="autoScroll" active-text="自动滚动" />
                 </el-space>
               </div>
@@ -688,13 +822,13 @@ defineExpose({
               <el-divider />
 
               <div ref="logBoxRef" class="log-console">
-                <div v-if="(logProgress?.logs?.length ?? 0) === 0" class="log-empty">
+                <div v-if="displayLogs.length === 0" class="log-empty">
                   <span v-if="selectedTask?.status === 3 && String(selectedTask?.last_error || '').trim()">
                     {{ String(selectedTask?.last_error || '').trim() }}
                   </span>
                   <span v-else>暂无日志</span>
                 </div>
-                <pre v-else class="log-pre"><code>{{ logProgress?.logs?.join('\n') }}</code></pre>
+                <pre v-else class="log-pre"><code>{{ displayLogs.join('\n') }}</code></pre>
               </div>
             </div>
           </div>
