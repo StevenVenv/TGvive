@@ -1211,7 +1211,7 @@ defineExpose<StrategyFormExpose>({
 <template>
   <div class="strategy-form">
     <div class="form-scroll" v-loading="loading">
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="small" class="form">
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-card class="panel-card" shadow="never">
           <template #header>
             <div class="panel-head">
@@ -1280,9 +1280,9 @@ defineExpose<StrategyFormExpose>({
             <div class="panel-head">
               <div class="panel-title">
                 <i class="ri-shield-flash-line" />
-                <span>风控与处理</span>
+                <span>内容过滤与风控</span>
               </div>
-              <div class="panel-sub">Anti-detect & Processing</div>
+              <div class="panel-sub">Filters</div>
             </div>
           </template>
 
@@ -1353,6 +1353,18 @@ defineExpose<StrategyFormExpose>({
             </el-col>
           </el-row>
           <div class="hint compact">仅对“文件”类型生效（非图片/音频/视频）。支持 zip 或 .zip，不区分大小写。</div>
+        </el-card>
+
+        <el-card class="panel-card" shadow="never">
+          <template #header>
+            <div class="panel-head">
+              <div class="panel-title">
+                <i class="ri-time-line" />
+                <span>调度与运行</span>
+              </div>
+              <div class="panel-sub">Schedule</div>
+            </div>
+          </template>
 
           <div class="monitor-box">
             <div class="monitor-pane">
@@ -1466,10 +1478,18 @@ defineExpose<StrategyFormExpose>({
             </el-button>
             <div class="hint">示例：10:00-11:00 配额 2；12:00-13:00 配额 4</div>
           </div>
+        </el-card>
 
-          <div class="sub-split">
-            <span>评论区设置</span>
-          </div>
+        <el-card class="panel-card" shadow="never">
+          <template #header>
+            <div class="panel-head">
+              <div class="panel-title">
+                <i class="ri-chat-3-line" />
+                <span>评论规则</span>
+              </div>
+              <div class="panel-sub">Comments</div>
+            </div>
+          </template>
 
           <el-collapse v-model="commentCollapse" class="comment-collapse">
             <el-collapse-item name="comment" title="评论区设置">
@@ -1531,10 +1551,18 @@ defineExpose<StrategyFormExpose>({
               </el-form-item>
             </el-collapse-item>
           </el-collapse>
+        </el-card>
 
-          <div class="sub-split">
-            <span>媒体加工</span>
-          </div>
+        <el-card class="panel-card" shadow="never">
+          <template #header>
+            <div class="panel-head">
+              <div class="panel-title">
+                <i class="ri-brush-line" />
+                <span>媒体水印</span>
+              </div>
+              <div class="panel-sub">Watermark</div>
+            </div>
+          </template>
 
           <el-collapse v-model="mediaCollapse" class="comment-collapse">
             <el-collapse-item name="media">
@@ -1800,10 +1828,18 @@ defineExpose<StrategyFormExpose>({
 		              </div>
 		            </el-collapse-item>
 	          </el-collapse>
+        </el-card>
 
-          <div class="sub-split">
-            <span>处理开关</span>
-          </div>
+        <el-card class="panel-card" shadow="never">
+          <template #header>
+            <div class="panel-head">
+              <div class="panel-title">
+                <i class="ri-toggle-line" />
+                <span>处理开关</span>
+              </div>
+              <div class="panel-sub">Switches</div>
+            </div>
+          </template>
 
           <div class="switch-wrap">
             <el-switch v-model="form.keep_reply" active-text="保留回复" />
@@ -1851,8 +1887,8 @@ defineExpose<StrategyFormExpose>({
 
 .form {
   width: 100%;
-  max-width: 1200px;
-  margin: 0 auto;
+  max-width: 100%;
+  margin: 0;
 }
 
 .form :deep(.el-form-item) {
@@ -1862,7 +1898,7 @@ defineExpose<StrategyFormExpose>({
 .form :deep(.el-form-item__label) {
   padding: 0 0 6px;
   line-height: 1.15;
-  color: #a6a9ad;
+  color: var(--el-text-color-regular);
 }
 
 .hint {
@@ -1990,19 +2026,19 @@ defineExpose<StrategyFormExpose>({
 }
 
 .panel-card {
-  border: 1px solid #363637;
-  border-radius: 4px;
-  background: #1e1e1e;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--tgv-card-radius, 12px);
+  background: var(--el-bg-color-overlay);
   margin-bottom: 12px;
 
   :deep(.el-card__header) {
-    padding: 10px 12px;
-    border-bottom: 1px solid #363637;
-    background: #252525;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    background: var(--el-fill-color-light);
   }
 
   :deep(.el-card__body) {
-    padding: 12px;
+    padding: 14px;
   }
 }
 
@@ -2141,13 +2177,13 @@ defineExpose<StrategyFormExpose>({
   content: '';
   height: 1px;
   flex: 1;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--el-border-color-lighter);
 }
 
 .monitor-box {
-  border: 1px solid #363637;
-  border-radius: 4px;
-  background: #252525;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--tgv-card-radius, 12px);
+  background: var(--el-fill-color-light);
   padding: 12px;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2178,12 +2214,12 @@ defineExpose<StrategyFormExpose>({
 
 .monitor-tip {
   font-size: 14px;
-  color: rgba(191, 203, 217, 0.7);
+  color: var(--el-text-color-secondary);
   cursor: pointer;
 }
 
 .monitor-tip:hover {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--el-text-color-primary);
 }
 
 .poll-mode {
@@ -2239,11 +2275,11 @@ defineExpose<StrategyFormExpose>({
 }
 
 .switch-wrap :deep(.el-switch__label) {
-  color: rgba(191, 203, 217, 0.9);
+  color: var(--el-text-color-secondary);
 }
 
 .switch-wrap :deep(.el-switch__label.is-active) {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--el-text-color-primary);
 }
 
 /* Fix: select text/placeholder in dark mode */
