@@ -168,6 +168,17 @@ function progressLine(p?: TaskProgress): string {
   return `已处理 ${processed}`
 }
 
+function hasTotal(p?: TaskProgress): boolean {
+  return Number(p?.total_msg ?? 0) > 0
+}
+
+function progressPct(p?: TaskProgress): number {
+  const pct = Number(p?.progress_pct ?? 0)
+  if (!Number.isFinite(pct) || pct <= 0) return 0
+  if (pct >= 100) return 100
+  return Math.round(pct)
+}
+
 function filteredCount(p?: TaskProgress): number {
   const processed = Number(p?.processed_cnt ?? 0)
   const success = Number(p?.success_cnt ?? 0)
@@ -563,11 +574,33 @@ defineExpose({
 
                 <el-table-column label="进度" min-width="220">
                   <template #default="{ row }">
+                    <el-tooltip placement="top" :show-after="200">
+                      <template #content>
+                        <div class="progress-tip">
+                          <div class="tip-line">状态：{{ statusText(row) }}</div>
+                          <div class="tip-line">
+                            {{ progressLine(progressMap[row.ID]) }}
+                            <template v-if="hasTotal(progressMap[row.ID])">（{{ progressPct(progressMap[row.ID]) }}%）</template>
+                          </div>
+                          <div class="tip-line">
+                            成功 {{ progressMap[row.ID]?.success_cnt ?? 0 }} / 失败 {{ progressMap[row.ID]?.fail_cnt ?? 0 }} /
+                            过滤 {{ filteredCount(progressMap[row.ID]) }}
+                          </div>
+                          <div class="tip-line">速度：{{ progressMap[row.ID]?.speed ?? '0 消息/秒' }}</div>
+                        </div>
+                      </template>
+                      <el-progress
+                        :percentage="hasTotal(progressMap[row.ID]) ? progressPct(progressMap[row.ID]) : 100"
+                        :stroke-width="10"
+                        :show-text="false"
+                        :indeterminate="!hasTotal(progressMap[row.ID])"
+                        :striped="!hasTotal(progressMap[row.ID])"
+                        :striped-flow="!hasTotal(progressMap[row.ID])"
+                      />
+                    </el-tooltip>
                     <div class="sub">
                       <el-text type="info">{{ progressLine(progressMap[row.ID]) }}</el-text>
-                      <el-text v-if="(progressMap[row.ID]?.total_msg ?? 0) > 0" type="info">
-                        {{ progressMap[row.ID]?.progress_pct ?? 0 }}%
-                      </el-text>
+                      <el-text v-if="hasTotal(progressMap[row.ID])" type="info">{{ progressPct(progressMap[row.ID]) }}%</el-text>
                       <el-text v-else type="info">未知总量</el-text>
                     </div>
                     <div class="sub">
@@ -849,6 +882,14 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.progress-tip {
+  line-height: 1.6;
+}
+
+.tip-line {
+  white-space: nowrap;
 }
 
 .peers {

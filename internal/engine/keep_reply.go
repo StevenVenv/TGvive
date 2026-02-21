@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -42,35 +43,91 @@ func clearMsgMappingCache(taskID uint) {
 }
 
 func extractReplyToSourceMsgID(msg *tg.Message) int {
+	msgID, topID := extractReplyToSourceMsgIDs(msg)
+	if msgID > 0 {
+		return msgID
+	}
+	return topID
+}
+
+func extractReplyToSourceMsgIDs(msg *tg.Message) (msgID int, topID int) {
 	if msg == nil || msg.ReplyTo == nil {
-		return 0
+		return 0, 0
 	}
 	h, ok := msg.ReplyTo.(*tg.MessageReplyHeader)
 	if !ok || h == nil {
-		return 0
+		return 0, 0
 	}
 	if mid, ok := h.GetReplyToMsgID(); ok && mid > 0 {
-		return mid
+		msgID = mid
 	}
 	if top, ok := h.GetReplyToTopID(); ok && top > 0 {
-		return top
+		topID = top
 	}
-	return 0
+	return msgID, topID
 }
 
-func buildKeepReplyInput(task model.Task, msg *tg.Message) tg.InputReplyToClass {
+func buildKeepReplyInput(ctx context.Context, task model.Task, msg *tg.Message) tg.InputReplyToClass {
 	if !task.KeepReply || task.ID == 0 || msg == nil {
 		return nil
 	}
-	srcReplyID := extractReplyToSourceMsgID(msg)
-	if srcReplyID <= 0 {
+	replyMsgID, replyTopID := extractReplyToSourceMsgIDs(msg)
+	if replyMsgID <= 0 && replyTopID <= 0 {
 		return nil
 	}
-	dstReplyID := lookupTargetMsgID(task.ID, srcReplyID)
-	if dstReplyID <= 0 {
-		return nil
+
+	// Prefer ReplyToMsgID, fallback to ReplyToTopID (album/topic/etc).
+	ids := make([]int, 0, 2)
+	if replyMsgID > 0 {
+		ids = append(ids, replyMsgID)
 	}
-	return &tg.InputReplyToMessage{ReplyToMsgID: dstReplyID}
+	if replyTopID > 0 && replyTopID != replyMsgID {
+		ids = append(ids, replyTopID)
+	}
+
+	allowRetry := false
+	if msg.ID > 0 {
+		for _, id := range ids {
+			if id > 0 && msg.ID >= id && msg.ID-id <= 50 {
+				allowRetry = true
+				break
+			}
+		}
+	}
+
+	attempts := 1
+	if allowRetry {
+		attempts = 8
+	}
+
+	for attempt := 0; attempt < attempts; attempt++ {
+		for _, srcReplyID := range ids {
+			if srcReplyID <= 0 {
+				continue
+			}
+			if dstReplyID := lookupTargetMsgID(task.ID, srcReplyID); dstReplyID > 0 {
+				return &tg.InputReplyToMessage{ReplyToMsgID: dstReplyID}
+			}
+		}
+
+		if attempt == attempts-1 {
+			break
+		}
+		if ctx == nil {
+			break
+		}
+		wait := 90*time.Millisecond + time.Duration(attempt)*35*time.Millisecond
+		if wait > 260*time.Millisecond {
+			wait = 260 * time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(wait):
+		}
+	}
+
+	return nil
 }
 
 func lookupTargetMsgID(taskID uint, srcMsgID int) int {

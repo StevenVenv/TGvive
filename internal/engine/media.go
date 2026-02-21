@@ -2,9 +2,13 @@ package engine
 
 import (
 	"context"
+	"crypto/md5"
+	crand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +61,153 @@ type mediaMeta struct {
 	MimeType   string
 	Attributes []tg.DocumentAttributeClass
 	Filename   string
+}
+
+const maxMD5DetailLogSize = 512 * 1024 * 1024 // 512MB
+
+func randIntRange(min, max int) (int, error) {
+	if min <= 0 || max < min {
+		return 0, errors.New("invalid random range")
+	}
+	n := int64(max - min + 1)
+	v, err := crand.Int(crand.Reader, big.NewInt(n))
+	if err != nil {
+		return 0, err
+	}
+	return min + int(v.Int64()), nil
+}
+
+func modifyFileMD5WithDetailLog(ctx context.Context, path string, label string, msgID int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("empty file path")
+	}
+
+	beforeSize := int64(0)
+	if fi, err := os.Stat(path); err == nil && fi != nil {
+		beforeSize = fi.Size()
+	}
+
+	fmtSize := func(n int64) string {
+		if n <= 0 {
+			return fmt.Sprintf("%dB", n)
+		}
+		return fmt.Sprintf("%dB(%.1fMB)", n, float64(n)/1024.0/1024.0)
+	}
+
+	beforeMD5 := ""
+	afterMD5 := ""
+	md5Skipped := beforeSize > maxMD5DetailLogSize
+
+	var h = md5.New()
+	if !md5Skipped {
+		if f, err := os.Open(path); err == nil && f != nil {
+			if _, err := io.Copy(h, f); err == nil {
+				beforeMD5 = hex.EncodeToString(h.Sum(nil))
+			}
+			_ = f.Close()
+		}
+	}
+
+	if err := processor.ModifyFileMD5(path); err != nil {
+		return err
+	}
+
+	afterSize := int64(0)
+	if fi, err := os.Stat(path); err == nil && fi != nil {
+		afterSize = fi.Size()
+	}
+	delta := afterSize - beforeSize
+
+	if beforeMD5 != "" && delta > 0 && delta <= 1024 {
+		if f, err := os.Open(path); err == nil && f != nil {
+			if _, err := f.Seek(-delta, io.SeekEnd); err == nil {
+				tail := make([]byte, delta)
+				if _, err := io.ReadFull(f, tail); err == nil {
+					_, _ = h.Write(tail)
+					afterMD5 = hex.EncodeToString(h.Sum(nil))
+				}
+			}
+			_ = f.Close()
+		}
+	}
+
+	base := filepath.Base(path)
+	if beforeMD5 != "" && afterMD5 != "" {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: %s md5=%s -> %s (size=%s -> %s, +%dB, msg_id=%d)", label, base, beforeMD5, afterMD5, fmtSize(beforeSize), fmtSize(afterSize), delta, msgID))
+		return nil
+	}
+
+	if md5Skipped {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: %s (跳过MD5: 文件过大) size=%s -> %s (+%dB, msg_id=%d)", label, base, fmtSize(beforeSize), fmtSize(afterSize), delta, msgID))
+		return nil
+	}
+	recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: %s size=%s -> %s (+%dB, msg_id=%d)", label, base, fmtSize(beforeSize), fmtSize(afterSize), delta, msgID))
+	return nil
+}
+
+func modifyBytesMD5WithDetailLog(ctx context.Context, in []byte, label string, name string, msgID int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "bytes"
+	}
+
+	beforeSize := int64(len(in))
+	fmtSize := func(n int64) string {
+		if n <= 0 {
+			return fmt.Sprintf("%dB", n)
+		}
+		return fmt.Sprintf("%dB(%.1fMB)", n, float64(n)/1024.0/1024.0)
+	}
+
+	beforeMD5 := ""
+	afterMD5 := ""
+	md5Skipped := beforeSize > maxMD5DetailLogSize
+
+	if !md5Skipped && len(in) > 0 {
+		sum := md5.Sum(in)
+		beforeMD5 = hex.EncodeToString(sum[:])
+	}
+
+	nBytes, err := randIntRange(8, 32)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, nBytes)
+	if _, err := crand.Read(buf); err != nil {
+		return nil, err
+	}
+	tail := hex.EncodeToString(buf) // 16..64 bytes
+
+	out := make([]byte, 0, len(in)+len(tail))
+	out = append(out, in...)
+	out = append(out, tail...)
+
+	afterSize := int64(len(out))
+	delta := afterSize - beforeSize
+
+	if !md5Skipped && len(out) > 0 {
+		sum := md5.Sum(out)
+		afterMD5 = hex.EncodeToString(sum[:])
+	}
+
+	if beforeMD5 != "" && afterMD5 != "" {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: %s md5=%s -> %s (size=%s -> %s, +%dB, msg_id=%d)", label, name, beforeMD5, afterMD5, fmtSize(beforeSize), fmtSize(afterSize), delta, msgID))
+		return out, nil
+	}
+
+	if md5Skipped {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: %s (跳过MD5: 文件过大) size=%s -> %s (+%dB, msg_id=%d)", label, name, fmtSize(beforeSize), fmtSize(afterSize), delta, msgID))
+		return out, nil
+	}
+	recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: %s size=%s -> %s (+%dB, msg_id=%d)", label, name, fmtSize(beforeSize), fmtSize(afterSize), delta, msgID))
+	return out, nil
 }
 
 func detectDocumentContentType(doc *tg.Document) string {
@@ -218,7 +369,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 		return nil, nil
 	}
 
-	replyTo := buildKeepReplyInput(task, msg)
+	replyTo := buildKeepReplyInput(ctx, task, msg)
 
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
@@ -291,8 +442,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 						}
 
 						if task.ChangeMD5 {
-							recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5(封面): %s", filepath.Base(coverUploadPath)))
-							if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
+							if err := modifyFileMD5WithDetailLog(ctx, coverUploadPath, "修改MD5(封面)", msg.ID); err != nil {
 								return nil, err
 							}
 						}
@@ -330,7 +480,16 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 		recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 		if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 			if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
-				if inputFile, uerr := uploadBytes(ctx, api, "wm.jpg", outBytes); uerr == nil && inputFile != nil {
+				wmName := fmt.Sprintf("wm_%d.jpg", msg.ID)
+				if task.ChangeMD5 {
+					updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
+					if err != nil {
+						return nil, err
+					}
+					outBytes = updated
+				}
+				if inputFile, uerr := uploadBytes(ctx, api, wmName, outBytes); uerr == nil && inputFile != nil {
+					recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%.1fMB, msg_id=%d)", wmName, float64(len(outBytes))/1024.0/1024.0, msg.ID))
 					spoiler, ttl := messageSpoilerTTL(msg)
 					uploaded := &tg.InputMediaUploadedPhoto{
 						File:       inputFile,
@@ -372,8 +531,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	}
 
 	if task.ChangeMD5 {
-		recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5: %s", filepath.Base(uploadPath)))
-		if err := processor.ModifyFileMD5(uploadPath); err != nil {
+		if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -473,7 +631,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 			break
 		}
 	}
-	replyTo := buildKeepReplyInput(task, replyCarrier)
+	replyTo := buildKeepReplyInput(ctx, task, replyCarrier)
 
 	ups := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
 	cleanups := make([]func() error, 0, len(mediaMsgs))
@@ -559,8 +717,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 							}
 
 							if task.ChangeMD5 {
-								recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5(封面): %s", filepath.Base(coverUploadPath)))
-								if err := processor.ModifyFileMD5(coverUploadPath); err != nil {
+								if err := modifyFileMD5WithDetailLog(ctx, coverUploadPath, "修改MD5(封面)", msg.ID); err != nil {
 									return nil, err
 								}
 							}
@@ -598,7 +755,16 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 			recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 			if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 				if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
-					if inputFile, uerr := uploadBytes(ctx, api, "wm.jpg", outBytes); uerr == nil && inputFile != nil {
+					wmName := fmt.Sprintf("wm_%d.jpg", msg.ID)
+					if task.ChangeMD5 {
+						updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
+						if err != nil {
+							return nil, err
+						}
+						outBytes = updated
+					}
+					if inputFile, uerr := uploadBytes(ctx, api, wmName, outBytes); uerr == nil && inputFile != nil {
+						recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%.1fMB, msg_id=%d)", wmName, float64(len(outBytes))/1024.0/1024.0, msg.ID))
 						spoiler, ttl := messageSpoilerTTL(msg)
 						uploaded := &tg.InputMediaUploadedPhoto{
 							File:       inputFile,
@@ -627,8 +793,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 		}
 
 		if task.ChangeMD5 {
-			recordTaskDetailFromCtx(ctx, fmt.Sprintf("修改MD5: %s", filepath.Base(uploadPath)))
-			if err := processor.ModifyFileMD5(uploadPath); err != nil {
+			if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
 				return nil, err
 			}
 		}

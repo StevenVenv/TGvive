@@ -347,7 +347,7 @@ func (m *TaskManager) ForwardMessagesWithFallbackResult(ctx context.Context, api
 }
 
 func (m *TaskManager) SendTextResult(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
-	replyTo := buildKeepReplyInput(task, msg)
+	replyTo := buildKeepReplyInput(ctx, task, msg)
 	upd, err := sendTextUpdates(ctx, api, peer, msg, replyTo)
 	if err != nil || upd == nil {
 		return nil, err
@@ -363,7 +363,7 @@ func (m *TaskManager) SendTextResult(ctx context.Context, api *tg.Client, msg *t
 }
 
 func (m *TaskManager) SendMediaResult(ctx context.Context, api *tg.Client, msg *tg.Message, task model.Task, peer tg.InputPeerClass) ([]int, error) {
-	replyTo := buildKeepReplyInput(task, msg)
+	replyTo := buildKeepReplyInput(ctx, task, msg)
 	upd, err := sendMediaUpdates(ctx, api, peer, msg, replyTo)
 	if err != nil || upd == nil {
 		return nil, err
@@ -403,7 +403,7 @@ func (m *TaskManager) SendAlbumResult(ctx context.Context, api *tg.Client, msgs 
 			break
 		}
 	}
-	replyTo := buildKeepReplyInput(task, replyCarrier)
+	replyTo := buildKeepReplyInput(ctx, task, replyCarrier)
 
 	upd, err := sendAlbumUpdates(ctx, api, peer, mediaMsgs, replyTo)
 	if err != nil || upd == nil {

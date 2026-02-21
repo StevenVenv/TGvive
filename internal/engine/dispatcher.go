@@ -76,9 +76,9 @@ type taskState struct {
 }
 
 const (
-	defaultTotalMsg = 2798
+	defaultTotalMsg = 0
 	maxLogs         = 50
-	maxRespLogs     = 20
+	maxRespLogs     = maxLogs
 )
 
 func (m *TaskManager) StartTask(t model.Task) {
@@ -366,12 +366,27 @@ func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
 	}
 }
 
+func (m *TaskManager) setStateTotal(taskID uint, runID uint64, total int) {
+	if m == nil || taskID == 0 || runID == 0 {
+		return
+	}
+	if total < 0 {
+		total = 0
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	st := m.states[taskID]
+	if st == nil || st.RunID != runID {
+		return
+	}
+	st.Total = total
+}
+
 func snapshotLocked(now time.Time, st *taskState) TaskProgress {
 	processed := st.Processed
 	total := st.Total
-	if total > 0 && processed > total {
-		processed = total
-	}
 	if processed < 0 {
 		processed = 0
 	}

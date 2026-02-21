@@ -52,6 +52,18 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 			}
 		}
 
+		if randomName != "" {
+			before := strings.TrimSpace(origName)
+			if before == "" {
+				before = "(empty)"
+			}
+			after := strings.TrimSpace(sanitizeFilename(randomName))
+			if after == "" {
+				after = "(empty)"
+			}
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("随机文件名: %q -> %q (msg_id=%d)", before, after, originalMsg.ID))
+		}
+
 		attrs := make([]tg.DocumentAttributeClass, 0, len(doc.Attributes)+1)
 		for _, a := range doc.Attributes {
 			if _, ok := a.(*tg.DocumentAttributeFilename); ok && randomName != "" {
@@ -71,7 +83,9 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 			if strings.TrimSpace(name) == "" {
 				name = fmt.Sprintf("doc_%d.bin", doc.ID)
 			}
-			attrs = append(attrs, &tg.DocumentAttributeFilename{FileName: sanitizeFilename(name)})
+			safeName := sanitizeFilename(name)
+			attrs = append(attrs, &tg.DocumentAttributeFilename{FileName: safeName})
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("补全文件名: %q (msg_id=%d)", safeName, originalMsg.ID))
 		}
 
 		mime := strings.TrimSpace(doc.MimeType)

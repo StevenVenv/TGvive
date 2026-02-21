@@ -32,10 +32,10 @@ func (m *TaskManager) processSingleMessageResult(ctx context.Context, api *tg.Cl
 		}
 
 		replyTo := tg.InputReplyToClass(nil)
-		if srcReplyID := extractReplyToSourceMsgID(msg); srcReplyID > 0 {
-			replyTo = buildKeepReplyInput(task, msg)
+		if replyMsgID, replyTopID := extractReplyToSourceMsgIDs(msg); replyMsgID > 0 || replyTopID > 0 {
+			replyTo = buildKeepReplyInput(ctx, task, msg)
 			if replyTo == nil {
-				recordTaskDetailFromCtx(ctx, fmt.Sprintf("保留回复: 映射缺失 reply_to=%d (msg_id=%d)", srcReplyID, msg.ID))
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("保留回复: 映射缺失 reply_to_msg=%d reply_to_top=%d (msg_id=%d)", replyMsgID, replyTopID, msg.ID))
 			}
 		}
 
@@ -147,13 +147,14 @@ func (m *TaskManager) processAlbumBatchResult(ctx context.Context, api *tg.Clien
 		for _, fm := range filtered {
 			if id := extractReplyToSourceMsgID(fm); id > 0 {
 				replyCarrier = fm
-				srcReplyID = id
+				srcReplyID = id // for backward-compatible logs
 				break
 			}
 		}
-		replyTo := buildKeepReplyInput(task, replyCarrier)
+		replyTo := buildKeepReplyInput(ctx, task, replyCarrier)
 		if srcReplyID > 0 && replyTo == nil {
-			recordTaskDetailFromCtx(ctx, fmt.Sprintf("保留回复: 映射缺失 reply_to=%d (grouped_id=%d)", srcReplyID, replyCarrier.GroupedID))
+			replyMsgID, replyTopID := extractReplyToSourceMsgIDs(replyCarrier)
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("保留回复: 映射缺失 reply_to_msg=%d reply_to_top=%d (grouped_id=%d)", replyMsgID, replyTopID, replyCarrier.GroupedID))
 		}
 
 		ids, err := m.ForwardMessagesWithFallbackResult(ctx, api, sourcePeer, filtered, task, peer, replyTo)

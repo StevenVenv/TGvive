@@ -102,6 +102,18 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 
 	quota := newTaskQuota(task)
 
+	if runID != 0 {
+		if cnt, latestID, err := getRemoteHistoryCountAndLatestID(ctx, api, sourcePeer); err == nil {
+			maxID := latestID
+			if maxID <= 0 && cnt > 0 {
+				maxID = cnt
+			}
+			if total := estimateHistoryRunTotal(order, bounds, task.HistoryCursor, maxID, task.HistoryMaxID); total > 0 {
+				m.setStateTotal(task.ID, runID, total)
+			}
+		}
+	}
+
 	// 追更: when using new->old mode, a completed task typically ends with history_cursor=1 and would not
 	// fetch new messages on restart. We use history_max_id as the boundary and catch up newest messages first.
 	if order == model.HistoryOrderNewToOld && (task.HistoryMaxID > 0 || task.HistoryCursor > 0) {
@@ -143,6 +155,105 @@ func parseHistoryBounds(task model.Task) historyBounds {
 		}
 	}
 	return b
+}
+
+func recordTaskCounters(m *TaskManager, taskID uint, runID uint64, processedDelta int, successDelta int, failDelta int) {
+	if m == nil || taskID == 0 || runID == 0 {
+		return
+	}
+	if processedDelta == 0 && successDelta == 0 && failDelta == 0 {
+		return
+	}
+	m.record(taskID, runID, 0, processedDelta, successDelta, failDelta, "")
+}
+
+func getRemoteHistoryCountAndLatestID(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass) (count int, latestID int, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	if api == nil {
+		return 0, 0, errors.New("tg api is nil")
+	}
+	if sourcePeer == nil {
+		return 0, 0, errors.New("source peer is nil")
+	}
+
+	r, err := getHistoryWithFloodWait(ctx, api, &tg.MessagesGetHistoryRequest{
+		Peer:  sourcePeer,
+		Limit: 1,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	switch v := r.(type) {
+	case *tg.MessagesChannelMessages:
+		count = v.Count
+	case *tg.MessagesMessagesSlice:
+		count = v.Count
+	}
+
+	msgs := extractTGMessages(r)
+	for _, m2 := range msgs {
+		if m2 != nil && m2.ID > latestID {
+			latestID = m2.ID
+		}
+	}
+	return count, latestID, nil
+}
+
+func estimateHistoryRunTotal(order int, bounds historyBounds, cursor int, maxID int, baselineMaxID int) int {
+	if bounds.MaxMessages > 0 {
+		return bounds.MaxMessages
+	}
+	if maxID <= 0 {
+		return 0
+	}
+
+	minID := bounds.MinID
+	if minID <= 0 {
+		minID = 1
+	}
+
+	if bounds.MaxID > 0 && bounds.MaxID < maxID {
+		maxID = bounds.MaxID
+	}
+	if maxID < minID {
+		return 0
+	}
+
+	if order == model.HistoryOrderOldToNew {
+		effCursor := cursor
+		if bounds.MinID > 0 && effCursor < bounds.MinID-1 {
+			effCursor = bounds.MinID - 1
+		}
+		if effCursor < 0 {
+			effCursor = 0
+		}
+		if effCursor >= maxID {
+			return 0
+		}
+		return maxID - effCursor
+	}
+
+	// new->old: we will process IDs in [minID, startCursor-1].
+	startCursor := cursor
+	if startCursor <= 0 {
+		startCursor = maxID + 1
+	}
+	if bounds.MaxID > 0 && startCursor > bounds.MaxID+1 {
+		startCursor = bounds.MaxID + 1
+	}
+	if startCursor <= minID {
+		return 0
+	}
+
+	baseTotal := startCursor - minID
+	catchUpExtra := 0
+	if baselineMaxID > 0 && baselineMaxID < maxID {
+		catchUpExtra = maxID - baselineMaxID
+	}
+	return baseTotal + catchUpExtra
 }
 
 func getLatestRemoteMessageID(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass) (int, error) {
@@ -399,6 +510,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 								if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 									return err
 								}
+								recordTaskCounters(m, task.ID, runID, len(group), 0, 0)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -454,6 +566,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 								if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 									return err
 								}
+								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -481,6 +594,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0)
 					processed += len(group)
 					advanced = true
 					sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -498,6 +612,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 					processed++
 					advanced = true
 					i++
@@ -510,6 +625,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 					return err
 				}
+				recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 				processed++
 				advanced = true
 				i++
@@ -526,6 +642,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 					processed++
 					advanced = true
 					i++
@@ -569,6 +686,11 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
+					failDelta := need
+					if failDelta <= 0 {
+						failDelta = 1
+					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta)
 					processed++
 					advanced = true
 					i++
@@ -600,6 +722,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 				return err
 			}
+			recordTaskCounters(m, task.ID, runID, 1, need, 0)
 			processed++
 			advanced = true
 			i++
@@ -823,6 +946,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 								if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 									return err
 								}
+								recordTaskCounters(m, task.ID, runID, len(group), 0, 0)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -877,6 +1001,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 								if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 									return err
 								}
+								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -905,6 +1030,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0)
 					processed += len(group)
 					advanced = true
 					sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -922,6 +1048,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 					processed++
 					advanced = true
 					i++
@@ -934,6 +1061,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 					return err
 				}
+				recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 				processed++
 				advanced = true
 				i++
@@ -950,6 +1078,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 					processed++
 					advanced = true
 					i++
@@ -993,6 +1122,11 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
+					failDelta := need
+					if failDelta <= 0 {
+						failDelta = 1
+					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta)
 					processed++
 					advanced = true
 					i++
@@ -1024,6 +1158,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 				return err
 			}
+			recordTaskCounters(m, task.ID, runID, 1, need, 0)
 			processed++
 			advanced = true
 			i++
@@ -1237,6 +1372,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 								if err := persistHistoryCursor(task.ID, cursor); err != nil {
 									return err
 								}
+								recordTaskCounters(m, task.ID, runID, len(group), 0, 0)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1291,6 +1427,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 								if err := persistHistoryCursor(task.ID, cursor); err != nil {
 									return err
 								}
+								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1318,6 +1455,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0)
 					processed += len(group)
 					advanced = true
 					sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1334,6 +1472,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 					processed++
 					advanced = true
 					i++
@@ -1346,6 +1485,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				if err := persistHistoryCursor(task.ID, cursor); err != nil {
 					return err
 				}
+				recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 				processed++
 				advanced = true
 				i++
@@ -1362,6 +1502,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
 					processed++
 					advanced = true
 					i++
@@ -1405,6 +1546,11 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
+					failDelta := need
+					if failDelta <= 0 {
+						failDelta = 1
+					}
+					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta)
 					processed++
 					advanced = true
 					i++
@@ -1436,6 +1582,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {
 				return err
 			}
+			recordTaskCounters(m, task.ID, runID, 1, need, 0)
 			processed++
 			advanced = true
 			i++
