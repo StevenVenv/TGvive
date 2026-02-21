@@ -6,7 +6,7 @@ import "sync"
 // It is intended for streaming copy (io.CopyBuffer).
 type BufferPool struct {
 	size int
-	pool sync.Pool // stores []byte
+	pool sync.Pool // stores *[]byte
 }
 
 func NewBufferPool(size int) *BufferPool {
@@ -15,7 +15,8 @@ func NewBufferPool(size int) *BufferPool {
 	}
 	bp := &BufferPool{size: size}
 	bp.pool.New = func() any {
-		return make([]byte, bp.size)
+		b := make([]byte, bp.size)
+		return &b
 	}
 	return bp
 }
@@ -27,25 +28,36 @@ func (p *BufferPool) Size() int {
 	return p.size
 }
 
-func (p *BufferPool) Get() []byte {
+func (p *BufferPool) Get() *[]byte {
 	if p == nil || p.size <= 0 {
-		return make([]byte, 32*1024)
+		b := make([]byte, 32*1024)
+		return &b
 	}
-	b, ok := p.pool.Get().([]byte)
-	if !ok || cap(b) < p.size {
-		return make([]byte, p.size)
+
+	b, ok := p.pool.Get().(*[]byte)
+	if !ok || b == nil {
+		nb := make([]byte, p.size)
+		return &nb
 	}
-	return b[:p.size]
+
+	if cap(*b) < p.size {
+		*b = make([]byte, p.size)
+	} else {
+		*b = (*b)[:p.size]
+	}
+	return b
 }
 
-func (p *BufferPool) Put(b []byte) {
-	if p == nil || p.size <= 0 || b == nil {
+func (p *BufferPool) Put(b *[]byte) {
+	if p == nil || p.size <= 0 || b == nil || *b == nil {
 		return
 	}
-	if cap(b) < p.size {
+	if cap(*b) < p.size {
 		return
 	}
-	p.pool.Put(b[:p.size])
+
+	*b = (*b)[:p.size]
+	p.pool.Put(b)
 }
 
 var DefaultBufferPool = NewBufferPool(32 * 1024)

@@ -50,8 +50,9 @@ func CopyWithPool(ctx context.Context, dst io.Writer, src io.Reader, pool *Buffe
 		return 0, io.ErrClosedPipe
 	}
 
-	buf := pool.Get()
-	defer pool.Put(buf)
+	bufp := pool.Get()
+	defer pool.Put(bufp)
+	buf := *bufp
 
 	return io.CopyBuffer(ctxWriter{ctx: ctx, w: dst}, ctxReader{ctx: ctx, r: src}, buf)
 }

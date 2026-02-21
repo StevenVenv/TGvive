@@ -92,9 +92,10 @@ func (m *TaskManager) TransferMediaStream(ctx context.Context, api *tg.Client, s
 	}
 
 	act := "流式传输"
-	if spec.meta.Kind == mediaKindPhoto {
+	switch spec.meta.Kind {
+	case mediaKindPhoto:
 		act = "流式传输图片"
-	} else if spec.meta.Kind == mediaKindDocument {
+	case mediaKindDocument:
 		act = "流式传输文件"
 	}
 	if msg.ID > 0 {
