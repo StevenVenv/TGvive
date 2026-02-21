@@ -10,6 +10,7 @@ import (
 
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
+	"my-go-server/pkg/retry"
 
 	"github.com/gotd/td/pool"
 	"github.com/gotd/td/telegram/message"
@@ -1597,11 +1598,19 @@ func (m *TaskManager) cloneHistoryNewToOld(
 }
 
 func processWithRetry(ctx context.Context, fn func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if fn == nil {
+		return nil
+	}
+
 	var last error
-	for attempt := 0; attempt < defaultProcessRetries; attempt++ {
+	for attempt := 1; attempt <= defaultProcessRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
 		err := fn()
 		if err == nil {
 			return nil
@@ -1610,13 +1619,45 @@ func processWithRetry(ctx context.Context, fn func() error) error {
 			return nil
 		}
 		last = err
+
+		// Telegram FLOOD_WAIT_X: gotd helper sleeps the required seconds.
 		if ok, _ := tgerr.FloodWait(ctx, err); ok {
 			continue
 		}
-		if attempt < defaultProcessRetries-1 {
-			sleepRandom(ctx, defaultRetryDelayMin, defaultRetryDelayMax)
+
+		if attempt >= defaultProcessRetries {
+			break
 		}
+
+		// Stop retrying on non-retryable RPC "business" errors (e.g. 400).
+		if rpcErr, ok := tgerr.As(err); ok && rpcErr != nil {
+			// 4xx except 420 (FLOOD_WAIT) is usually non-retryable.
+			if rpcErr.Code >= 400 && rpcErr.Code < 500 && rpcErr.Code != 420 {
+				break
+			}
+		}
+
+		// Retry only on likely transient network/server errors.
+		retryable := retry.IsRetryableNetErr(err)
+		if !retryable {
+			if rpcErr, ok := tgerr.As(err); ok && rpcErr != nil {
+				if rpcErr.Code >= 500 || rpcErr.Code == 420 {
+					retryable = true
+				}
+				if rpcErr.IsOneOf("RPC_CALL_FAIL", "TIMEOUT", "INTERNAL", "SERVER_ERROR", "SERVICE_UNAVAILABLE") {
+					retryable = true
+				}
+			}
+		}
+		if !retryable {
+			break
+		}
+
+		// Exponential backoff + jitter.
+		wait := retry.WithJitter(retry.Backoff(attempt, 2*time.Second, 20*time.Second), 0.2)
+		_ = retry.Sleep(ctx, wait)
 	}
+
 	return last
 }
 

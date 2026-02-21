@@ -9,13 +9,16 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
+	"my-go-server/pkg/retry"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
 )
 
@@ -1110,31 +1113,7 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 	rt.startedAt = time.Now()
 	rt.mu.Unlock()
 
-	go func() {
-		err := client.Run(runCtx, func(ctx context.Context) error {
-			status, err := client.Auth().Status(ctx)
-			if err != nil {
-				rt.finishStart(err, ready)
-				return err
-			}
-			if !status.Authorized {
-				err := errors.New("telegram 未授权：请先运行 cmd/auth_tool 登录或使用 /api/v1/tg/qr 扫码生成 session 文件")
-				rt.finishStart(err, ready)
-				return err
-			}
-
-			rt.finishStart(nil, ready)
-			<-ctx.Done()
-			return ctx.Err()
-		})
-
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			rt.finishStart(err, ready)
-			if global.Logger != nil {
-				global.Logger.Error("telegram runtime stopped", zap.String("session", sessionPath), zap.Error(err))
-			}
-		}
-	}()
+	go rt.runWithReconnect(runCtx, client, sessionPath, ready)
 
 	select {
 	case <-ctx.Done():
@@ -1146,6 +1125,124 @@ func (rt *telegramRuntime) ensureStarted(ctx context.Context, m *TaskManager, ap
 	startErr := rt.startErr
 	rt.mu.Unlock()
 	return startErr
+}
+
+func (rt *telegramRuntime) runWithReconnect(runCtx context.Context, client *telegram.Client, sessionPath string, ready chan struct{}) {
+	if rt == nil || client == nil {
+		return
+	}
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+
+	readyPublished := atomic.Bool{}
+	attempt := 0
+
+	for {
+		if err := runCtx.Err(); err != nil {
+			if !readyPublished.Load() {
+				rt.finishStart(err, ready)
+			}
+			return
+		}
+
+		err := client.Run(runCtx, func(ctx context.Context) error {
+			status, serr := client.Auth().Status(ctx)
+			if serr != nil {
+				return serr
+			}
+			if !status.Authorized {
+				return errors.New("telegram 未授权：请先运行 cmd/auth_tool 登录或使用 /api/v1/tg/qr 扫码生成 session 文件")
+			}
+
+			// Reset backoff after we successfully establish a session.
+			attempt = 0
+
+			if !readyPublished.Load() {
+				readyPublished.Store(true)
+				rt.finishStart(nil, ready)
+			}
+
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+		if runCtx.Err() != nil {
+			return
+		}
+
+		// Ignore normal shutdown.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+
+		// If we haven't ever reached a ready state, decide whether to keep retrying.
+		if !readyPublished.Load() {
+			if isRetryableTelegramRuntimeErr(err) {
+				attempt++
+				wait := retry.WithJitter(retry.Backoff(attempt, 2*time.Second, 45*time.Second), 0.25)
+				if global.Logger != nil {
+					global.Logger.Warn(
+						"telegram runtime start failed, retrying",
+						zap.String("session", sessionPath),
+						zap.Int("attempt", attempt),
+						zap.Duration("wait", wait),
+						zap.Error(err),
+					)
+				}
+				_ = retry.Sleep(runCtx, wait)
+				continue
+			}
+
+			// Fatal on start.
+			rt.finishStart(err, ready)
+			if global.Logger != nil {
+				global.Logger.Error("telegram runtime start failed", zap.String("session", sessionPath), zap.Error(err))
+			}
+			return
+		}
+
+		// Runtime was ready before: attempt reconnect on transient errors.
+		if isRetryableTelegramRuntimeErr(err) {
+			attempt++
+			wait := retry.WithJitter(retry.Backoff(attempt, 2*time.Second, 60*time.Second), 0.3)
+			if global.Logger != nil {
+				global.Logger.Warn(
+					"telegram runtime stopped, reconnecting",
+					zap.String("session", sessionPath),
+					zap.Int("attempt", attempt),
+					zap.Duration("wait", wait),
+					zap.Error(err),
+				)
+			}
+			_ = retry.Sleep(runCtx, wait)
+			continue
+		}
+
+		if global.Logger != nil {
+			global.Logger.Error("telegram runtime stopped (fatal)", zap.String("session", sessionPath), zap.Error(err))
+		}
+		return
+	}
+}
+
+func isRetryableTelegramRuntimeErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if retry.IsRetryableNetErr(err) {
+		return true
+	}
+	// Telegram RPC/server-side errors (best-effort).
+	if rpcErr, ok := tgerr.As(err); ok && rpcErr != nil {
+		if rpcErr.Code >= 500 || rpcErr.Code == 420 {
+			return true
+		}
+		if rpcErr.IsOneOf("RPC_CALL_FAIL", "TIMEOUT", "INTERNAL", "SERVER_ERROR", "SERVICE_UNAVAILABLE") {
+			return true
+		}
+	}
+	return false
 }
 
 func (rt *telegramRuntime) finishStart(err error, ready chan struct{}) {

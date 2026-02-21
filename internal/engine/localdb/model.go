@@ -31,13 +31,18 @@ type LocalMsgMapping struct {
 type LocalComment struct {
 	ID uint `gorm:"primaryKey"`
 
-	SourcePostID int   `gorm:"not null;index"` // source linked-chat discussion root msg id
-	CommentMsgID int   `gorm:"not null;uniqueIndex"`
-	GroupedID    int64 `gorm:"not null;default:0;index"`
+	// SourcePostID is the source linked-chat discussion root msg id.
+	// Composite index optimizes consumer scan:
+	//   WHERE source_post_id=? AND is_forwarded=? ORDER BY comment_msg_id ASC LIMIT N
+	SourcePostID int `gorm:"not null;index:idx_comment_pending,priority:1"`
+
+	CommentMsgID int `gorm:"not null;uniqueIndex;index:idx_comment_pending,priority:3"`
+
+	GroupedID int64 `gorm:"not null;default:0;index"`
 
 	LightPayload datatypes.JSON `gorm:"type:json"`
 
-	IsForwarded bool `gorm:"not null;default:false;index"`
+	IsForwarded bool `gorm:"not null;default:false;index:idx_comment_pending,priority:2"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
