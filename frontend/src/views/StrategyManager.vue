@@ -232,9 +232,11 @@ function normalizeFileExtList(input: any): string[] {
 
 function normalizeCommentRule(input: any, enable: boolean) {
   const raw = input && typeof input === 'object' ? input : {}
-  const filter_mode = String((raw as any).filter_mode ?? 'owner_only')
+  const rawFilterMode = String((raw as any).filter_mode ?? 'owner_only')
     .trim()
     .toLowerCase()
+  const filter_mode =
+    rawFilterMode === 'all' ? 'all' : rawFilterMode === 'owner_or_linked' ? 'owner_or_linked' : 'owner_only'
 
   const seenIDs = new Set<number>()
   const trusted_user_ids: number[] = []
@@ -276,9 +278,9 @@ function normalizeCommentRule(input: any, enable: boolean) {
 
   const out = {
     enable: Boolean(enable),
-    filter_mode: filter_mode === 'all' ? 'all' : 'owner_only',
+    filter_mode,
     trusted_user_ids,
-    allow_anonymous: Boolean((raw as any).allow_anonymous),
+    allow_anonymous: filter_mode === 'owner_or_linked' ? true : Boolean((raw as any).allow_anonymous),
     allowed_types,
     block_keywords,
   }
@@ -427,6 +429,7 @@ async function reload() {
 defineExpose({ reload })
 
 async function submitCreate() {
+  createFormRef.value?.syncToModel?.()
   const ok = await createFormRef.value?.validate?.()
   if (!ok) return
 
@@ -470,6 +473,7 @@ watch(dialogVisible, (v) => {
 async function submitEdit() {
   const id = Number(editModel.ID || 0)
   if (!id) return
+  editFormRef.value?.syncToModel?.()
   const ok = await editFormRef.value?.validate?.()
   if (!ok) return
 

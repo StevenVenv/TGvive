@@ -49,6 +49,7 @@ export type StrategyFormModel = {
 export type StrategyFormExpose = {
   validate: () => Promise<boolean>
   clearValidate: () => void
+  syncToModel: () => void
 }
 
 const props = withDefaults(
@@ -1149,7 +1150,7 @@ function clearValidate() {
   formRef.value?.clearValidate()
 }
 
-async function submit() {
+function syncToModel() {
   // keep legacy + new fields in sync
   form.value.enable_realtime = enablePush.value
   form.value.realtime = enablePush.value
@@ -1208,6 +1209,10 @@ async function submit() {
 
     ;(form.value as any).watermark_rule = r
   }
+}
+
+async function submit() {
+  syncToModel()
 
   const ok = await validate()
   if (!ok) return
@@ -1221,6 +1226,7 @@ function cancel() {
 defineExpose<StrategyFormExpose>({
   validate,
   clearValidate,
+  syncToModel,
 })
 </script>
 
