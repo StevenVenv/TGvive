@@ -2296,6 +2296,32 @@ defineExpose<StrategyFormExpose>({
 
 .schedule-table {
   width: 100%;
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: color-mix(in srgb, var(--el-fill-color-light) 70%, transparent);
+  border-radius: var(--tgv-card-radius, 12px);
+}
+
+.schedule-table :deep(.el-table__inner-wrapper) {
+  border-radius: var(--tgv-card-radius, 12px);
+  overflow: hidden;
+}
+
+.schedule-table :deep(.el-table__header-wrapper) {
+  background: var(--el-table-header-bg-color);
+}
+
+.schedule-table :deep(.el-table__header-wrapper th.el-table__cell) {
+  background: transparent;
+}
+
+.schedule-table :deep(.el-time-editor),
+.schedule-table :deep(.el-input-number) {
+  width: 100%;
+}
+
+.schedule-table :deep(.el-table__body-wrapper) {
+  -webkit-overflow-scrolling: touch;
 }
 
 .schedule-actions {
