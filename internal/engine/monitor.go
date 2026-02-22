@@ -593,7 +593,10 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 }
 
 func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
-	if t == nil || m == nil || api == nil || t.TargetPeer == nil || t.Ctx == nil {
+	if t == nil || m == nil || api == nil || t.Ctx == nil {
+		return
+	}
+	if t.TargetPeer == nil && strings.TrimSpace(t.Task.PublishType) != "bot" {
 		return
 	}
 
@@ -1355,7 +1358,7 @@ func (m *TaskManager) registerRealtimeTask(tgRT *telegramRuntime, cfg runtimeTas
 	if sourceChannelID == 0 {
 		return errors.New("source_channel_id is required")
 	}
-	if cfg.TargetPeer == nil {
+	if cfg.TargetPeer == nil && strings.TrimSpace(cfg.Task.PublishType) != "bot" {
 		return errors.New("target peer is nil")
 	}
 	if cfg.Ctx == nil {
@@ -1482,7 +1485,10 @@ func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Mess
 	if m == nil || rt == nil || msg == nil {
 		return false
 	}
-	if rt.TargetPeer == nil || rt.Ctx == nil {
+	if rt.Ctx == nil {
+		return false
+	}
+	if rt.TargetPeer == nil && strings.TrimSpace(rt.Task.PublishType) != "bot" {
 		return false
 	}
 	if rt.Task.ID == 0 || msg.ID <= 0 {

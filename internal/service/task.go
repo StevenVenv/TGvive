@@ -99,6 +99,9 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	src := strings.TrimSpace(payload.SourceURL)
 	dst := strings.TrimSpace(payload.TargetURL)
 	exec := strings.TrimSpace(payload.ExecuteBy)
+	pubType := strings.TrimSpace(payload.PublishType)
+	pubSession := strings.TrimSpace(payload.PublishSessionKey)
+	pubBotID := strings.TrimSpace(payload.PublishBotID)
 
 	if src != "" && strings.TrimSpace(task.SourceURL) != src {
 		task.SourceURL = src
@@ -109,6 +112,22 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	}
 	if exec != "" {
 		task.ExecuteBy = exec
+	}
+	switch pubType {
+	case "":
+		task.PublishType = ""
+		task.PublishSessionKey = ""
+		task.PublishBotID = ""
+	case "account":
+		task.PublishType = "account"
+		task.PublishSessionKey = pubSession
+		task.PublishBotID = ""
+	case "bot":
+		task.PublishType = "bot"
+		task.PublishSessionKey = ""
+		task.PublishBotID = pubBotID
+	default:
+		// Ignore invalid publish_type to avoid breaking existing tasks.
 	}
 
 	if payload.StrategyID != 0 {

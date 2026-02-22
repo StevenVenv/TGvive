@@ -22,19 +22,30 @@ type TaskActionReq struct {
 }
 
 type CreateTaskReq struct {
-	SourceURL        string `json:"source_url" binding:"required"`
-	TargetURL        string `json:"target_url" binding:"required"`
-	SessionKey       string `json:"session_key" binding:"required"`
-	StrategyID       uint   `json:"strategy_id" binding:"required"`
-	KeywordProfileID uint   `json:"keyword_profile_id"`
+	SourceURL  string `json:"source_url" binding:"required"`
+	TargetURL  string `json:"target_url" binding:"required"`
+	SessionKey string `json:"session_key" binding:"required"` // crawler
+
+	// PublishType: ""(same as crawler) | account | bot | same(alias)
+	PublishType       string `json:"publish_type" binding:"omitempty,oneof=account bot same"`
+	PublishSessionKey string `json:"publish_session_key"`
+	PublishBotID      string `json:"publish_bot_id"`
+
+	StrategyID       uint `json:"strategy_id" binding:"required"`
+	KeywordProfileID uint `json:"keyword_profile_id"`
 }
 
 type UpdateTaskReq struct {
-	SourceURL        string `json:"source_url" binding:"required"`
-	TargetURL        string `json:"target_url" binding:"required"`
-	SessionKey       string `json:"session_key" binding:"required"`
-	StrategyID       uint   `json:"strategy_id" binding:"required"`
-	KeywordProfileID uint   `json:"keyword_profile_id"`
+	SourceURL  string `json:"source_url" binding:"required"`
+	TargetURL  string `json:"target_url" binding:"required"`
+	SessionKey string `json:"session_key" binding:"required"` // crawler
+
+	PublishType       string `json:"publish_type" binding:"omitempty,oneof=account bot same"`
+	PublishSessionKey string `json:"publish_session_key"`
+	PublishBotID      string `json:"publish_bot_id"`
+
+	StrategyID       uint `json:"strategy_id" binding:"required"`
+	KeywordProfileID uint `json:"keyword_profile_id"`
 }
 
 // CreateTask 创建转发任务
@@ -54,9 +65,49 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	req.TargetURL = strings.TrimSpace(req.TargetURL)
 	req.SessionKey = strings.TrimSpace(req.SessionKey)
+	req.PublishType = strings.TrimSpace(req.PublishType)
+	req.PublishSessionKey = strings.TrimSpace(req.PublishSessionKey)
+	req.PublishBotID = strings.TrimSpace(req.PublishBotID)
 
 	if req.SourceURL == "" || req.TargetURL == "" || req.SessionKey == "" || req.StrategyID == 0 {
 		app.FailWithMsg("创建参数不完整", c)
+		return
+	}
+
+	// Canonicalize publish config.
+	if req.PublishType == "same" {
+		req.PublishType = ""
+	}
+	switch req.PublishType {
+	case "":
+		req.PublishSessionKey = ""
+		req.PublishBotID = ""
+	case "account":
+		if req.PublishSessionKey == "" {
+			app.FailWithMsg("发布账号不能为空", c)
+			return
+		}
+		if req.PublishSessionKey == req.SessionKey {
+			req.PublishType = ""
+			req.PublishSessionKey = ""
+			req.PublishBotID = ""
+		}
+		req.PublishBotID = ""
+	case "bot":
+		if req.PublishBotID == "" {
+			app.FailWithMsg("发布 Bot 不能为空", c)
+			return
+		}
+		if bot, ok := global.BotStore.Get(req.PublishBotID); !ok {
+			app.FailWithMsg("发布 Bot 不存在", c)
+			return
+		} else if bot.Disabled {
+			app.FailWithMsg("发布 Bot 已禁用", c)
+			return
+		}
+		req.PublishSessionKey = ""
+	default:
+		app.FailWithMsg("发布类型不支持", c)
 		return
 	}
 
@@ -80,12 +131,15 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 	}
 
 	task := model.Task{
-		UserID:           userID,
-		SourceURL:        req.SourceURL,
-		TargetURL:        req.TargetURL,
-		ExecuteBy:        req.SessionKey,
-		StrategyID:       req.StrategyID,
-		KeywordProfileID: req.KeywordProfileID,
+		UserID:            userID,
+		SourceURL:         req.SourceURL,
+		TargetURL:         req.TargetURL,
+		ExecuteBy:         req.SessionKey,
+		PublishType:       req.PublishType,
+		PublishSessionKey: req.PublishSessionKey,
+		PublishBotID:      req.PublishBotID,
+		StrategyID:        req.StrategyID,
+		KeywordProfileID:  req.KeywordProfileID,
 
 		CloneMode:     strategy.CloneMode,
 		ContentTypes:  types,
@@ -115,6 +169,10 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 	}
 
 	if task.CloneMode == 0 {
+		task.CloneMode = 3
+	}
+	if task.PublishType != "" {
+		// Separated publish requires download+upload.
 		task.CloneMode = 3
 	}
 	if task.ScopeType == 0 {
@@ -290,9 +348,48 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	req.TargetURL = strings.TrimSpace(req.TargetURL)
 	req.SessionKey = strings.TrimSpace(req.SessionKey)
+	req.PublishType = strings.TrimSpace(req.PublishType)
+	req.PublishSessionKey = strings.TrimSpace(req.PublishSessionKey)
+	req.PublishBotID = strings.TrimSpace(req.PublishBotID)
 
 	if req.SourceURL == "" || req.TargetURL == "" || req.SessionKey == "" || req.StrategyID == 0 {
 		app.FailWithMsg("更新参数不完整", c)
+		return
+	}
+
+	if req.PublishType == "same" {
+		req.PublishType = ""
+	}
+	switch req.PublishType {
+	case "":
+		req.PublishSessionKey = ""
+		req.PublishBotID = ""
+	case "account":
+		if req.PublishSessionKey == "" {
+			app.FailWithMsg("发布账号不能为空", c)
+			return
+		}
+		if req.PublishSessionKey == req.SessionKey {
+			req.PublishType = ""
+			req.PublishSessionKey = ""
+			req.PublishBotID = ""
+		}
+		req.PublishBotID = ""
+	case "bot":
+		if req.PublishBotID == "" {
+			app.FailWithMsg("发布 Bot 不能为空", c)
+			return
+		}
+		if bot, ok := global.BotStore.Get(req.PublishBotID); !ok {
+			app.FailWithMsg("发布 Bot 不存在", c)
+			return
+		} else if bot.Disabled {
+			app.FailWithMsg("发布 Bot 已禁用", c)
+			return
+		}
+		req.PublishSessionKey = ""
+	default:
+		app.FailWithMsg("发布类型不支持", c)
 		return
 	}
 
@@ -316,11 +413,14 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	}
 
 	payload := model.Task{
-		SourceURL:        req.SourceURL,
-		TargetURL:        req.TargetURL,
-		ExecuteBy:        req.SessionKey,
-		StrategyID:       req.StrategyID,
-		KeywordProfileID: req.KeywordProfileID,
+		SourceURL:         req.SourceURL,
+		TargetURL:         req.TargetURL,
+		ExecuteBy:         req.SessionKey,
+		PublishType:       req.PublishType,
+		PublishSessionKey: req.PublishSessionKey,
+		PublishBotID:      req.PublishBotID,
+		StrategyID:        req.StrategyID,
+		KeywordProfileID:  req.KeywordProfileID,
 
 		CloneMode:     strategy.CloneMode,
 		ContentTypes:  types,
@@ -350,6 +450,9 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	}
 
 	if payload.CloneMode == 0 {
+		payload.CloneMode = 3
+	}
+	if payload.PublishType != "" {
 		payload.CloneMode = 3
 	}
 	if payload.ScopeType == 0 {

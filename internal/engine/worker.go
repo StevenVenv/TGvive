@@ -52,7 +52,82 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	}
 
 	task := t
-	sourcePeer, targetPeer, sourceChannelID, err := m.SetupTaskPeers(ctx, api, &task)
+
+	// Resolve publisher runtime (account/bot).
+	publishType := strings.TrimSpace(task.PublishType)
+	var publishAPI *tg.Client
+	var pubRuntime *taskPublisherRuntime
+
+	switch publishType {
+	case "":
+		publishAPI = api
+	case "account":
+		pubKey := strings.TrimSpace(task.PublishSessionKey)
+		if pubKey == "" {
+			msg := "发布账号不能为空 (publish_session_key is empty)"
+			m.record(taskID, runID, 0, 0, 0, 1, msg)
+			m.setStateStatus(taskID, runID, model.TaskStatusError)
+			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			return
+		}
+		pubRT, err := m.ensureTelegramForTask(ctx, model.Task{ExecuteBy: pubKey})
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			msg := "初始化发布账号失败: " + err.Error()
+			m.record(taskID, runID, 0, 0, 0, 1, msg)
+			m.setStateStatus(taskID, runID, model.TaskStatusError)
+			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			return
+		}
+		if pubRT == nil || pubRT.api == nil {
+			msg := "初始化发布账号失败: tg api is nil"
+			m.record(taskID, runID, 0, 0, 0, 1, msg)
+			m.setStateStatus(taskID, runID, model.TaskStatusError)
+			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			return
+		}
+		publishAPI = pubRT.api
+	case "bot":
+		botID := strings.TrimSpace(task.PublishBotID)
+		bot, ok := global.BotStore.Get(botID)
+		if !ok {
+			msg := "发布 Bot 不存在"
+			m.record(taskID, runID, 0, 0, 0, 1, msg)
+			m.setStateStatus(taskID, runID, model.TaskStatusError)
+			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			return
+		}
+		if bot.Disabled {
+			msg := "发布 Bot 已禁用"
+			m.record(taskID, runID, 0, 0, 0, 1, msg)
+			m.setStateStatus(taskID, runID, model.TaskStatusError)
+			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			return
+		}
+		chatID, err := resolveBotChatID(task.TargetURL)
+		if err != nil {
+			msg := "解析 Bot 目标失败: " + err.Error()
+			m.record(taskID, runID, 0, 0, 0, 1, msg)
+			m.setStateStatus(taskID, runID, model.TaskStatusError)
+			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			return
+		}
+		pubRuntime = &taskPublisherRuntime{
+			Kind:   publisherKindBot,
+			Bot:    bot,
+			ChatID: chatID,
+		}
+	default:
+		msg := "发布类型不支持: " + publishType
+		m.record(taskID, runID, 0, 0, 0, 1, msg)
+		m.setStateStatus(taskID, runID, model.TaskStatusError)
+		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+		return
+	}
+
+	sourcePeer, targetPeer, sourceChannelID, err := m.SetupTaskPeers(ctx, api, publishAPI, &task)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -63,6 +138,25 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
 		return
 	}
+	// Publisher runtime for MTProto needs resolved target peer (publisher access-hash).
+	if pubRuntime == nil && publishType == "account" {
+		pubRuntime = &taskPublisherRuntime{
+			Kind: publisherKindMTProto,
+			API:  publishAPI,
+			Peer: targetPeer,
+		}
+	}
+
+	if pubRuntime != nil {
+		m.setPublisher(taskID, pubRuntime)
+		defer m.clearPublisher(taskID)
+		m.record(taskID, runID, 0, 0, 0, 0, "分开发送已启用: 发布端="+pubRuntime.describe())
+		if task.CloneMode != 3 {
+			m.record(taskID, runID, 0, 0, 0, 0, "分开发送模式强制使用下载上传(CloneMode=3)")
+			task.CloneMode = 3
+		}
+	}
+
 	if task.CloneMode != 3 {
 		task.EnableMediaEdit = false
 	}
@@ -93,61 +187,66 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 	var commentCfg *commentPipelineConfig
 	{
-		st := ResolveRuntimeStrategy(task)
-		_, enabled, _ := resolveCommentRule(task, st)
-		if enabled {
-			srcCh, okSrc := sourcePeer.(*tg.InputPeerChannel)
-			dstCh, okDst := targetPeer.(*tg.InputPeerChannel)
-			if !okSrc || srcCh == nil || srcCh.ChannelID == 0 {
-				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 源不是频道 (已忽略)")
-			} else if !okDst || dstCh == nil || dstCh.ChannelID == 0 {
-				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 目标不是频道 (已忽略)")
-			} else {
-				srcLinked, err := tgRT.ensureLinkedChat(ctx, api, srcCh)
-				if err != nil {
-					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取源关联群失败: "+err.Error()+" (已忽略)")
-				} else if srcLinked == nil || srcLinked.LinkedChatID == 0 || srcLinked.Peer == nil {
-					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 源频道未配置关联讨论组")
+		// Comment mirroring currently only supports same MTProto session for both crawling and publishing.
+		if pubRuntime != nil {
+			m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 分开发送模式暂不支持")
+		} else {
+			st := ResolveRuntimeStrategy(task)
+			_, enabled, _ := resolveCommentRule(task, st)
+			if enabled {
+				srcCh, okSrc := sourcePeer.(*tg.InputPeerChannel)
+				dstCh, okDst := targetPeer.(*tg.InputPeerChannel)
+				if !okSrc || srcCh == nil || srcCh.ChannelID == 0 {
+					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 源不是频道 (已忽略)")
+				} else if !okDst || dstCh == nil || dstCh.ChannelID == 0 {
+					m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 目标不是频道 (已忽略)")
 				} else {
-					dstLinked, err := tgRT.ensureLinkedChat(ctx, api, dstCh)
+					srcLinked, err := tgRT.ensureLinkedChat(ctx, api, srcCh)
 					if err != nil {
-						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取目标关联群失败: "+err.Error()+" (已忽略)")
-					} else if dstLinked == nil || dstLinked.LinkedChatID == 0 || dstLinked.Peer == nil {
-						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 目标频道未配置关联讨论组")
+						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取源关联群失败: "+err.Error()+" (已忽略)")
+					} else if srcLinked == nil || srcLinked.LinkedChatID == 0 || srcLinked.Peer == nil {
+						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 源频道未配置关联讨论组")
 					} else {
-						commentCfg = &commentPipelineConfig{
-							Enabled: true,
-
-							SourceChannelID: sourceChannelID,
-							TargetChannelID: dstCh.ChannelID,
-
-							SourcePeer: srcCh,
-							TargetPeer: dstCh,
-
-							SourceLinkedChatID: srcLinked.LinkedChatID,
-							TargetLinkedChatID: dstLinked.LinkedChatID,
-
-							SourceLinkedPeer: srcLinked.Peer,
-							TargetLinkedPeer: dstLinked.Peer,
-						}
-
-						// Open task localdb (SQLite) for comment mirroring v2.
-						db := localdb.Default.Get(taskID)
-						if db == nil {
-							if _, path, err := localdb.Default.Open(taskID); err != nil {
-								commentCfg = nil
-								m.record(taskID, runID, 0, 0, 0, 0, "评论区设置初始化失败: 打开本地缓存库失败: "+err.Error()+" (已忽略)")
-							} else {
-								localDBOpened = true
-								commentCfg.LocalDB = localdb.Default.Get(taskID)
-								m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, path))
-							}
+						dstLinked, err := tgRT.ensureLinkedChat(ctx, api, dstCh)
+						if err != nil {
+							m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: 获取目标关联群失败: "+err.Error()+" (已忽略)")
+						} else if dstLinked == nil || dstLinked.LinkedChatID == 0 || dstLinked.Peer == nil {
+							m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 目标频道未配置关联讨论组")
 						} else {
-							commentCfg.LocalDB = db
-							if localDBPath == "" {
-								localDBPath = "(opened)"
+							commentCfg = &commentPipelineConfig{
+								Enabled: true,
+
+								SourceChannelID: sourceChannelID,
+								TargetChannelID: dstCh.ChannelID,
+
+								SourcePeer: srcCh,
+								TargetPeer: dstCh,
+
+								SourceLinkedChatID: srcLinked.LinkedChatID,
+								TargetLinkedChatID: dstLinked.LinkedChatID,
+
+								SourceLinkedPeer: srcLinked.Peer,
+								TargetLinkedPeer: dstLinked.Peer,
 							}
-							m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, localDBPath))
+
+							// Open task localdb (SQLite) for comment mirroring v2.
+							db := localdb.Default.Get(taskID)
+							if db == nil {
+								if _, path, err := localdb.Default.Open(taskID); err != nil {
+									commentCfg = nil
+									m.record(taskID, runID, 0, 0, 0, 0, "评论区设置初始化失败: 打开本地缓存库失败: "+err.Error()+" (已忽略)")
+								} else {
+									localDBOpened = true
+									commentCfg.LocalDB = localdb.Default.Get(taskID)
+									m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, path))
+								}
+							} else {
+								commentCfg.LocalDB = db
+								if localDBPath == "" {
+									localDBPath = "(opened)"
+								}
+								m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("评论区设置已启用: source_linked=%d target_linked=%d localdb=%s", srcLinked.LinkedChatID, dstLinked.LinkedChatID, localDBPath))
+							}
 						}
 					}
 				}

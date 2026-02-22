@@ -78,7 +78,7 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 	if sourcePeer == nil {
 		return errors.New("source peer is nil")
 	}
-	if targetPeer == nil {
+	if targetPeer == nil && strings.TrimSpace(task.PublishType) != "bot" {
 		return errors.New("target peer is nil")
 	}
 	if task.ID == 0 {
@@ -303,7 +303,10 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if m == nil || api == nil || sourcePeer == nil || targetPeer == nil || task.ID == 0 {
+	if m == nil || api == nil || sourcePeer == nil || task.ID == 0 {
+		return nil
+	}
+	if targetPeer == nil && strings.TrimSpace(task.PublishType) != "bot" {
 		return nil
 	}
 

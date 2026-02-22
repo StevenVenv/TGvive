@@ -32,6 +32,7 @@ type StrategyItem = {
   ID: number
   name: string
   remark?: string
+  clone_mode?: number
 }
 
 type KeywordProfileItem = {
@@ -46,21 +47,58 @@ type KeywordProfileItem = {
 const accounts = ref<AccountItem[]>([])
 const strategies = ref<StrategyItem[]>([])
 const keywordProfiles = ref<KeywordProfileItem[]>([])
+type BotItem = {
+  id: string
+  name: string
+  api_base: string
+  disabled?: boolean
+  token_set: boolean
+  token_mask?: string
+  updated_at?: number
+}
+const bots = ref<BotItem[]>([])
 
 const form = reactive({
   source_url: '',
   target_url: '',
   session_key: '',
+  publish_type: 'same' as 'same' | 'account' | 'bot',
+  publish_session_key: '',
+  publish_bot_id: '',
   strategy_id: 0,
   keyword_profile_id: 0,
 })
 
 const selectedAccount = computed(() => accounts.value.find((a) => a.key === form.session_key) || null)
+const selectedPublishAccount = computed(() => accounts.value.find((a) => a.key === form.publish_session_key) || null)
+const separatedPublish = computed(() => form.publish_type !== 'same')
 
 const rules: FormRules = {
   source_url: [{ required: true, message: '请输入源频道/群组', trigger: 'blur' }],
   target_url: [{ required: true, message: '请输入目标频道/群组', trigger: 'blur' }],
-  session_key: [{ required: true, message: '请选择执行账号', trigger: 'change' }],
+  session_key: [{ required: true, message: '请选择爬虫账号', trigger: 'change' }],
+  publish_session_key: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        if (form.publish_type !== 'account') return cb()
+        const s = String(v || '').trim()
+        if (s) cb()
+        else cb(new Error('请选择发布账号'))
+      },
+      trigger: 'change',
+    },
+  ],
+  publish_bot_id: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        if (form.publish_type !== 'bot') return cb()
+        const s = String(v || '').trim()
+        if (s) cb()
+        else cb(new Error('请选择发布 Bot'))
+      },
+      trigger: 'change',
+    },
+  ],
   strategy_id: [
     {
       validator: (_: any, v: any, cb: any) => {
@@ -77,6 +115,9 @@ function resetForm() {
   form.source_url = ''
   form.target_url = ''
   form.session_key = ''
+  form.publish_type = 'same'
+  form.publish_session_key = ''
+  form.publish_bot_id = ''
   form.strategy_id = 0
   form.keyword_profile_id = 0
 }
@@ -151,6 +192,7 @@ async function loadOptions() {
     accounts.value = acc || []
     strategies.value = stg || []
     keywordProfiles.value = kw || []
+    bots.value = (await apiGet<BotItem[]>('/api/v1/tg/bots')) || []
 
     const onlyAccount = accounts.value.length === 1 ? accounts.value[0] : undefined
     if (!form.session_key && onlyAccount) form.session_key = onlyAccount.key
@@ -165,6 +207,7 @@ async function loadOptions() {
     accounts.value = []
     strategies.value = []
     keywordProfiles.value = []
+    bots.value = []
   } finally {
     loading.value = false
   }
@@ -185,12 +228,24 @@ async function submit() {
     source_url: (form.source_url || '').trim(),
     target_url: (form.target_url || '').trim(),
     session_key: (form.session_key || '').trim(),
+    publish_type: form.publish_type,
+    publish_session_key: (form.publish_session_key || '').trim(),
+    publish_bot_id: (form.publish_bot_id || '').trim(),
     strategy_id: Number(form.strategy_id || 0),
     keyword_profile_id: Number(form.keyword_profile_id || 0),
   }
 
   if (!payload.source_url || !payload.target_url || !payload.session_key || !payload.strategy_id) {
     ElMessage.warning('请完整填写 4 个字段')
+    return
+  }
+
+  if (payload.publish_type === 'account' && !payload.publish_session_key) {
+    ElMessage.warning('请选择发布账号')
+    return
+  }
+  if (payload.publish_type === 'bot' && !payload.publish_bot_id) {
+    ElMessage.warning('请选择发布 Bot')
     return
   }
 
@@ -217,12 +272,36 @@ watch(open, (v) => {
 onMounted(() => {
   void loadOptions()
 })
+
+watch(
+  () => form.publish_type,
+  () => {
+    if (form.publish_type === 'same') {
+      form.publish_session_key = ''
+      form.publish_bot_id = ''
+      return
+    }
+    if (form.publish_type === 'account') {
+      form.publish_bot_id = ''
+    }
+    if (form.publish_type === 'bot') {
+      form.publish_session_key = ''
+    }
+
+    // 分开发送强制 CloneMode=3：禁用非 3 的策略
+    const cur = strategies.value.find((s) => s.ID === Number(form.strategy_id || 0))
+    const cm = Number(cur?.clone_mode || 0)
+    if (cm && cm !== 3) {
+      form.strategy_id = 0
+    }
+  },
+)
 </script>
 
 <template>
   <el-button type="primary" @click="open = true">新建任务</el-button>
 
-  <el-dialog v-model="open" title="新建转发任务" width="560px" class="bt-dialog">
+  <el-dialog v-model="open" title="新建转发任务" width="660px" class="bt-dialog">
     <div v-loading="loading" class="body">
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-form-item label="源频道 (Source)" prop="source_url">
@@ -233,10 +312,12 @@ onMounted(() => {
           <el-input v-model="form.target_url" placeholder="@channel_id" />
         </el-form-item>
 
-        <el-form-item label="执行账号 (Account)" prop="session_key">
+        <el-divider content-position="left">账号策略</el-divider>
+
+        <el-form-item label="爬虫账号 (Crawler)" prop="session_key">
           <el-select
             v-model="form.session_key"
-            placeholder="请选择执行账号"
+            placeholder="请选择爬虫账号"
             style="width: 100%"
             filterable
             popper-class="tgvive-dark-popper"
@@ -262,6 +343,65 @@ onMounted(() => {
           <div class="hint">值为 session_key（对应 sessions/session_*.json）</div>
         </el-form-item>
 
+        <el-form-item label="发布方式 (Publisher)" prop="publish_type">
+          <el-radio-group v-model="form.publish_type">
+            <el-radio-button label="same">同爬虫账号</el-radio-button>
+            <el-radio-button label="account">TG账号</el-radio-button>
+            <el-radio-button label="bot">Bot</el-radio-button>
+          </el-radio-group>
+          <div v-if="separatedPublish" class="hint">分开发送将强制使用下载上传（CloneMode=3），转发/复制策略会被禁用</div>
+        </el-form-item>
+
+        <el-form-item v-if="form.publish_type === 'account'" label="发布账号 (Publisher Account)" prop="publish_session_key">
+          <el-select
+            v-model="form.publish_session_key"
+            placeholder="请选择发布账号"
+            style="width: 100%"
+            filterable
+            popper-class="tgvive-dark-popper"
+          >
+            <template #prefix>
+              <div class="select-prefix">
+                <el-avatar class="select-avatar" :size="20" :src="selectedPublishAccount?.avatar || ''" :icon="UserFilled" />
+              </div>
+            </template>
+            <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
+              <div class="opt">
+                <div class="opt-left">
+                  <el-avatar class="opt-avatar" :size="26" :src="a.avatar" :icon="UserFilled" />
+                  <div class="opt-meta">
+                    <div class="opt-title">{{ accountLabel(a) }}</div>
+                    <div class="opt-sub">{{ accountFileName(a.key) }}</div>
+                  </div>
+                </div>
+                <div class="opt-right muted">{{ a.username ? '@' + a.username : '' }}</div>
+              </div>
+            </el-option>
+          </el-select>
+          <div class="hint">选择一个账号用于发布（与爬虫账号可不同）</div>
+        </el-form-item>
+
+        <el-form-item v-if="form.publish_type === 'bot'" label="发布 Bot (Publisher Bot)" prop="publish_bot_id">
+          <el-select
+            v-model="form.publish_bot_id"
+            placeholder="请选择 Bot"
+            style="width: 100%"
+            filterable
+            popper-class="tgvive-dark-popper"
+          >
+            <el-option v-for="b in bots" :key="b.id" :label="b.name || b.id" :value="b.id" :disabled="b.disabled">
+              <div class="opt">
+                <div class="opt-left">
+                  <div class="opt-title">{{ b.name || b.id }}</div>
+                  <div class="opt-sub">{{ b.api_base }}</div>
+                </div>
+                <div class="opt-right muted">{{ b.disabled ? '已禁用' : b.token_mask || '' }}</div>
+              </div>
+            </el-option>
+          </el-select>
+          <div class="hint">使用 Bot API 发布（需将 Bot 加入目标频道/群并赋权）</div>
+        </el-form-item>
+
         <el-form-item label="策略模版 (Strategy)" prop="strategy_id">
           <el-select
             v-model="form.strategy_id"
@@ -270,7 +410,13 @@ onMounted(() => {
             filterable
             popper-class="tgvive-dark-popper"
           >
-            <el-option v-for="s in strategies" :key="s.ID" :label="s.name" :value="s.ID">
+            <el-option
+              v-for="s in strategies"
+              :key="s.ID"
+              :label="s.name"
+              :value="s.ID"
+              :disabled="separatedPublish && Number(s.clone_mode || 0) !== 3"
+            >
               <div class="opt">
                 <div class="opt-left">
                   <div class="opt-title">{{ s.name }}</div>
@@ -280,6 +426,7 @@ onMounted(() => {
             </el-option>
           </el-select>
           <div v-if="strategyTip" class="hint">{{ strategyTip }}</div>
+          <div v-if="separatedPublish" class="hint">提示：分开发送仅支持 CloneMode=3（下载上传）</div>
         </el-form-item>
 
         <el-form-item label="关键词方案 (Keywords)" prop="keyword_profile_id">

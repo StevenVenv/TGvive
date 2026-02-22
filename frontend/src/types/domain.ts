@@ -5,6 +5,9 @@ export type Task = {
   source_url: string
   target_url: string
   session_key?: string
+  publish_type?: string
+  publish_session_key?: string
+  publish_bot_id?: string
   strategy_id?: number
   keyword_profile_id?: number
   source_channel_id?: number

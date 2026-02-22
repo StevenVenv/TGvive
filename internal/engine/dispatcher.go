@@ -33,6 +33,9 @@ type TaskManager struct {
 	grouper   *AlbumGrouper
 	dedup     *Deduper
 	tg        *telegramRuntimeManager
+
+	pubMu      sync.RWMutex
+	publishers map[uint]*taskPublisherRuntime
 }
 
 type TaskCounters struct {
@@ -48,11 +51,12 @@ type TaskCounters struct {
 }
 
 var Manager = &TaskManager{
-	cancelers: make(map[uint]context.CancelFunc),
-	states:    make(map[uint]*taskState),
-	grouper:   NewAlbumGrouper(150 * time.Millisecond),
-	dedup:     NewDeduper(10*time.Minute, 50_000),
-	tg:        newTelegramRuntimeManager(),
+	cancelers:  make(map[uint]context.CancelFunc),
+	states:     make(map[uint]*taskState),
+	grouper:    NewAlbumGrouper(150 * time.Millisecond),
+	dedup:      NewDeduper(10*time.Minute, 50_000),
+	tg:         newTelegramRuntimeManager(),
+	publishers: make(map[uint]*taskPublisherRuntime),
 }
 
 type taskState struct {
@@ -91,6 +95,7 @@ func (m *TaskManager) StartTask(t model.Task) {
 	if m.grouper != nil {
 		m.grouper.DropTask(t.ID)
 	}
+	m.clearPublisher(t.ID)
 	m.unregisterTask(t.ID, 0)
 
 	if cancel, ok := m.cancelers[t.ID]; ok {
@@ -167,6 +172,7 @@ func (m *TaskManager) PauseTask(taskID uint) {
 	if m.grouper != nil {
 		m.grouper.DropTask(taskID)
 	}
+	m.clearPublisher(taskID)
 	m.unregisterTask(taskID, 0)
 
 	if cancel, ok := m.cancelers[taskID]; ok {
@@ -198,6 +204,7 @@ func (m *TaskManager) StopTask(taskID uint) {
 	if m.grouper != nil {
 		m.grouper.DropTask(taskID)
 	}
+	m.clearPublisher(taskID)
 	m.unregisterTask(taskID, 0)
 
 	if cancel, ok := m.cancelers[taskID]; ok {

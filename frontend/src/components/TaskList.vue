@@ -11,12 +11,14 @@ import {
   getTaskProgressBatch,
   getTasks,
   listTGAccounts,
+  listTGBots,
   taskAction,
   type KeywordProfile,
   type Strategy,
   type Task,
   type TaskProgress,
   type TGAccount,
+  type TGBot,
 } from '../api'
 import { deleteTask, updateTask } from '../api/task'
 import { useInterval } from '../composables/useInterval'
@@ -61,12 +63,16 @@ const editFormRef = ref<FormInstance>()
 const accounts = ref<TGAccount[]>([])
 const strategies = ref<Strategy[]>([])
 const keywordProfiles = ref<KeywordProfile[]>([])
+const bots = ref<TGBot[]>([])
 
 const editForm = reactive({
   id: 0,
   source_url: '',
   target_url: '',
   session_key: '',
+  publish_type: 'same' as 'same' | 'account' | 'bot',
+  publish_session_key: '',
+  publish_bot_id: '',
   strategy_id: 0,
   keyword_profile_id: 0,
 })
@@ -84,12 +90,36 @@ const logPoll = useInterval(() => {
   void refreshOne(id)
 }, 1000)
 
-const selectedAccount = computed(() => accounts.value.find((a) => a.key === editForm.session_key) || null)
+const selectedCrawlerAccount = computed(() => accounts.value.find((a) => a.key === editForm.session_key) || null)
+const selectedPublishAccount = computed(() => accounts.value.find((a) => a.key === editForm.publish_session_key) || null)
+const separatedPublish = computed(() => editForm.publish_type !== 'same')
 
 const editRules: FormRules = {
   source_url: [{ required: true, message: '请输入源频道/群组', trigger: 'blur' }],
   target_url: [{ required: true, message: '请输入目标频道/群组', trigger: 'blur' }],
-  session_key: [{ required: true, message: '请选择执行账号', trigger: 'change' }],
+  session_key: [{ required: true, message: '请选择爬虫账号', trigger: 'change' }],
+  publish_session_key: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        if (editForm.publish_type !== 'account') return cb()
+        const s = String(v || '').trim()
+        if (s) cb()
+        else cb(new Error('请选择发布账号'))
+      },
+      trigger: 'change',
+    },
+  ],
+  publish_bot_id: [
+    {
+      validator: (_: any, v: any, cb: any) => {
+        if (editForm.publish_type !== 'bot') return cb()
+        const s = String(v || '').trim()
+        if (s) cb()
+        else cb(new Error('请选择发布 Bot'))
+      },
+      trigger: 'change',
+    },
+  ],
   strategy_id: [
     {
       validator: (_: any, v: any, cb: any) => {
@@ -334,26 +364,33 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop' | 'restar
 async function loadEditOptions() {
   editLoading.value = true
   try {
-    const [acc, stg, kw] = await Promise.all([listTGAccounts(), getStrategies(), getKeywordProfiles()])
+    const [acc, stg, kw, bb] = await Promise.all([listTGAccounts(), getStrategies(), getKeywordProfiles(), listTGBots()])
     accounts.value = acc || []
     strategies.value = stg || []
     keywordProfiles.value = kw || []
+    bots.value = bb || []
   } catch (err: any) {
     ElMessage.error(err?.message || '加载选项失败')
     accounts.value = []
     strategies.value = []
     keywordProfiles.value = []
+    bots.value = []
   } finally {
     editLoading.value = false
   }
 }
 
 function openEdit(task: Task) {
+  const rawPub = String((task as any).publish_type || '').trim()
+  const publishType: 'same' | 'account' | 'bot' = rawPub === 'account' || rawPub === 'bot' ? (rawPub as any) : 'same'
   Object.assign(editForm, {
     id: Number(task.ID || 0),
     source_url: String(task.source_url || '').trim(),
     target_url: String(task.target_url || '').trim(),
     session_key: String(task.session_key || '').trim(),
+    publish_type: publishType,
+    publish_session_key: String((task as any).publish_session_key || '').trim(),
+    publish_bot_id: String((task as any).publish_bot_id || '').trim(),
     strategy_id: Number(task.strategy_id || 0),
     keyword_profile_id: Number(task.keyword_profile_id || 0),
   })
@@ -380,8 +417,20 @@ async function submitEdit() {
     source_url: String(editForm.source_url || '').trim(),
     target_url: String(editForm.target_url || '').trim(),
     session_key: String(editForm.session_key || '').trim(),
+    publish_type: editForm.publish_type,
+    publish_session_key: String(editForm.publish_session_key || '').trim(),
+    publish_bot_id: String(editForm.publish_bot_id || '').trim(),
     strategy_id: Number(editForm.strategy_id || 0),
     keyword_profile_id: Number(editForm.keyword_profile_id || 0),
+  }
+
+  if (payload.publish_type === 'account' && !payload.publish_session_key) {
+    ElMessage.warning('请选择发布账号')
+    return
+  }
+  if (payload.publish_type === 'bot' && !payload.publish_bot_id) {
+    ElMessage.warning('请选择发布 Bot')
+    return
   }
 
   editSubmitting.value = true
@@ -547,6 +596,29 @@ watch(autoScroll, async (v) => {
   await nextTick()
   scrollLogsToBottom()
 })
+
+watch(
+  () => editForm.publish_type,
+  () => {
+    if (editForm.publish_type === 'same') {
+      editForm.publish_session_key = ''
+      editForm.publish_bot_id = ''
+      return
+    }
+    if (editForm.publish_type === 'account') {
+      editForm.publish_bot_id = ''
+    }
+    if (editForm.publish_type === 'bot') {
+      editForm.publish_session_key = ''
+    }
+
+    const cur = strategies.value.find((s) => s.ID === Number(editForm.strategy_id || 0))
+    const cm = Number(cur?.clone_mode || 0)
+    if (cm && cm !== 3) {
+      editForm.strategy_id = 0
+    }
+  },
+)
 
 defineExpose({
   reloadTasks,
@@ -799,17 +871,19 @@ defineExpose({
             <el-input v-model="editForm.target_url" placeholder="@channel_id" />
           </el-form-item>
 
-          <el-form-item label="执行账号 (Account)" prop="session_key">
+          <el-divider content-position="left">账号策略</el-divider>
+
+          <el-form-item label="爬虫账号 (Crawler)" prop="session_key">
             <el-select
               v-model="editForm.session_key"
-              placeholder="请选择执行账号"
+              placeholder="请选择爬虫账号"
               style="width: 100%"
               filterable
               popper-class="tgvive-dark-popper"
             >
               <template #prefix>
                 <div class="select-prefix">
-                  <el-avatar class="select-avatar" :size="20" :src="selectedAccount?.avatar || ''" :icon="UserFilled" />
+                  <el-avatar class="select-avatar" :size="20" :src="selectedCrawlerAccount?.avatar || ''" :icon="UserFilled" />
                 </div>
               </template>
               <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
@@ -828,6 +902,65 @@ defineExpose({
             <div class="hint">值为 session_key（对应 sessions/session_*.json）</div>
           </el-form-item>
 
+          <el-form-item label="发布方式 (Publisher)" prop="publish_type">
+            <el-radio-group v-model="editForm.publish_type">
+              <el-radio-button label="same">同爬虫账号</el-radio-button>
+              <el-radio-button label="account">TG账号</el-radio-button>
+              <el-radio-button label="bot">Bot</el-radio-button>
+            </el-radio-group>
+            <div v-if="separatedPublish" class="hint">分开发送将强制使用下载上传（CloneMode=3），转发/复制策略会被禁用</div>
+          </el-form-item>
+
+          <el-form-item v-if="editForm.publish_type === 'account'" label="发布账号 (Publisher Account)" prop="publish_session_key">
+            <el-select
+              v-model="editForm.publish_session_key"
+              placeholder="请选择发布账号"
+              style="width: 100%"
+              filterable
+              popper-class="tgvive-dark-popper"
+            >
+              <template #prefix>
+                <div class="select-prefix">
+                  <el-avatar class="select-avatar" :size="20" :src="selectedPublishAccount?.avatar || ''" :icon="UserFilled" />
+                </div>
+              </template>
+              <el-option v-for="a in accounts" :key="a.key" :label="accountLabel(a)" :value="a.key">
+                <div class="opt">
+                  <div class="opt-left">
+                    <el-avatar class="opt-avatar" :size="26" :src="a.avatar" :icon="UserFilled" />
+                    <div class="opt-meta">
+                      <div class="opt-title">{{ accountLabel(a) }}</div>
+                      <div class="opt-sub">{{ accountFileName(a.key) }}</div>
+                    </div>
+                  </div>
+                  <div class="opt-right muted">{{ a.username ? '@' + a.username : '' }}</div>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="hint">选择一个账号用于发布（与爬虫账号可不同）</div>
+          </el-form-item>
+
+          <el-form-item v-if="editForm.publish_type === 'bot'" label="发布 Bot (Publisher Bot)" prop="publish_bot_id">
+            <el-select
+              v-model="editForm.publish_bot_id"
+              placeholder="请选择 Bot"
+              style="width: 100%"
+              filterable
+              popper-class="tgvive-dark-popper"
+            >
+              <el-option v-for="b in bots" :key="b.id" :label="b.name || b.id" :value="b.id" :disabled="b.disabled">
+                <div class="opt">
+                  <div class="opt-left">
+                    <div class="opt-title">{{ b.name || b.id }}</div>
+                    <div class="opt-sub">{{ b.api_base }}</div>
+                  </div>
+                  <div class="opt-right muted">{{ b.disabled ? '已禁用' : b.token_mask || '' }}</div>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="hint">使用 Bot API 发布（需将 Bot 加入目标频道/群并赋权）</div>
+          </el-form-item>
+
           <el-form-item label="策略模版 (Strategy)" prop="strategy_id">
             <el-select
               v-model="editForm.strategy_id"
@@ -836,7 +969,13 @@ defineExpose({
               filterable
               popper-class="tgvive-dark-popper"
             >
-              <el-option v-for="s in strategies" :key="s.ID" :label="s.name" :value="s.ID">
+              <el-option
+                v-for="s in strategies"
+                :key="s.ID"
+                :label="s.name"
+                :value="s.ID"
+                :disabled="separatedPublish && Number(s.clone_mode || 0) !== 3"
+              >
                 <div class="opt">
                   <div class="opt-left">
                     <div class="opt-title">{{ s.name }}</div>
@@ -845,6 +984,7 @@ defineExpose({
                 </div>
               </el-option>
             </el-select>
+            <div v-if="separatedPublish" class="hint">提示：分开发送仅支持 CloneMode=3（下载上传）</div>
           </el-form-item>
 
           <el-form-item label="关键词方案 (Keywords)" prop="keyword_profile_id">

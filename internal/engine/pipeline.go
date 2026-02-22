@@ -97,6 +97,10 @@ func (m *TaskManager) processSingleMessage(ctx context.Context, api *tg.Client, 
 		recordTaskDetailFromCtx(ctx, fmt.Sprintf("收到消息: msg_id=%d", msg.ID))
 	}
 
+	if pub := m.getPublisher(task.ID); pub != nil {
+		return m.processSingleMessageWithPublisher(ctx, api, sourcePeer, peer, task, msg, pub)
+	}
+
 	if task.CloneMode != 3 {
 		task.EnableMediaEdit = false
 	}
@@ -164,6 +168,10 @@ func (m *TaskManager) processAlbumBatch(ctx context.Context, api *tg.Client, sou
 	_ = allowedTypes
 	if task.CloneMode != 3 {
 		task.EnableMediaEdit = false
+	}
+
+	if pub := m.getPublisher(task.ID); pub != nil {
+		return m.processAlbumBatchWithPublisher(ctx, api, sourcePeer, peer, task, msgs, pub)
 	}
 
 	if len(msgs) > 0 && msgs[0] != nil && msgs[0].GroupedID != 0 {

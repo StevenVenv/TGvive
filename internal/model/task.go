@@ -26,8 +26,18 @@ type Task struct {
 	SourceURL string `gorm:"type:varchar(255);not null" json:"source_url"` // 对方频道/群组
 	TargetURL string `gorm:"type:varchar(255);not null" json:"target_url"` // 自己频道/群组
 
-	// ExecuteBy 指定执行账号（session key，对应 sessions/session_{key}.json）。
+	// ExecuteBy 指定爬虫账号（session key，对应 sessions/session_{key}.json）。
 	ExecuteBy string `gorm:"type:varchar(64);default:'';index" json:"session_key"`
+
+	// PublishType 控制发布端类型:
+	//   - ""     : 使用爬虫账号发布（兼容旧任务）
+	//   - "account": 使用另一个 TG 账号发布（PublishSessionKey）
+	//   - "bot"  : 使用 Bot API 发布（PublishBotID）
+	PublishType string `gorm:"type:varchar(16);default:''" json:"publish_type"`
+	// PublishSessionKey 仅当 PublishType="account" 时有效。
+	PublishSessionKey string `gorm:"type:varchar(64);default:'';index" json:"publish_session_key"`
+	// PublishBotID 仅当 PublishType="bot" 时有效（对应 BotStore 的 ID）。
+	PublishBotID string `gorm:"type:varchar(64);default:'';index" json:"publish_bot_id"`
 
 	// StrategyID 关联策略模板（Strategy）。
 	StrategyID uint `gorm:"index;default:0" json:"strategy_id"`
