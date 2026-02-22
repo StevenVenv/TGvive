@@ -104,7 +104,7 @@ type botAPIMessage struct {
 }
 
 func botHTTPClient() *http.Client {
-	return &http.Client{Timeout: 6 * time.Minute}
+	return runtimeHTTPClient(6 * time.Minute)
 }
 
 func botPostForm[T any](ctx context.Context, bot global.StoredBot, method string, values url.Values) (T, error) {

@@ -55,6 +55,9 @@ func (m *TaskManager) HotApplyProxy(ctx context.Context) int {
 		applied++
 	}
 
+	// Flush idle HTTP connections (Bot API, etc.) so new proxy settings take effect immediately.
+	closeRuntimeHTTPIdleConns()
+
 	if global.Logger != nil {
 		global.Logger.Info(
 			"proxy hot applied",

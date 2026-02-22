@@ -168,7 +168,7 @@ func TestTGBot(ctx context.Context, id string, timeout time.Duration) (TGBotTest
 	u := botAPIURL(bot.APIBase, token, "getMe")
 
 	start := time.Now()
-	client := &http.Client{Timeout: timeout}
+	client := runtimeHTTPClient(timeout)
 
 	if ctx == nil {
 		ctx = context.Background()
