@@ -41,6 +41,7 @@ func telegramClientOptions(sessionPath string, updateHandler telegram.UpdateHand
 		Resolver: dcs.Plain(dcs.PlainOptions{
 			Dial: dialMTProtoWithRuntimeProxy,
 		}),
+		Device: defaultDeviceConfig(),
 	}
 	if updateHandler != nil {
 		opts.UpdateHandler = updateHandler
