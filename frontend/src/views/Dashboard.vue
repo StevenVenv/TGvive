@@ -26,6 +26,9 @@ type StatsSnapshot = {
   today_success?: number
   today_fail?: number
   today_filtered?: number
+  comment_pending?: number
+  comment_success?: number
+  comment_fail?: number
   ffmpeg_active: number
   ffmpeg_threads: number
   has_gpu?: boolean
@@ -109,6 +112,12 @@ const biz = reactive({
   todayErrors: 0,
 })
 
+const commentQ = reactive({
+  pending: 0,
+  success: 0,
+  fail: 0,
+})
+
 const service = reactive({
   ffmpegQueue: 0,
   ffmpegThreads: 0,
@@ -123,6 +132,10 @@ const diskPct = computed(() => clamp(Math.round((sys.diskUsed / Math.max(0.1, sy
 
 const totalProcessed = computed(() => Math.max(0, biz.forwarded + biz.filtered + biz.errors))
 const todayProcessed = computed(() => Math.max(0, biz.todayForwarded + biz.todayFiltered + biz.todayErrors))
+const commentProcessed = computed(() => Math.max(0, commentQ.success + commentQ.fail))
+const commentTotal = computed(() => Math.max(0, commentQ.pending + commentQ.success + commentQ.fail))
+const overallProcessed = computed(() => Math.max(0, totalProcessed.value + commentProcessed.value))
+
 const totalFilterRate = computed(() => Math.round((biz.filtered / Math.max(1, totalProcessed.value)) * 100))
 const totalErrorRate = computed(() => Math.round((biz.errors / Math.max(1, totalProcessed.value)) * 100))
 const todayFilterRate = computed(() => Math.round((biz.todayFiltered / Math.max(1, todayProcessed.value)) * 100))
@@ -181,13 +194,40 @@ const logQuery = ref('')
 const logLevels = ref<LogLevel[]>(['INFO', 'WARN', 'ERROR'])
 const stickToBottom = ref(true)
 
+type LogPreset = 'all' | 'filter_error' | 'errors'
+const logPreset = ref<LogPreset>('all')
+const logPresetLabel = computed(() => {
+  if (logPreset.value === 'filter_error') return '过滤 + 错误'
+  if (logPreset.value === 'errors') return '仅错误'
+  return ''
+})
+
 const filteredLogs = computed(() => {
   const q = (logQuery.value || '').trim().toLowerCase()
   const allowed = new Set(logLevels.value)
   return (logs.value || []).filter((it) => {
     if (!allowed.has(it.level)) return false
+    const lower = it.text.toLowerCase()
+    if (logPreset.value === 'errors') {
+      if (it.level !== 'ERROR') return false
+    } else if (logPreset.value === 'filter_error') {
+      const isErr = it.level === 'ERROR'
+      const isFilter =
+        lower.includes('[filter]') ||
+        lower.includes('filter') ||
+        lower.includes('filtered') ||
+        lower.includes('skip') ||
+        lower.includes('blocked') ||
+        lower.includes('过滤') ||
+        lower.includes('屏蔽') ||
+        lower.includes('忽略') ||
+        lower.includes('白名单') ||
+        lower.includes('绑定') ||
+        lower.includes('trusted')
+      if (!isErr && !isFilter) return false
+    }
     if (!q) return true
-    return it.text.toLowerCase().includes(q)
+    return lower.includes(q)
   })
 })
 
@@ -211,6 +251,16 @@ function pushLog(level: LogLevel, text: string, id?: number, ts?: number) {
 
 function clearLogs() {
   logs.value = []
+}
+
+function setLogPreset(p: LogPreset) {
+  logPreset.value = p
+  logQuery.value = ''
+  if (p === 'errors') {
+    logLevels.value = ['ERROR']
+    return
+  }
+  logLevels.value = ['INFO', 'WARN', 'ERROR']
 }
 
 async function copyVisibleLogs() {
@@ -276,6 +326,10 @@ function applyStats(d: StatsSnapshot) {
   biz.todayFiltered = Math.max(0, Number(d.today_filtered || 0))
   biz.todayErrors = Math.max(0, Number(d.today_fail || 0))
 
+  commentQ.pending = Math.max(0, Number(d.comment_pending || 0))
+  commentQ.success = Math.max(0, Number(d.comment_success || 0))
+  commentQ.fail = Math.max(0, Number(d.comment_fail || 0))
+
   service.ffmpegQueue = Math.max(0, Number(d.ffmpeg_active || 0))
   service.ffmpegThreads = Math.max(0, Number(d.ffmpeg_threads || 0))
 
@@ -307,6 +361,7 @@ let ws: WebSocket | null = null
 let reconnectTimer: number | undefined
 let pollTimer: number | undefined
 let pollInFlight = false
+const logsAnchorRef = ref<HTMLElement | null>(null)
 
 function cleanupWS() {
   if (reconnectTimer) {
@@ -433,6 +488,11 @@ function connectWS() {
 
 function refresh() {
   connectWS()
+}
+
+function focusLogs(preset?: LogPreset) {
+  if (preset) setLogPreset(preset)
+  void nextTick(() => logsAnchorRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 defineExpose({ refresh })
@@ -592,8 +652,9 @@ onBeforeUnmount(() => {
                 <div class="stat-card dash-box">
                   <div class="stat-icon pending"><i class="ri-time-line" /></div>
                   <div class="stat-meta">
-                    <div class="stat-value">{{ biz.pending }}</div>
-                    <div class="stat-label muted">待转发</div>
+                    <div class="stat-value">{{ commentQ.pending }}</div>
+                    <div class="stat-label muted">评论待转发</div>
+                    <div class="stat-sub muted">实时队列 {{ biz.pending }}</div>
                   </div>
                 </div>
               </el-col>
@@ -602,16 +663,16 @@ onBeforeUnmount(() => {
                 <div class="stat-card dash-box">
                   <div class="stat-icon ok"><i class="ri-line-chart-line" /></div>
                   <div class="stat-meta">
-                    <div class="stat-value">{{ biz.forwarded }}</div>
-                    <div class="stat-label muted">已发送</div>
-                    <div class="stat-sub muted">今日 +{{ biz.todayForwarded }}</div>
+                    <div class="stat-value">{{ commentQ.success }}</div>
+                    <div class="stat-label muted">评论已转发</div>
+                    <div class="stat-sub muted">消息累计 {{ biz.forwarded }} · 今日 +{{ biz.todayForwarded }}</div>
                   </div>
                   <i class="ri-arrow-up-line stat-trend ok" />
                 </div>
               </el-col>
 
               <el-col :xs="12" :sm="12" :md="12" :lg="12" :xl="6">
-                <div class="stat-card dash-box">
+                <div class="stat-card dash-box clickable" role="button" tabindex="0" @click="focusLogs('filter_error')">
                   <div class="stat-icon muted"><i class="ri-filter-3-line" /></div>
                   <div class="stat-meta">
                     <div class="stat-value">{{ biz.filtered }}</div>
@@ -622,12 +683,12 @@ onBeforeUnmount(() => {
               </el-col>
 
               <el-col :xs="12" :sm="12" :md="12" :lg="12" :xl="6">
-                <div class="stat-card dash-box">
+                <div class="stat-card dash-box clickable" role="button" tabindex="0" @click="focusLogs('errors')">
                   <div class="stat-icon err"><i class="ri-error-warning-line" /></div>
                   <div class="stat-meta">
-                    <div class="stat-value err">{{ biz.errors }}</div>
+                    <div class="stat-value err">{{ biz.errors + commentQ.fail }}</div>
                     <div class="stat-label muted">错误数</div>
-                    <div class="stat-sub muted">今日 +{{ biz.todayErrors }}</div>
+                    <div class="stat-sub muted">评论失败 {{ commentQ.fail }} · 今日 +{{ biz.todayErrors }}</div>
                   </div>
                 </div>
               </el-col>
@@ -652,6 +713,21 @@ onBeforeUnmount(() => {
 
             <div class="kpi-sub muted">
               累计处理 {{ totalProcessed }} · 过滤率 {{ totalFilterRate }}% · 错误率 {{ totalErrorRate }}%
+            </div>
+
+            <div class="dash-box dash-box-soft total-box">
+              <div class="total-grid">
+                <div class="total-item">
+                  <div class="total-k muted">共计处理</div>
+                  <div class="total-v">{{ overallProcessed }}</div>
+                  <div class="total-sub muted">消息 {{ totalProcessed }} · 评论 {{ commentProcessed }}</div>
+                </div>
+                <div class="total-item">
+                  <div class="total-k muted">评论队列总量</div>
+                  <div class="total-v">{{ commentTotal }}</div>
+                  <div class="total-sub muted">待转发 {{ commentQ.pending }} · 成功 {{ commentQ.success }} · 失败 {{ commentQ.fail }}</div>
+                </div>
+              </div>
             </div>
           </div>
         </el-card>
@@ -707,6 +783,7 @@ onBeforeUnmount(() => {
       </el-col>
 
       <el-col :span="24">
+        <div ref="logsAnchorRef" />
         <el-card class="bt-card" shadow="never">
           <template #header>
             <div class="card-header">
@@ -731,6 +808,15 @@ onBeforeUnmount(() => {
                 class="log-search"
                 placeholder="搜索日志（关键词）"
               />
+              <el-tag
+                v-if="logPreset !== 'all'"
+                size="small"
+                closable
+                class="log-preset"
+                @close="setLogPreset('all')"
+              >
+                {{ logPresetLabel }}
+              </el-tag>
               <el-checkbox-group v-model="logLevels" size="small" class="log-levels">
                 <el-checkbox label="INFO">INFO</el-checkbox>
                 <el-checkbox label="WARN">WARN</el-checkbox>
@@ -1029,6 +1115,24 @@ onBeforeUnmount(() => {
   min-height: 64px;
 }
 
+.clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.clickable:hover {
+  border-color: rgba(64, 158, 255, 0.35);
+}
+
+.clickable:active {
+  transform: translateY(0.5px);
+}
+
+.clickable:focus-visible {
+  outline: 2px solid rgba(64, 158, 255, 0.35);
+  outline-offset: 2px;
+}
+
 .stat-icon {
   width: 34px;
   height: 34px;
@@ -1127,6 +1231,40 @@ onBeforeUnmount(() => {
 
 .kpi-sub {
   font-size: 12px;
+}
+
+.total-box {
+  padding: 12px 12px;
+}
+
+.total-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.total-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.total-k {
+  font-size: 12px;
+}
+
+.total-v {
+  font-size: 20px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-primary);
+}
+
+.total-sub {
+  font-size: 12px;
+  line-height: 1.2;
+  word-break: break-word;
 }
 
 .svc-block {
@@ -1228,6 +1366,12 @@ onBeforeUnmount(() => {
   max-width: 100%;
 }
 
+.log-preset {
+  border-color: rgba(64, 158, 255, 0.22);
+  background: rgba(64, 158, 255, 0.12);
+  color: rgba(191, 203, 217, 0.92);
+}
+
 .log-levels :deep(.el-checkbox) {
   margin-right: 6px;
 }
@@ -1278,6 +1422,10 @@ div.log-foot {
   }
 
   .net-row {
+    grid-template-columns: 1fr;
+  }
+
+  .total-grid {
     grid-template-columns: 1fr;
   }
 }

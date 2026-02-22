@@ -65,6 +65,9 @@ func main() {
 	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Periodically aggregate task-scoped SQLite stats into dashboard (comment queue pending/success/fail).
+	engine.StartDashboardLocalDBSampler(stopCtx)
+
 	select {
 	case <-stopCtx.Done():
 	case err := <-serverErr:

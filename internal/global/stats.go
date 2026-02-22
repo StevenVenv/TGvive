@@ -47,6 +47,10 @@ type StatsSnapshot struct {
 	TodayFail     uint64 `json:"today_fail"`
 	TodayFiltered uint64 `json:"today_filtered"`
 
+	CommentPending uint64 `json:"comment_pending"`
+	CommentSuccess uint64 `json:"comment_success"`
+	CommentFail    uint64 `json:"comment_fail"`
+
 	FFmpegActive  int `json:"ffmpeg_active"`
 	FFmpegThreads int `json:"ffmpeg_threads"`
 
@@ -232,6 +236,10 @@ type AppStats struct {
 	success  uint64
 	fail     uint64
 	filtered uint64
+
+	commentPending uint64
+	commentSuccess uint64
+	commentFail    uint64
 
 	ffmpegActive int64
 
@@ -543,6 +551,9 @@ func (s *AppStats) Snapshot() StatsSnapshot {
 		TodayFiltered: func() uint64 {
 			return atomic.LoadUint64(&s.todayFiltered)
 		}(),
+		CommentPending: atomic.LoadUint64(&s.commentPending),
+		CommentSuccess: atomic.LoadUint64(&s.commentSuccess),
+		CommentFail:    atomic.LoadUint64(&s.commentFail),
 		FFmpegActive: func() int {
 			n := atomic.LoadInt64(&s.ffmpegActive)
 			if n < 0 {
@@ -652,6 +663,15 @@ func (s *AppStats) AddFiltered(n uint64) {
 	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.filtered, n)
 	atomic.AddUint64(&s.todayFiltered, n)
+}
+
+func (s *AppStats) SetCommentQueueStats(pending, success, fail uint64) {
+	if s == nil {
+		return
+	}
+	atomic.StoreUint64(&s.commentPending, pending)
+	atomic.StoreUint64(&s.commentSuccess, success)
+	atomic.StoreUint64(&s.commentFail, fail)
 }
 
 func (s *AppStats) IncFFmpegActive() {

@@ -36,6 +36,10 @@ type persistedDashboardStats struct {
 	TodaySuccess  uint64 `json:"today_success"`
 	TodayFail     uint64 `json:"today_fail"`
 	TodayFiltered uint64 `json:"today_filtered"`
+
+	CommentPending uint64 `json:"comment_pending"`
+	CommentSuccess uint64 `json:"comment_success"`
+	CommentFail    uint64 `json:"comment_fail"`
 }
 
 func bizDayString(t time.Time) string {
@@ -98,6 +102,10 @@ func (s *AppStats) loadPersistedDashboardState() {
 			atomicStoreUint64(&s.todaySuccess, p.TodaySuccess)
 			atomicStoreUint64(&s.todayFail, p.TodayFail)
 			atomicStoreUint64(&s.todayFiltered, p.TodayFiltered)
+
+			atomicStoreUint64(&s.commentPending, p.CommentPending)
+			atomicStoreUint64(&s.commentSuccess, p.CommentSuccess)
+			atomicStoreUint64(&s.commentFail, p.CommentFail)
 		}
 	}
 
@@ -213,6 +221,9 @@ func (s *AppStats) persistDashboardStatsLoop() {
 			TodayFiltered: func() uint64 {
 				return atomicLoadUint64(&s.todayFiltered)
 			}(),
+			CommentPending: atomicLoadUint64(&s.commentPending),
+			CommentSuccess: atomicLoadUint64(&s.commentSuccess),
+			CommentFail:    atomicLoadUint64(&s.commentFail),
 		}
 
 		if last.Version == cur.Version &&
@@ -223,7 +234,10 @@ func (s *AppStats) persistDashboardStatsLoop() {
 			last.BizDay == cur.BizDay &&
 			last.TodaySuccess == cur.TodaySuccess &&
 			last.TodayFail == cur.TodayFail &&
-			last.TodayFiltered == cur.TodayFiltered {
+			last.TodayFiltered == cur.TodayFiltered &&
+			last.CommentPending == cur.CommentPending &&
+			last.CommentSuccess == cur.CommentSuccess &&
+			last.CommentFail == cur.CommentFail {
 			return
 		}
 
