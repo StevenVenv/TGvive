@@ -155,6 +155,33 @@ export type TGAccount = {
   meta_updated_at?: number
 }
 
+export type TGBot = {
+  id: string
+  name: string
+  api_base: string
+  disabled?: boolean
+
+  token_set: boolean
+  token_mask?: string
+
+  created_at?: number
+  updated_at?: number
+}
+
+export type TGBotTestResult = {
+  ok: boolean
+  latency_ms?: number
+  http_status?: number
+  error?: string
+
+  error_code?: number
+  description?: string
+
+  bot_user_id?: number
+  username?: string
+  name?: string
+}
+
 export type QRState = {
   session_id: string
   url?: string

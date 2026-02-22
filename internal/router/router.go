@@ -22,6 +22,7 @@ func SetupRouter() *gin.Engine {
 	keywordApi := v1.KeywordProfileApi{}
 	authApi := v1.AuthApi{}
 	tgAuthApi := v1.TGAuthApi{}
+	tgBotApi := v1.TGBotApi{}
 	dashboardApi := v1.DashboardApi{}
 	watermarkApi := v1.WatermarkApi{}
 	proxyApi := v1.ProxyApi{}
@@ -55,6 +56,12 @@ func SetupRouter() *gin.Engine {
 				tgV1.GET("/accounts/code/status", tgAuthApi.CheckCodeStatus)
 				tgV1.POST("/accounts/code/submit", tgAuthApi.SubmitCode)
 				tgV1.POST("/accounts/code/password", tgAuthApi.SubmitPassword)
+
+				tgV1.GET("/bots", tgBotApi.ListBots)
+				tgV1.POST("/bots", tgBotApi.AddBot)
+				tgV1.PUT("/bots/:id", tgBotApi.UpdateBot)
+				tgV1.DELETE("/bots/:id", tgBotApi.RemoveBot)
+				tgV1.POST("/bots/:id/test", tgBotApi.TestBot)
 			}
 
 			settingsV1 := protected.Group("/settings")

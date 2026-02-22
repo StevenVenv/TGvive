@@ -128,5 +128,9 @@ func InitConfig() error {
 	// Runtime proxy config is loaded from a separate store file (data/proxy.runtime.json),
 	// and is intentionally NOT written back to configs/config.yaml.
 	global.ProxyRuntime.Init(cfg.Proxy)
+
+	// Bot store is loaded from a separate runtime store file (data/bots.store.json),
+	// and is intentionally NOT written back to configs/config.yaml.
+	global.BotStore.Init()
 	return nil
 }

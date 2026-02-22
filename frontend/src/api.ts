@@ -8,6 +8,8 @@ import type {
   Task,
   TaskProgress,
   TGAccount,
+  TGBot,
+  TGBotTestResult,
 } from './types/domain'
 
 export type ApiResponse<T> = {
@@ -29,6 +31,8 @@ export type {
   Task,
   TaskProgress,
   TGAccount,
+  TGBot,
+  TGBotTestResult,
   WatermarkRule,
 } from './types/domain'
 
@@ -221,6 +225,41 @@ export function startAccountQR(): Promise<{ session_id: string }> {
 export function getAccountQRStatus(sessionId: string): Promise<QRState> {
   const q = new URLSearchParams({ session_id: sessionId })
   return apiFetch<QRState>(`/api/v1/tg/accounts/qr/status?${q.toString()}`, { method: 'GET' })
+}
+
+export function listTGBots(): Promise<TGBot[]> {
+  return apiFetch<TGBot[]>('/api/v1/tg/bots', { method: 'GET' })
+}
+
+export function addTGBot(payload: { name: string; token: string; api_base?: string }): Promise<TGBot> {
+  return apiFetch<TGBot>('/api/v1/tg/bots', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateTGBot(
+  id: string,
+  payload: { name?: string; token?: string; api_base?: string; disabled?: boolean },
+): Promise<TGBot> {
+  const safe = encodeURIComponent(id || '')
+  return apiFetch<TGBot>(`/api/v1/tg/bots/${safe}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteTGBot(id: string): Promise<{ ok: boolean }> {
+  const safe = encodeURIComponent(id || '')
+  return apiFetch<{ ok: boolean }>(`/api/v1/tg/bots/${safe}`, { method: 'DELETE' })
+}
+
+export function testTGBot(id: string, payload?: { timeout_ms?: number }): Promise<TGBotTestResult> {
+  const safe = encodeURIComponent(id || '')
+  return apiFetch<TGBotTestResult>(`/api/v1/tg/bots/${safe}/test`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  })
 }
 
 export function startCodeLogin(phone: string): Promise<{ session_id: string }> {

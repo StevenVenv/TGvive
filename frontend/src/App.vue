@@ -9,13 +9,13 @@ import type { ActiveView } from './app/navigation'
 
 import CreateTask from './components/CreateTask.vue'
 import TaskList from './components/TaskList.vue'
-import AccountManager from './components/AccountManager.vue'
 import Dashboard from './views/Dashboard.vue'
+import Accounts from './views/Accounts.vue'
 import StrategyManager from './views/StrategyManager.vue'
 import Settings from './views/Settings.vue'
 
 const taskListRef = ref<InstanceType<typeof TaskList> | null>(null)
-const accountRef = ref<InstanceType<typeof AccountManager> | null>(null)
+const accountRef = ref<InstanceType<typeof Accounts> | null>(null)
 const dashboardRef = ref<InstanceType<typeof Dashboard> | null>(null)
 const strategyRef = ref<InstanceType<typeof StrategyManager> | null>(null)
 const settingsRef = ref<InstanceType<typeof Settings> | null>(null)
@@ -97,7 +97,7 @@ async function refreshCurrent() {
     <Dashboard v-if="activeView === 'dashboard'" ref="dashboardRef" />
     <TaskList v-if="activeView === 'tasks'" ref="taskListRef" :active="true" />
     <StrategyManager v-if="activeView === 'strategies'" ref="strategyRef" />
-    <AccountManager v-if="activeView === 'accounts'" ref="accountRef" />
+    <Accounts v-if="activeView === 'accounts'" ref="accountRef" />
     <Settings v-if="activeView === 'settings_proxy'" ref="settingsRef" />
   </AdminLayout>
 </template>
