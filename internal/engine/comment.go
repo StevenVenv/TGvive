@@ -38,6 +38,10 @@ type commentPipelineConfig struct {
 	SourceChannelID int64
 	TargetChannelID int64
 
+	// SourcePeer/TargetPeer are channel peers (not linked chats). They are used to resolve discussion roots.
+	SourcePeer *tg.InputPeerChannel
+	TargetPeer *tg.InputPeerChannel
+
 	SourceLinkedChatID int64
 	TargetLinkedChatID int64
 
@@ -225,19 +229,79 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 			return 0
 		}
 		var mapping localdb.RootMapping
-		if err := t.comment.LocalDB.Where("source_root_id = ?", sourceRootID).First(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
+		if err := t.comment.LocalDB.
+			Select("target_root_id").
+			Where("source_root_id = ?", sourceRootID).
+			Limit(1).
+			Find(&mapping).Error; err != nil || mapping.TargetRootID <= 0 {
 			return 0
 		}
 		return mapping.TargetRootID
 	}
 
 	flushRoot := func(sourceRootID int) {
-		targetRootID := loadTargetRootID(sourceRootID)
-		if targetRootID <= 0 {
+		if sourceRootID <= 0 {
 			return
 		}
-		m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, sourceRootID, targetRootID)
+
+		targetRootID := loadTargetRootID(sourceRootID)
+		if targetRootID > 0 {
+			m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, sourceRootID, targetRootID)
+			return
+		}
+
+		// Repair path A: ReplyToRootID might be a source channel post msg_id (not the discussion root).
+		// This happens when the discussion message reply header references the channel post directly.
+		if api != nil && t.comment.SourcePeer != nil && t.comment.SourceLinkedChatID != 0 {
+			if discRootID, err := getDiscussionRootIDWithRetry(t.Ctx, api, t.comment.SourcePeer, sourceRootID, t.comment.SourceLinkedChatID); err == nil && discRootID > 0 && discRootID != sourceRootID {
+				_ = t.comment.LocalDB.Model(&localdb.CommentQueue{}).
+					Where("reply_to_root_id = ? AND status = ?", sourceRootID, localdb.CommentStatusPending).
+					Update("reply_to_root_id", discRootID).Error
+
+				if targetRootID = loadTargetRootID(discRootID); targetRootID > 0 {
+					m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, discRootID, targetRootID)
+				}
+				return
+			}
+		}
+
+		// Repair path: some replies may be nested (replying to a comment), so the extracted "root"
+		// might not be the actual trunk discussion root mapped in RootMapping. Try walk up the chain.
+		mappedRootID := resolveMappedSourceRootID(t.Ctx, api, t.comment, sourceRootID)
+		if mappedRootID <= 0 || mappedRootID == sourceRootID {
+			return
+		}
+
+		// Update pending rows to the mapped root to make consumer scans work.
+		_ = t.comment.LocalDB.Model(&localdb.CommentQueue{}).
+			Where("reply_to_root_id = ? AND status = ?", sourceRootID, localdb.CommentStatusPending).
+			Update("reply_to_root_id", mappedRootID).Error
+
+		if targetRootID = loadTargetRootID(mappedRootID); targetRootID <= 0 {
+			return
+		}
+		m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, mappedRootID, targetRootID)
 	}
+
+	// Best-effort bootstrap: try flush any pending comments already in localdb (e.g. after restart),
+	// including those keyed by channel post msg_id.
+	go func() {
+		var roots []int
+		if err := t.comment.LocalDB.
+			Model(&localdb.CommentQueue{}).
+			Select("DISTINCT reply_to_root_id").
+			Where("status = ?", localdb.CommentStatusPending).
+			Limit(100).
+			Pluck("reply_to_root_id", &roots).Error; err != nil {
+			return
+		}
+		for _, rid := range roots {
+			if err := t.Ctx.Err(); err != nil {
+				return
+			}
+			flushRoot(rid)
+		}
+	}()
 
 	var (
 		pendingGroupedID int64
@@ -334,7 +398,7 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 
 			switch ev.kind {
 			case commentEventNew:
-				rootID := extractCommentRootMsgID(msg)
+				rootID := resolveSourceRootIDForComment(t.Ctx, api, t.comment, msg)
 				if rootID <= 0 {
 					continue
 				}
@@ -401,11 +465,6 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 
 				flushRoot(rootID)
 			case commentEventEdit:
-				// Edit only matters for comments (replies in linked chat).
-				if extractCommentRootMsgID(msg) <= 0 {
-					continue
-				}
-
 				payload, err := localdb.WashMessage(msg, m.DetectContentType)
 				if err != nil || payload == nil {
 					continue

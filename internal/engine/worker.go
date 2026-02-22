@@ -121,6 +121,9 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 							SourceChannelID: sourceChannelID,
 							TargetChannelID: dstCh.ChannelID,
 
+							SourcePeer: srcCh,
+							TargetPeer: dstCh,
+
 							SourceLinkedChatID: srcLinked.LinkedChatID,
 							TargetLinkedChatID: dstLinked.LinkedChatID,
 
