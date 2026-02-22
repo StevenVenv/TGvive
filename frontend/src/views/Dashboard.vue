@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { apiFetch } from '../api'
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR'
@@ -74,6 +75,10 @@ function fmtTime(ts: number): string {
   const mm = String(d.getMinutes()).padStart(2, '0')
   const ss = String(d.getSeconds()).padStart(2, '0')
   return `${hh}:${mm}:${ss}`
+}
+
+function isNearBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - (el.scrollTop + el.clientHeight) < 64
 }
 
 const sys = reactive({
@@ -158,6 +163,9 @@ const proxyText = computed(() => {
   return `${service.proxyEndpoint} (${service.proxyLatency}ms)`
 })
 
+const lastStatsTs = ref(0)
+const lastStatsText = computed(() => (lastStatsTs.value > 0 ? fmtTime(lastStatsTs.value) : '--'))
+
 const wsConnected = ref(false)
 const lastWSErr = ref('')
 
@@ -169,7 +177,23 @@ const logBoxRef = ref<HTMLElement | null>(null)
 let localLogId = -1
 let lastServerLogID = 0
 
+const logQuery = ref('')
+const logLevels = ref<LogLevel[]>(['INFO', 'WARN', 'ERROR'])
+const stickToBottom = ref(true)
+
+const filteredLogs = computed(() => {
+  const q = (logQuery.value || '').trim().toLowerCase()
+  const allowed = new Set(logLevels.value)
+  return (logs.value || []).filter((it) => {
+    if (!allowed.has(it.level)) return false
+    if (!q) return true
+    return it.text.toLowerCase().includes(q)
+  })
+})
+
 function pushLog(level: LogLevel, text: string, id?: number, ts?: number) {
+  const el = logBoxRef.value
+  const shouldStick = stickToBottom.value && (!el || isNearBottom(el))
   const entry: LogItem = {
     id: typeof id === 'number' ? id : localLogId--,
     level,
@@ -178,10 +202,26 @@ function pushLog(level: LogLevel, text: string, id?: number, ts?: number) {
   }
   logs.value = [...logs.value, entry].slice(-200)
   void nextTick(() => {
+    if (!shouldStick) return
     const el = logBoxRef.value
     if (!el) return
     el.scrollTop = el.scrollHeight
   })
+}
+
+function clearLogs() {
+  logs.value = []
+}
+
+async function copyVisibleLogs() {
+  const text = filteredLogs.value.map((x) => x.text).join('\n').trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.warning('复制失败（浏览器权限限制）')
+  }
 }
 
 let lastProxyFetchAt = 0
@@ -209,6 +249,9 @@ async function loadProxyConfig(force = false) {
 
 function applyStats(d: StatsSnapshot) {
   if (!d) return
+  const snapTS = Number(d.ts || 0)
+  if (Number.isFinite(snapTS) && snapTS > 0) lastStatsTs.value = snapTS
+
   sys.osInfo = String(d.os_info || '')
   sys.kernel = String(d.kernel || '')
   sys.uptimeSec = Math.max(0, Number(d.uptime_sec || 0))
@@ -417,6 +460,8 @@ onBeforeUnmount(() => {
             <span>实时监控</span>
             <span class="dot">·</span>
             <span>{{ wsConnected ? 'WebSocket' : 'Polling' }}</span>
+            <span class="dot">·</span>
+            <span>更新 {{ lastStatsText }}</span>
           </div>
         </div>
       </div>
@@ -430,7 +475,7 @@ onBeforeUnmount(() => {
       </el-space>
     </div>
 
-    <el-row :gutter="12">
+    <el-row :gutter="12" class="dash-row">
       <el-col :xs="24" :md="12" :lg="8">
         <el-card class="bt-card" shadow="never">
           <template #header>
@@ -446,77 +491,79 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <div class="metric">
-            <div class="metric-top">
-              <span class="label">CPU 使用率</span>
-              <span class="value">{{ cpuPct }}%</span>
-            </div>
-            <el-progress :percentage="cpuPct" :stroke-width="10" :show-text="false" />
-          </div>
-
-          <div class="metric">
-            <div class="metric-top">
-              <span class="label">内存使用</span>
-              <span class="value">{{ fmtGiB(sys.memUsed) }} / {{ fmtGiB(sys.memTotal) }}</span>
-            </div>
-            <el-progress :percentage="memPct" :stroke-width="10" :show-text="false" status="success" />
-          </div>
-
-          <div class="metric">
-            <div class="metric-top">
-              <span class="label">磁盘存储</span>
-              <span class="value">{{ fmtGiB(sys.diskUsed) }} / {{ fmtGiB(sys.diskTotal) }}</span>
-            </div>
-            <el-progress :percentage="diskPct" :stroke-width="10" :show-text="false" status="warning" />
-          </div>
-
-          <div class="split-line" />
-
-          <div class="overview-grid">
-            <div class="ov-card">
-              <div class="ov-icon">
-                <i :class="[osIcon, 'os-icon', osTone]" />
+          <div class="dash-stack">
+            <div class="metric dash-box">
+              <div class="metric-top">
+                <span class="label">CPU 使用率</span>
+                <span class="value">{{ cpuPct }}%</span>
               </div>
-              <div class="ov-meta">
-                <div class="ov-main">{{ sys.osInfo || 'Unknown OS' }}</div>
-                <div class="ov-sub muted">
-                  <span v-if="sys.kernel">Kernel {{ sys.kernel }}</span>
-                  <span v-if="sys.kernel && sys.uptimeSec" class="dot">·</span>
-                  <span v-if="sys.uptimeSec">已运行 {{ uptimeText }}</span>
+              <el-progress :percentage="cpuPct" :stroke-width="10" :show-text="false" />
+            </div>
+
+            <div class="metric dash-box">
+              <div class="metric-top">
+                <span class="label">内存使用</span>
+                <span class="value">{{ fmtGiB(sys.memUsed) }} / {{ fmtGiB(sys.memTotal) }}</span>
+              </div>
+              <el-progress :percentage="memPct" :stroke-width="10" :show-text="false" status="success" />
+            </div>
+
+            <div class="metric dash-box">
+              <div class="metric-top">
+                <span class="label">磁盘存储</span>
+                <span class="value">{{ fmtGiB(sys.diskUsed) }} / {{ fmtGiB(sys.diskTotal) }}</span>
+              </div>
+              <el-progress :percentage="diskPct" :stroke-width="10" :show-text="false" status="warning" />
+            </div>
+
+            <div class="split-line" />
+
+            <div class="overview-grid">
+              <div class="ov-card dash-box">
+                <div class="ov-icon">
+                  <i :class="[osIcon, 'os-icon', osTone]" />
+                </div>
+                <div class="ov-meta">
+                  <div class="ov-main">{{ sys.osInfo || 'Unknown OS' }}</div>
+                  <div class="ov-sub muted">
+                    <span v-if="sys.kernel">Kernel {{ sys.kernel }}</span>
+                    <span v-if="sys.kernel && sys.uptimeSec" class="dot">·</span>
+                    <span v-if="sys.uptimeSec">已运行 {{ uptimeText }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ov-card dash-box">
+                <div class="ov-icon">
+                  <i class="ri-cpu-line" :class="sys.hasGPU ? 'gpu-ok' : 'gpu-off'" />
+                </div>
+                <div class="ov-meta">
+                  <div class="ov-main" :class="{ muted: !sys.hasGPU }">
+                    {{ sys.gpuModel || 'Integrated Graphics / No GPU' }}
+                  </div>
+                  <div class="ov-tags">
+                    <el-tag v-if="sys.gpuMemory" size="small" effect="dark" class="ov-tag">显存: {{ sys.gpuMemory }}</el-tag>
+                    <el-tag v-if="sys.gpuDriver" size="small" effect="dark" class="ov-tag">驱动: v{{ sys.gpuDriver }}</el-tag>
+                    <el-tag v-if="!sys.hasGPU" size="small" effect="dark" type="info" class="ov-tag">NO GPU</el-tag>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div class="ov-card">
-              <div class="ov-icon">
-                <i class="ri-cpu-line" :class="sys.hasGPU ? 'gpu-ok' : 'gpu-off'" />
-              </div>
-              <div class="ov-meta">
-                <div class="ov-main" :class="{ muted: !sys.hasGPU }">
-                  {{ sys.gpuModel || 'Integrated Graphics / No GPU' }}
-                </div>
-                <div class="ov-tags">
-                  <el-tag v-if="sys.gpuMemory" size="small" effect="dark" class="ov-tag">显存: {{ sys.gpuMemory }}</el-tag>
-                  <el-tag v-if="sys.gpuDriver" size="small" effect="dark" class="ov-tag">驱动: v{{ sys.gpuDriver }}</el-tag>
-                  <el-tag v-if="!sys.hasGPU" size="small" effect="dark" type="info" class="ov-tag">NO GPU</el-tag>
+            <div class="net-row">
+              <div class="net-item up dash-box">
+                <i class="ri-upload-2-line" />
+                <div class="net-meta">
+                  <div class="net-label">上传</div>
+                  <div class="net-value">{{ fmtSpeedBps(sys.upBps) }}</div>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div class="net-row">
-            <div class="net-item up">
-              <i class="ri-upload-2-line" />
-              <div class="net-meta">
-                <div class="net-label">上传</div>
-                <div class="net-value">{{ fmtSpeedBps(sys.upBps) }}</div>
-              </div>
-            </div>
-            <div class="net-item down">
-              <i class="ri-download-2-line" />
-              <div class="net-meta">
-                <div class="net-label">下载</div>
-                <div class="net-value">{{ fmtSpeedBps(sys.downBps) }}</div>
+              <div class="net-item down dash-box">
+                <i class="ri-download-2-line" />
+                <div class="net-meta">
+                  <div class="net-label">下载</div>
+                  <div class="net-value">{{ fmtSpeedBps(sys.downBps) }}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -539,71 +586,73 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <el-row :gutter="10" class="stat-row">
-            <el-col :xs="12" :sm="12" :lg="6">
-              <div class="stat-card">
-                <div class="stat-icon pending"><i class="ri-time-line" /></div>
-                <div class="stat-meta">
-                  <div class="stat-value">{{ biz.pending }}</div>
-                  <div class="stat-label muted">待转发</div>
+          <div class="dash-stack">
+            <el-row :gutter="10" class="stat-row">
+              <el-col :xs="12" :sm="12" :md="12" :lg="12" :xl="6">
+                <div class="stat-card dash-box">
+                  <div class="stat-icon pending"><i class="ri-time-line" /></div>
+                  <div class="stat-meta">
+                    <div class="stat-value">{{ biz.pending }}</div>
+                    <div class="stat-label muted">待转发</div>
+                  </div>
                 </div>
-              </div>
-            </el-col>
+              </el-col>
 
-            <el-col :xs="12" :sm="12" :lg="6">
-              <div class="stat-card">
-                <div class="stat-icon ok"><i class="ri-line-chart-line" /></div>
-                <div class="stat-meta">
-                  <div class="stat-value">{{ biz.forwarded }}</div>
-                  <div class="stat-label muted">已发送</div>
-                  <div class="stat-sub muted">今日 +{{ biz.todayForwarded }}</div>
+              <el-col :xs="12" :sm="12" :md="12" :lg="12" :xl="6">
+                <div class="stat-card dash-box">
+                  <div class="stat-icon ok"><i class="ri-line-chart-line" /></div>
+                  <div class="stat-meta">
+                    <div class="stat-value">{{ biz.forwarded }}</div>
+                    <div class="stat-label muted">已发送</div>
+                    <div class="stat-sub muted">今日 +{{ biz.todayForwarded }}</div>
+                  </div>
+                  <i class="ri-arrow-up-line stat-trend ok" />
                 </div>
-                <i class="ri-arrow-up-line stat-trend ok" />
-              </div>
-            </el-col>
+              </el-col>
 
-            <el-col :xs="12" :sm="12" :lg="6">
-              <div class="stat-card">
-                <div class="stat-icon muted"><i class="ri-filter-3-line" /></div>
-                <div class="stat-meta">
-                  <div class="stat-value">{{ biz.filtered }}</div>
-                  <div class="stat-label muted">已过滤</div>
-                  <div class="stat-sub muted">今日 +{{ biz.todayFiltered }}</div>
+              <el-col :xs="12" :sm="12" :md="12" :lg="12" :xl="6">
+                <div class="stat-card dash-box">
+                  <div class="stat-icon muted"><i class="ri-filter-3-line" /></div>
+                  <div class="stat-meta">
+                    <div class="stat-value">{{ biz.filtered }}</div>
+                    <div class="stat-label muted">已过滤</div>
+                    <div class="stat-sub muted">今日 +{{ biz.todayFiltered }}</div>
+                  </div>
                 </div>
-              </div>
-            </el-col>
+              </el-col>
 
-            <el-col :xs="12" :sm="12" :lg="6">
-              <div class="stat-card">
-                <div class="stat-icon err"><i class="ri-error-warning-line" /></div>
-                <div class="stat-meta">
-                  <div class="stat-value err">{{ biz.errors }}</div>
-                  <div class="stat-label muted">错误数</div>
-                  <div class="stat-sub muted">今日 +{{ biz.todayErrors }}</div>
+              <el-col :xs="12" :sm="12" :md="12" :lg="12" :xl="6">
+                <div class="stat-card dash-box">
+                  <div class="stat-icon err"><i class="ri-error-warning-line" /></div>
+                  <div class="stat-meta">
+                    <div class="stat-value err">{{ biz.errors }}</div>
+                    <div class="stat-label muted">错误数</div>
+                    <div class="stat-sub muted">今日 +{{ biz.todayErrors }}</div>
+                  </div>
                 </div>
+              </el-col>
+            </el-row>
+
+            <div class="split-line" />
+
+            <div class="mini-kpis">
+              <div class="kpi dash-box dash-box-soft">
+                <div class="kpi-k">今日处理</div>
+                <div class="kpi-v">{{ todayProcessed }}</div>
               </div>
-            </el-col>
-          </el-row>
-
-          <div class="split-line" />
-
-          <div class="mini-kpis">
-            <div class="kpi">
-              <div class="kpi-k">今日处理</div>
-              <div class="kpi-v">{{ todayProcessed }}</div>
+              <div class="kpi dash-box dash-box-soft">
+                <div class="kpi-k">今日过滤率</div>
+                <div class="kpi-v">{{ todayFilterRate }}%</div>
+              </div>
+              <div class="kpi dash-box dash-box-soft">
+                <div class="kpi-k">今日错误率</div>
+                <div class="kpi-v err">{{ todayErrorRate }}%</div>
+              </div>
             </div>
-            <div class="kpi">
-              <div class="kpi-k">今日过滤率</div>
-              <div class="kpi-v">{{ todayFilterRate }}%</div>
-            </div>
-            <div class="kpi">
-              <div class="kpi-k">今日错误率</div>
-              <div class="kpi-v err">{{ todayErrorRate }}%</div>
-            </div>
-          </div>
 
-          <div class="kpi-sub muted">
-            累计处理 {{ totalProcessed }} · 过滤率 {{ totalFilterRate }}% · 错误率 {{ totalErrorRate }}%
+            <div class="kpi-sub muted">
+              累计处理 {{ totalProcessed }} · 过滤率 {{ totalFilterRate }}% · 错误率 {{ totalErrorRate }}%
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -622,34 +671,36 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <div class="svc-block">
-            <div class="svc-title">
-              <i class="ri-movie-2-line" />
-              <span>FFmpeg 队列</span>
-            </div>
-            <div class="svc-kv">
-              <div class="kv">
-                <span class="k muted">任务数</span>
-                <span class="v">{{ service.ffmpegQueue }}</span>
+          <div class="dash-stack">
+            <div class="svc-block">
+              <div class="svc-title">
+                <i class="ri-movie-2-line" />
+                <span>FFmpeg 队列</span>
               </div>
-              <div class="kv">
-                <span class="k muted">活跃线程</span>
-                <span class="v">{{ service.ffmpegThreads }}</span>
+              <div class="svc-kv">
+                <div class="kv dash-box">
+                  <span class="k muted">任务数</span>
+                  <span class="v">{{ service.ffmpegQueue }}</span>
+                </div>
+                <div class="kv dash-box">
+                  <span class="k muted">活跃线程</span>
+                  <span class="v">{{ service.ffmpegThreads }}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="split-line" />
+            <div class="split-line" />
 
-          <div class="svc-block">
-            <div class="svc-title">
-              <i class="ri-global-line" />
-              <span>当前代理</span>
-            </div>
-            <div class="proxy-line" :class="{ direct: !service.proxyEnabled }">
-              <span class="proxy-value">{{ proxyText }}</span>
-              <span v-if="service.proxyEnabled" class="proxy-tag ok">PROXY</span>
-              <span v-else class="proxy-tag muted">DIRECT</span>
+            <div class="svc-block">
+              <div class="svc-title">
+                <i class="ri-global-line" />
+                <span>当前代理</span>
+              </div>
+              <div class="proxy-line dash-box" :class="{ direct: !service.proxyEnabled }">
+                <span class="proxy-value">{{ proxyText }}</span>
+                <span v-if="service.proxyEnabled" class="proxy-tag ok">PROXY</span>
+                <span v-else class="proxy-tag muted">DIRECT</span>
+              </div>
             </div>
           </div>
         </el-card>
@@ -665,15 +716,41 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-sub">
                 <span>Event Logs</span>
+                <span v-if="logs.length" class="dot">·</span>
+                <span v-if="logs.length">最近 {{ logs.length }} 条</span>
               </div>
             </div>
           </template>
 
+          <div class="log-toolbar">
+            <div class="log-left">
+              <el-input
+                v-model="logQuery"
+                size="small"
+                clearable
+                class="log-search"
+                placeholder="搜索日志（关键词）"
+              />
+              <el-checkbox-group v-model="logLevels" size="small" class="log-levels">
+                <el-checkbox label="INFO">INFO</el-checkbox>
+                <el-checkbox label="WARN">WARN</el-checkbox>
+                <el-checkbox label="ERROR">ERROR</el-checkbox>
+              </el-checkbox-group>
+            </div>
+            <div class="log-right">
+              <el-checkbox v-model="stickToBottom" size="small">自动滚动</el-checkbox>
+              <el-button size="small" @click="clearLogs">清空</el-button>
+              <el-button size="small" @click="copyVisibleLogs">复制</el-button>
+            </div>
+          </div>
+
           <div class="console" ref="logBoxRef">
-            <div v-for="it in logs" :key="it.id" class="line" :class="it.level.toLowerCase()">
+            <div v-for="it in filteredLogs" :key="it.id" class="line" :class="it.level.toLowerCase()">
               {{ it.text }}
             </div>
           </div>
+
+          <div class="log-foot muted">显示 {{ filteredLogs.length }} / {{ logs.length }} 条</div>
         </el-card>
       </el-col>
     </el-row>
@@ -683,6 +760,41 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 .dashboard {
   width: 100%;
+  --dash-box-radius: 12px;
+  --dash-box-border: var(--el-border-color-lighter);
+  --dash-box-bg: var(--el-fill-color-extra-light, var(--el-fill-color-lighter));
+  --dash-box-bg-soft: var(--el-fill-color-light);
+}
+
+.dash-row > :deep(.el-col) {
+  display: flex;
+  min-height: 0;
+}
+
+.dash-row > :deep(.el-col) > .bt-card {
+  width: 100%;
+  height: 100%;
+}
+
+.dash-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dash-stack .split-line {
+  margin: 0;
+}
+
+.dash-box {
+  border: 1px solid var(--dash-box-border);
+  background: var(--dash-box-bg);
+  border-radius: var(--dash-box-radius);
+  padding: 10px 10px;
+}
+
+.dash-box-soft {
+  background: var(--dash-box-bg-soft);
 }
 
 .dash-head {
@@ -768,7 +880,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 12px;
 }
 
 .metric-top {
@@ -806,10 +917,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 10px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.015);
 }
 
 .ov-icon {
@@ -873,16 +980,11 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-top: 12px;
 }
 
 .net-item {
   display: flex;
   gap: 10px;
-  padding: 10px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.015);
 
   i {
     font-size: 18px;
@@ -924,10 +1026,6 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
   align-items: center;
-  padding: 12px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.015);
   min-height: 64px;
 }
 
@@ -1009,10 +1107,6 @@ onBeforeUnmount(() => {
 }
 
 .kpi {
-  padding: 10px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.12);
 }
 
 .kpi-k {
@@ -1032,7 +1126,6 @@ onBeforeUnmount(() => {
 }
 
 .kpi-sub {
-  margin-top: 10px;
   font-size: 12px;
 }
 
@@ -1064,10 +1157,6 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.015);
 
   .k {
     font-size: 12px;
@@ -1084,10 +1173,6 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.015);
 }
 
 .proxy-value {
@@ -1111,6 +1196,40 @@ onBeforeUnmount(() => {
 .proxy-tag.muted {
   color: rgba(191, 203, 217, 0.75);
   background: rgba(191, 203, 217, 0.08);
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.log-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.log-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.log-search {
+  width: 260px;
+  max-width: 100%;
+}
+
+.log-levels :deep(.el-checkbox) {
+  margin-right: 6px;
 }
 
 .console {
@@ -1144,6 +1263,25 @@ onBeforeUnmount(() => {
   color: #f87171;
 }
 
+div.log-foot {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 1200px) {
+  .mini-kpis {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .net-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 768px) {
   .mini-kpis {
     grid-template-columns: 1fr;
@@ -1155,6 +1293,14 @@ onBeforeUnmount(() => {
 
   .net-row {
     grid-template-columns: 1fr;
+  }
+
+  .log-search {
+    width: 100%;
+  }
+
+  .console {
+    height: 260px;
   }
 }
 </style>
