@@ -187,13 +187,25 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 	var commentCfg *commentPipelineConfig
 	{
-		// Comment mirroring currently only supports same MTProto session for both crawling and publishing.
-		if pubRuntime != nil {
-			m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 分开发送模式暂不支持")
-		} else {
-			st := ResolveRuntimeStrategy(task)
-			_, enabled, _ := resolveCommentRule(task, st)
-			if enabled {
+		st := ResolveRuntimeStrategy(task)
+		_, enabled, _ := resolveCommentRule(task, st)
+		if enabled {
+			// Comment mirroring in separated publish mode:
+			// - supported for bot publisher (comments are sent via Bot API).
+			// - MTProto separated publisher is still unsupported for now.
+			if pubRuntime != nil && !pubRuntime.isBot() {
+				m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻已忽略: 分开发送模式暂不支持(account)")
+			} else {
+				// Bot publish skips target peer resolution by default; comment mirroring needs target channel peer
+				// to resolve discussion roots (messages.getDiscussionMessage).
+				if targetPeer == nil && pubRuntime != nil && pubRuntime.isBot() {
+					if p, err := resolveInputPeer(ctx, api, task.TargetURL); err != nil {
+						m.record(taskID, runID, 0, 0, 0, 0, "评论区复刻初始化失败: Bot 模式下解析目标频道失败: "+err.Error()+" (已忽略)")
+					} else {
+						targetPeer = p
+					}
+				}
+
 				srcCh, okSrc := sourcePeer.(*tg.InputPeerChannel)
 				dstCh, okDst := targetPeer.(*tg.InputPeerChannel)
 				if !okSrc || srcCh == nil || srcCh.ChannelID == 0 {

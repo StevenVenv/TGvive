@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -43,11 +44,34 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 	if m == nil || api == nil || cfg == nil || !cfg.Enabled || cfg.LocalDB == nil {
 		return
 	}
-	if cfg.SourceLinkedPeer == nil || cfg.TargetLinkedPeer == nil {
-		return
-	}
 	if sourceRootID <= 0 || targetRootID <= 0 {
 		return
+	}
+	if cfg.SourceLinkedPeer == nil {
+		return
+	}
+
+	pub := m.getPublisher(task.ID)
+	useBot := pub != nil && pub.isBot()
+	botChatID := ""
+	botPub := (*taskPublisherRuntime)(nil)
+	if useBot {
+		if cfg.TargetLinkedChatID == 0 {
+			return
+		}
+		botPub = pub
+		if cfg.TargetLinkedChatID < 0 {
+			botChatID = fmt.Sprintf("%d", cfg.TargetLinkedChatID)
+		} else {
+			botChatID = fmt.Sprintf("-100%d", cfg.TargetLinkedChatID)
+		}
+		if strings.TrimSpace(botChatID) == "" {
+			return
+		}
+	} else {
+		if cfg.TargetLinkedPeer == nil {
+			return
+		}
 	}
 
 	cfg.sendMu.Lock()
@@ -225,6 +249,30 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 	}
 
 	sendOne := func(item localdb.CommentQueue, payload localdb.LightPayload) (int, error) {
+		// Bot publisher: send comment to target linked chat using Bot API, reply to discussion root.
+		if useBot && botPub != nil {
+			// Fast path: text-only (or caption-only when media unsupported).
+			if len(payload.MediaBytes) == 0 && (payload.MediaType == "" || strings.EqualFold(payload.MediaType, "text")) {
+				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, targetRootID)
+			}
+
+			fullMsg, rerr := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, item.MsgID)
+			if rerr != nil {
+				return 0, rerr
+			}
+			if fullMsg == nil {
+				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, targetRootID)
+			}
+			if fullMsg.Media == nil {
+				return botSendText(ctx, botPub.Bot, botChatID, fullMsg.Message, targetRootID)
+			}
+
+			pubCopy := *botPub
+			pubCopy.ChatID = botChatID
+			return m.botSendUploadedMediaFromTGMessageResult(ctx, api, cfg.SourceLinkedPeer, fullMsg, task, &pubCopy, targetRootID)
+		}
+
+		// MTProto publisher.
 		if wmEnabled && strings.EqualFold(payload.MediaType, "image") {
 			if id, err := sendWatermarkedImage(item.MsgID, payload); err == nil {
 				return id, nil
@@ -366,7 +414,36 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					targetIDs := []int(nil)
 					sendErr := error(nil)
 
-					if needWM {
+					if useBot && botPub != nil {
+						msgsToSend := make([]*tg.Message, 0, len(sendItems))
+						for _, it := range sendItems {
+							fullMsg, err := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, it.rec.MsgID)
+							if err != nil {
+								sendErr = err
+								break
+							}
+							if fullMsg == nil || fullMsg.Media == nil {
+								sendErr = errors.New("album item missing media")
+								break
+							}
+							method, _, _ := botSingleMethodForMessage(fullMsg)
+							if method == "" {
+								sendErr = errors.New("album item unsupported by bot api")
+								break
+							}
+							msgsToSend = append(msgsToSend, fullMsg)
+						}
+
+						if sendErr == nil && len(msgsToSend) == len(sendItems) {
+							pubCopy := *botPub
+							pubCopy.ChatID = botChatID
+							ids, err := m.botSendUploadedAlbumFromTGMessagesResult(ctx, api, cfg.SourceLinkedPeer, msgsToSend, task, &pubCopy, targetRootID)
+							if err == nil {
+								targetIDs = ids
+							}
+							sendErr = err
+						}
+					} else if needWM {
 						replyTo := &tg.InputReplyToMessage{ReplyToMsgID: targetRootID}
 						multi := make([]tg.InputSingleMedia, 0, len(sendItems))
 
@@ -456,7 +533,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 						if len(targetIDs) == len(sendItems) {
 							for idx, it := range sendItems {
 								casOK := markSuccessWithCAS(it.rec, targetIDs[idx])
-								if !casOK {
+								if !casOK && !useBot {
 									m.submitCommentEdit(ctx, api, task.ID, cfg, it.rec.MsgID, targetIDs[idx])
 								}
 							}
@@ -520,7 +597,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 
 					if targetID > 0 {
 						casOK := markSuccessWithCAS(it.rec, targetID)
-						if !casOK {
+						if !casOK && !useBot {
 							m.submitCommentEdit(ctx, api, task.ID, cfg, it.rec.MsgID, targetID)
 						}
 						sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)
@@ -577,7 +654,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 
 			if targetID > 0 {
 				casOK := markSuccessWithCAS(item, targetID)
-				if !casOK {
+				if !casOK && !useBot {
 					m.submitCommentEdit(ctx, api, task.ID, cfg, item.MsgID, targetID)
 				}
 				sleepRandom(ctx, commentSendDelayMin, commentSendDelayMax)

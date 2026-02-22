@@ -107,6 +107,34 @@ func botHTTPClient() *http.Client {
 	return runtimeHTTPClient(6 * time.Minute)
 }
 
+func botSendText(ctx context.Context, bot global.StoredBot, chatID string, text string, replyID int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return 0, errors.New("chat_id is empty")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0, nil
+	}
+
+	vals := url.Values{}
+	vals.Set("chat_id", chatID)
+	vals.Set("text", text)
+	if replyID > 0 {
+		vals.Set("reply_to_message_id", strconv.Itoa(replyID))
+		vals.Set("allow_sending_without_reply", "true")
+	}
+
+	out, err := botPostForm[botAPIMessage](ctx, bot, "sendMessage", vals)
+	if err != nil {
+		return 0, err
+	}
+	return out.MessageID, nil
+}
+
 func botPostForm[T any](ctx context.Context, bot global.StoredBot, method string, values url.Values) (T, error) {
 	var zero T
 	if strings.TrimSpace(bot.Token) == "" {
@@ -254,18 +282,23 @@ func botPostMultipart[T any](ctx context.Context, bot global.StoredBot, method s
 }
 
 func (m *TaskManager) botSendTextFromTGMessage(ctx context.Context, msg *tg.Message, task model.Task, pub *taskPublisherRuntime) error {
+	_, err := m.botSendTextFromTGMessageResult(ctx, msg, task, pub)
+	return err
+}
+
+func (m *TaskManager) botSendTextFromTGMessageResult(ctx context.Context, msg *tg.Message, task model.Task, pub *taskPublisherRuntime) (int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if pub == nil || pub.Kind != publisherKindBot {
-		return errors.New("publisher is not bot")
+		return 0, errors.New("publisher is not bot")
 	}
 	if msg == nil {
-		return nil
+		return 0, nil
 	}
 	text := strings.TrimSpace(msg.Message)
 	if text == "" {
-		return nil
+		return 0, nil
 	}
 
 	replyID := 0
@@ -273,22 +306,14 @@ func (m *TaskManager) botSendTextFromTGMessage(ctx context.Context, msg *tg.Mess
 		replyID = rt.ReplyToMsgID
 	}
 
-	vals := url.Values{}
-	vals.Set("chat_id", pub.ChatID)
-	vals.Set("text", text)
-	if replyID > 0 {
-		vals.Set("reply_to_message_id", strconv.Itoa(replyID))
-		vals.Set("allow_sending_without_reply", "true")
-	}
-
-	out, err := botPostForm[botAPIMessage](ctx, pub.Bot, "sendMessage", vals)
+	sentID, err := botSendText(ctx, pub.Bot, pub.ChatID, text, replyID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if msg.ID > 0 && out.MessageID > 0 {
-		storeMsgMapping(task, msg.ID, out.MessageID)
+	if msg.ID > 0 && sentID > 0 {
+		storeMsgMapping(task, msg.ID, sentID)
 	}
-	return nil
+	return sentID, nil
 }
 
 func isAudioDocument(media *tg.MessageMediaDocument) bool {
@@ -333,27 +358,43 @@ func botSingleMethodForMessage(msg *tg.Message) (method string, fileField string
 }
 
 func (m *TaskManager) botSendUploadedMediaFromTGMessage(ctx context.Context, crawlerAPI *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, task model.Task, pub *taskPublisherRuntime) error {
+	replyID := 0
+	if rt, ok := buildKeepReplyInput(ctx, task, msg).(*tg.InputReplyToMessage); ok && rt != nil {
+		replyID = rt.ReplyToMsgID
+	}
+	_, err := m.botSendUploadedMediaFromTGMessageResult(ctx, crawlerAPI, sourcePeer, msg, task, pub, replyID)
+	return err
+}
+
+func (m *TaskManager) botSendUploadedMediaFromTGMessageResult(ctx context.Context, crawlerAPI *tg.Client, sourcePeer tg.InputPeerClass, msg *tg.Message, task model.Task, pub *taskPublisherRuntime, replyID int) (int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if pub == nil || pub.Kind != publisherKindBot {
-		return errors.New("publisher is not bot")
+		return 0, errors.New("publisher is not bot")
 	}
 	if crawlerAPI == nil {
-		return errors.New("crawler tg api is nil")
+		return 0, errors.New("crawler tg api is nil")
 	}
 	if msg == nil || msg.Media == nil {
-		return nil
+		return 0, nil
 	}
 
 	method, fileField, _ := botSingleMethodForMessage(msg)
 	if method == "" || fileField == "" {
-		return m.botSendTextFromTGMessage(ctx, msg, task, pub)
+		sentID, err := botSendText(ctx, pub.Bot, pub.ChatID, msg.Message, replyID)
+		if err != nil {
+			return 0, err
+		}
+		if msg.ID > 0 && sentID > 0 {
+			storeMsgMapping(task, msg.ID, sentID)
+		}
+		return sentID, nil
 	}
 
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, crawlerAPI, sourcePeer, msg, task.ID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if cleanup != nil {
 		defer func() { _ = cleanup() }()
@@ -429,14 +470,14 @@ func (m *TaskManager) botSendUploadedMediaFromTGMessage(ctx context.Context, cra
 		recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 		if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 			if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
-				wmName := fmt.Sprintf("wm_%d.jpg", msg.ID)
-				if task.ChangeMD5 {
-					updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
-					if err != nil {
-						return err
+					wmName := fmt.Sprintf("wm_%d.jpg", msg.ID)
+					if task.ChangeMD5 {
+						updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
+						if err != nil {
+							return 0, err
+						}
+						outBytes = updated
 					}
-					outBytes = updated
-				}
 				dir := filepath.Dir(uploadPath)
 				outPath := filepath.Join(dir, wmName)
 				if err := os.WriteFile(outPath, outBytes, 0o600); err == nil {
@@ -450,18 +491,13 @@ func (m *TaskManager) botSendUploadedMediaFromTGMessage(ctx context.Context, cra
 
 	if task.ChangeMD5 {
 		if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	caption := msg.Message
 	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
 		caption = out
-	}
-
-	replyID := 0
-	if rt, ok := buildKeepReplyInput(ctx, task, msg).(*tg.InputReplyToMessage); ok && rt != nil {
-		replyID = rt.ReplyToMsgID
 	}
 
 	fields := map[string]string{
@@ -479,12 +515,12 @@ func (m *TaskManager) botSendUploadedMediaFromTGMessage(ctx context.Context, cra
 		{FieldName: fileField, FileName: uploadFileName, Path: uploadPath},
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if msg.ID > 0 && out.MessageID > 0 {
 		storeMsgMapping(task, msg.ID, out.MessageID)
 	}
-	return nil
+	return out.MessageID, nil
 }
 
 type botInputMedia struct {
@@ -494,24 +530,11 @@ type botInputMedia struct {
 }
 
 func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, crawlerAPI *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, pub *taskPublisherRuntime) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if pub == nil || pub.Kind != publisherKindBot {
-		return errors.New("publisher is not bot")
-	}
-	if crawlerAPI == nil {
-		return errors.New("crawler tg api is nil")
-	}
-	if len(msgs) == 0 {
-		return nil
-	}
-
-	// Bot API limit: 10 items per media group.
-	const maxGroup = 10
-
 	// Choose reply carrier for keep-reply.
-	replyCarrier := msgs[0]
+	replyCarrier := (*tg.Message)(nil)
+	if len(msgs) > 0 {
+		replyCarrier = msgs[0]
+	}
 	for _, mm := range msgs {
 		if extractReplyToSourceMsgID(mm) > 0 {
 			replyCarrier = mm
@@ -522,6 +545,27 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 	if rt, ok := buildKeepReplyInput(ctx, task, replyCarrier).(*tg.InputReplyToMessage); ok && rt != nil {
 		replyID = rt.ReplyToMsgID
 	}
+	_, err := m.botSendUploadedAlbumFromTGMessagesResult(ctx, crawlerAPI, sourcePeer, msgs, task, pub, replyID)
+	return err
+}
+
+func (m *TaskManager) botSendUploadedAlbumFromTGMessagesResult(ctx context.Context, crawlerAPI *tg.Client, sourcePeer tg.InputPeerClass, msgs []*tg.Message, task model.Task, pub *taskPublisherRuntime, replyID int) ([]int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if pub == nil || pub.Kind != publisherKindBot {
+		return nil, errors.New("publisher is not bot")
+	}
+	if crawlerAPI == nil {
+		return nil, errors.New("crawler tg api is nil")
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+
+	// Bot API limit: 10 items per media group.
+	const maxGroup = 10
+	allSentIDs := make([]int, 0, len(msgs))
 
 	for start := 0; start < len(msgs); start += maxGroup {
 		end := start + maxGroup
@@ -551,11 +595,11 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 				continue
 			}
 
-			localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, crawlerAPI, sourcePeer, msg, task.ID)
-			if err != nil {
-				cleanUp()
-				return err
-			}
+				localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, crawlerAPI, sourcePeer, msg, task.ID)
+				if err != nil {
+					cleanUp()
+					return allSentIDs, err
+				}
 			if cleanup != nil {
 				cleanups = append(cleanups, cleanup)
 			}
@@ -622,15 +666,15 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 				recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 				if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 					if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
-						wmName := fmt.Sprintf("wm_%d_%d.jpg", msg.ID, i)
-						if task.ChangeMD5 {
-							updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
-							if err != nil {
-								cleanUp()
-								return err
+							wmName := fmt.Sprintf("wm_%d_%d.jpg", msg.ID, i)
+							if task.ChangeMD5 {
+								updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
+								if err != nil {
+									cleanUp()
+									return allSentIDs, err
+								}
+								outBytes = updated
 							}
-							outBytes = updated
-						}
 						dir := filepath.Dir(uploadPath)
 						outPath := filepath.Join(dir, wmName)
 						if err := os.WriteFile(outPath, outBytes, 0o600); err == nil {
@@ -642,12 +686,12 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 				}
 			}
 
-			if task.ChangeMD5 {
-				if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
-					cleanUp()
-					return err
+				if task.ChangeMD5 {
+					if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
+						cleanUp()
+						return allSentIDs, err
+					}
 				}
-			}
 
 			attachName := fmt.Sprintf("file%d", i)
 			files = append(files, botMultipartFile{
@@ -677,11 +721,11 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 			inputMedia[0].Caption = caption
 		}
 
-		mediaJSON, err := json.Marshal(inputMedia)
-		if err != nil {
-			cleanUp()
-			return err
-		}
+			mediaJSON, err := json.Marshal(inputMedia)
+			if err != nil {
+				cleanUp()
+				return allSentIDs, err
+			}
 
 		fields := map[string]string{
 			"chat_id": pub.ChatID,
@@ -695,7 +739,7 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 		out, err := botPostMultipart[[]botAPIMessage](ctx, pub.Bot, "sendMediaGroup", fields, files)
 		cleanUp()
 		if err != nil {
-			return err
+			return allSentIDs, err
 		}
 		sentIDs := make([]int, 0, len(out))
 		for _, m2 := range out {
@@ -703,10 +747,11 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessages(ctx context.Context, cr
 				sentIDs = append(sentIDs, m2.MessageID)
 			}
 		}
+		allSentIDs = append(allSentIDs, sentIDs...)
 		if len(sentIDs) > 0 {
 			storeMsgMappingsInOrder(task, sentSrcMsgs, sentIDs)
 		}
 	}
 
-	return nil
+	return allSentIDs, nil
 }

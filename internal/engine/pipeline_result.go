@@ -22,6 +22,10 @@ func (m *TaskManager) processSingleMessageResult(ctx context.Context, api *tg.Cl
 		recordTaskDetailFromCtx(ctx, fmt.Sprintf("收到消息: msg_id=%d", msg.ID))
 	}
 
+	if pub := m.getPublisher(task.ID); pub != nil {
+		return m.processSingleMessageResultWithPublisher(ctx, api, sourcePeer, peer, task, msg, pub)
+	}
+
 	if task.CloneMode != 3 {
 		task.EnableMediaEdit = false
 	}
@@ -85,6 +89,10 @@ func (m *TaskManager) processSingleMessageResult(ctx context.Context, api *tg.Cl
 func (m *TaskManager) processAlbumBatchResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, task model.Task, msgs []*tg.Message) ([]int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if pub := m.getPublisher(task.ID); pub != nil {
+		return m.processAlbumBatchResultWithPublisher(ctx, api, sourcePeer, peer, task, msgs, pub)
 	}
 
 	if task.CloneMode != 3 {

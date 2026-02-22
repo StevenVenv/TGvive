@@ -22,6 +22,10 @@ func (m *TaskManager) submitCommentEdit(ctx context.Context, api *tg.Client, tas
 	if m == nil || api == nil {
 		return
 	}
+	// Bot published comments cannot be edited via MTProto session.
+	if pub := m.getPublisher(taskID); pub != nil && pub.isBot() {
+		return
+	}
 	if cfg == nil || cfg.TargetLinkedPeer == nil || cfg.LocalDB == nil {
 		return
 	}
