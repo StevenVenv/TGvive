@@ -47,7 +47,7 @@ func (a *DashboardApi) DashboardWS(c *gin.Context) {
 	if err := conn.WriteJSON(dashboardWSMessage{Type: "stats", Data: global.Stats.Snapshot()}); err != nil {
 		return
 	}
-	for _, ev := range global.Stats.SnapshotLogs(0, 50) {
+	for _, ev := range global.Stats.SnapshotLogs(0, 200) {
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := conn.WriteJSON(dashboardWSMessage{Type: "log", Data: ev}); err != nil {
 			return

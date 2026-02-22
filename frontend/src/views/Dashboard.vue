@@ -21,6 +21,10 @@ type StatsSnapshot = {
   success: number
   fail: number
   filtered: number
+  biz_day?: string
+  today_success?: number
+  today_fail?: number
+  today_filtered?: number
   ffmpeg_active: number
   ffmpeg_threads: number
   has_gpu?: boolean
@@ -94,6 +98,10 @@ const biz = reactive({
   forwarded: 0,
   filtered: 0,
   errors: 0,
+  bizDay: '',
+  todayForwarded: 0,
+  todayFiltered: 0,
+  todayErrors: 0,
 })
 
 const service = reactive({
@@ -107,6 +115,13 @@ const service = reactive({
 const cpuPct = computed(() => Math.round(sys.cpu))
 const memPct = computed(() => clamp(Math.round((sys.memUsed / Math.max(0.1, sys.memTotal)) * 100), 0, 100))
 const diskPct = computed(() => clamp(Math.round((sys.diskUsed / Math.max(0.1, sys.diskTotal)) * 100), 0, 100))
+
+const totalProcessed = computed(() => Math.max(0, biz.forwarded + biz.filtered + biz.errors))
+const todayProcessed = computed(() => Math.max(0, biz.todayForwarded + biz.todayFiltered + biz.todayErrors))
+const totalFilterRate = computed(() => Math.round((biz.filtered / Math.max(1, totalProcessed.value)) * 100))
+const totalErrorRate = computed(() => Math.round((biz.errors / Math.max(1, totalProcessed.value)) * 100))
+const todayFilterRate = computed(() => Math.round((biz.todayFiltered / Math.max(1, todayProcessed.value)) * 100))
+const todayErrorRate = computed(() => Math.round((biz.todayErrors / Math.max(1, todayProcessed.value)) * 100))
 
 function fmtUptime(sec: number): string {
   const s = Math.max(0, Math.floor(Number(sec || 0)))
@@ -161,7 +176,7 @@ function pushLog(level: LogLevel, text: string, id?: number, ts?: number) {
     text,
     ts: typeof ts === 'number' ? ts : Date.now(),
   }
-  logs.value = [...logs.value, entry].slice(-50)
+  logs.value = [...logs.value, entry].slice(-200)
   void nextTick(() => {
     const el = logBoxRef.value
     if (!el) return
@@ -213,6 +228,10 @@ function applyStats(d: StatsSnapshot) {
   biz.forwarded = Math.max(0, Number(d.success || 0))
   biz.filtered = Math.max(0, Number(d.filtered || 0))
   biz.errors = Math.max(0, Number(d.fail || 0))
+  biz.bizDay = String(d.biz_day || '')
+  biz.todayForwarded = Math.max(0, Number(d.today_success || 0))
+  biz.todayFiltered = Math.max(0, Number(d.today_filtered || 0))
+  biz.todayErrors = Math.max(0, Number(d.today_fail || 0))
 
   service.ffmpegQueue = Math.max(0, Number(d.ffmpeg_active || 0))
   service.ffmpegThreads = Math.max(0, Number(d.ffmpeg_threads || 0))
@@ -389,6 +408,28 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dashboard">
+    <div class="dash-head">
+      <div class="dash-title">
+        <i class="ri-dashboard-3-line" />
+        <div class="dash-text">
+          <div class="dash-main">仪表盘</div>
+          <div class="dash-sub muted">
+            <span>实时监控</span>
+            <span class="dot">·</span>
+            <span>{{ wsConnected ? 'WebSocket' : 'Polling' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <el-space size="small" wrap>
+        <span class="pill" :class="modeClass">{{ modeBadge }}</span>
+        <el-button size="small" @click="refresh">
+          <i class="ri-refresh-line" />
+          刷新
+        </el-button>
+      </el-space>
+    </div>
+
     <el-row :gutter="12">
       <el-col :xs="24" :md="12" :lg="8">
         <el-card class="bt-card" shadow="never">
@@ -400,8 +441,6 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-sub">
                 <span>System Status</span>
-                <span class="dot">·</span>
-                <span class="pill" :class="modeClass">{{ modeBadge }}</span>
                 <span v-if="!wsConnected && lastWSErr" class="sys-err" :title="lastWSErr">WS_OFFLINE</span>
               </div>
             </div>
@@ -494,8 +533,8 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-sub">
                 <span>Business Stats</span>
-                <span class="dot">·</span>
-                <span class="pill" :class="modeClass">{{ modeBadge }}</span>
+                <span v-if="biz.bizDay" class="dot">·</span>
+                <span v-if="biz.bizDay">{{ biz.bizDay }}</span>
               </div>
             </div>
           </template>
@@ -516,7 +555,8 @@ onBeforeUnmount(() => {
                 <div class="stat-icon ok"><i class="ri-line-chart-line" /></div>
                 <div class="stat-meta">
                   <div class="stat-value">{{ biz.forwarded }}</div>
-                  <div class="stat-label muted">已转发</div>
+                  <div class="stat-label muted">已发送</div>
+                  <div class="stat-sub muted">今日 +{{ biz.todayForwarded }}</div>
                 </div>
                 <i class="ri-arrow-up-line stat-trend ok" />
               </div>
@@ -528,6 +568,7 @@ onBeforeUnmount(() => {
                 <div class="stat-meta">
                   <div class="stat-value">{{ biz.filtered }}</div>
                   <div class="stat-label muted">已过滤</div>
+                  <div class="stat-sub muted">今日 +{{ biz.todayFiltered }}</div>
                 </div>
               </div>
             </el-col>
@@ -538,6 +579,7 @@ onBeforeUnmount(() => {
                 <div class="stat-meta">
                   <div class="stat-value err">{{ biz.errors }}</div>
                   <div class="stat-label muted">错误数</div>
+                  <div class="stat-sub muted">今日 +{{ biz.todayErrors }}</div>
                 </div>
               </div>
             </el-col>
@@ -547,17 +589,21 @@ onBeforeUnmount(() => {
 
           <div class="mini-kpis">
             <div class="kpi">
-              <div class="kpi-k">过滤率</div>
-              <div class="kpi-v">{{ Math.round((biz.filtered / Math.max(1, biz.forwarded)) * 100) }}%</div>
+              <div class="kpi-k">今日处理</div>
+              <div class="kpi-v">{{ todayProcessed }}</div>
             </div>
             <div class="kpi">
-              <div class="kpi-k">错误占比</div>
-              <div class="kpi-v err">{{ Math.round((biz.errors / Math.max(1, biz.forwarded)) * 100) }}%</div>
+              <div class="kpi-k">今日过滤率</div>
+              <div class="kpi-v">{{ todayFilterRate }}%</div>
             </div>
             <div class="kpi">
-              <div class="kpi-k">任务积压</div>
-              <div class="kpi-v">{{ biz.pending }}</div>
+              <div class="kpi-k">今日错误率</div>
+              <div class="kpi-v err">{{ todayErrorRate }}%</div>
             </div>
+          </div>
+
+          <div class="kpi-sub muted">
+            累计处理 {{ totalProcessed }} · 过滤率 {{ totalFilterRate }}% · 错误率 {{ totalErrorRate }}%
           </div>
         </el-card>
       </el-col>
@@ -572,8 +618,6 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-sub">
                 <span>Service Status</span>
-                <span class="dot">·</span>
-                <span class="pill" :class="modeClass">{{ modeBadge }}</span>
               </div>
             </div>
           </template>
@@ -621,8 +665,6 @@ onBeforeUnmount(() => {
               </div>
               <div class="card-sub">
                 <span>Event Logs</span>
-                <span class="dot">·</span>
-                <span class="pill" :class="modeClass">{{ modeBadge }}</span>
               </div>
             </div>
           </template>
@@ -641,6 +683,45 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 .dashboard {
   width: 100%;
+}
+
+.dash-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.dash-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dash-title i {
+  font-size: 20px;
+  color: var(--el-color-primary);
+}
+
+.dash-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dash-main {
+  font-size: 16px;
+  font-weight: 850;
+  line-height: 1.1;
+  color: var(--el-text-color-primary);
+}
+
+.dash-sub {
+  font-size: 12px;
+  line-height: 1.1;
 }
 
 .dot {
@@ -897,6 +978,11 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.stat-sub {
+  font-size: 12px;
+  line-height: 1.1;
+}
+
 .stat-value.err {
   color: #f56c6c;
 }
@@ -943,6 +1029,11 @@ onBeforeUnmount(() => {
 
 .kpi-v.err {
   color: #f56c6c;
+}
+
+.kpi-sub {
+  margin-top: 10px;
+  font-size: 12px;
 }
 
 .svc-block {

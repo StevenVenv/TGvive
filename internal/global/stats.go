@@ -42,6 +42,11 @@ type StatsSnapshot struct {
 	Fail     uint64 `json:"fail"`
 	Filtered uint64 `json:"filtered"`
 
+	BizDay        string `json:"biz_day,omitempty"`
+	TodaySuccess  uint64 `json:"today_success"`
+	TodayFail     uint64 `json:"today_fail"`
+	TodayFiltered uint64 `json:"today_filtered"`
+
 	FFmpegActive  int `json:"ffmpeg_active"`
 	FFmpegThreads int `json:"ffmpeg_threads"`
 
@@ -239,6 +244,14 @@ type AppStats struct {
 
 	logs *logRing
 	hub  *logHub
+
+	bizDay        atomic.Value // string (YYYY-MM-DD)
+	todaySuccess  uint64
+	todayFail     uint64
+	todayFiltered uint64
+	bizMu         sync.Mutex
+
+	persistLogCh chan LogEvent
 }
 
 var Stats = newAppStats()
@@ -249,6 +262,8 @@ func newAppStats() *AppStats {
 		stopCh: make(chan struct{}),
 		logs:   newLogRing(600),
 		hub:    newLogHub(),
+		// Buffer: avoid blocking hot paths if disk is slow.
+		persistLogCh: make(chan LogEvent, 2048),
 	}
 	s.osInfo.Store(runtime.GOOS)
 	s.kernel.Store("")
@@ -256,6 +271,7 @@ func newAppStats() *AppStats {
 	s.gpuMemory.Store("")
 	s.gpuDriver.Store("")
 	s.gpuName.Store("")
+	s.bizDay.Store(time.Now().Format("2006-01-02"))
 	return s
 }
 
@@ -265,6 +281,9 @@ func (s *AppStats) StartMonitor() {
 	}
 
 	s.startOnce.Do(func() {
+		s.loadPersistedDashboardState()
+		go s.persistDashboardStatsLoop()
+		go s.persistDashboardLogsLoop()
 		go s.monitorLoop()
 	})
 }
@@ -496,6 +515,8 @@ func (s *AppStats) Snapshot() StatsSnapshot {
 	gpuName, _ := s.gpuName.Load().(string)
 	hasGPU := atomic.LoadUint32(&s.gpuDetected) == 1
 
+	bizDay := s.ensureBizDay(time.Now())
+
 	return StatsSnapshot{
 		TS:          time.Now().UnixMilli(),
 		OSInfo:      strings.TrimSpace(osInfo),
@@ -512,6 +533,16 @@ func (s *AppStats) Snapshot() StatsSnapshot {
 		Success:     atomic.LoadUint64(&s.success),
 		Fail:        atomic.LoadUint64(&s.fail),
 		Filtered:    atomic.LoadUint64(&s.filtered),
+		BizDay:      bizDay,
+		TodaySuccess: func() uint64 {
+			return atomic.LoadUint64(&s.todaySuccess)
+		}(),
+		TodayFail: func() uint64 {
+			return atomic.LoadUint64(&s.todayFail)
+		}(),
+		TodayFiltered: func() uint64 {
+			return atomic.LoadUint64(&s.todayFiltered)
+		}(),
 		FFmpegActive: func() int {
 			n := atomic.LoadInt64(&s.ffmpegActive)
 			if n < 0 {
@@ -550,21 +581,27 @@ func (s *AppStats) IncSuccess() {
 	if s == nil {
 		return
 	}
+	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.success, 1)
+	atomic.AddUint64(&s.todaySuccess, 1)
 }
 
 func (s *AppStats) IncFail() {
 	if s == nil {
 		return
 	}
+	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.fail, 1)
+	atomic.AddUint64(&s.todayFail, 1)
 }
 
 func (s *AppStats) IncFiltered() {
 	if s == nil {
 		return
 	}
+	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.filtered, 1)
+	atomic.AddUint64(&s.todayFiltered, 1)
 }
 
 func (s *AppStats) AddPending(delta int64) {
@@ -594,21 +631,27 @@ func (s *AppStats) AddSuccess(n uint64) {
 	if s == nil || n == 0 {
 		return
 	}
+	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.success, n)
+	atomic.AddUint64(&s.todaySuccess, n)
 }
 
 func (s *AppStats) AddFail(n uint64) {
 	if s == nil || n == 0 {
 		return
 	}
+	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.fail, n)
+	atomic.AddUint64(&s.todayFail, n)
 }
 
 func (s *AppStats) AddFiltered(n uint64) {
 	if s == nil || n == 0 {
 		return
 	}
+	s.ensureBizDay(time.Now())
 	atomic.AddUint64(&s.filtered, n)
+	atomic.AddUint64(&s.todayFiltered, n)
 }
 
 func (s *AppStats) IncFFmpegActive() {
@@ -640,6 +683,13 @@ func (s *AppStats) BroadcastLog(msg string) {
 	}
 	s.logs.push(ev)
 	s.hub.publish(ev)
+	// Persist best-effort (never block business logic).
+	if s.persistLogCh != nil {
+		select {
+		case s.persistLogCh <- ev:
+		default:
+		}
+	}
 	select {
 	case LogChan <- msg:
 	default:
