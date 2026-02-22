@@ -253,6 +253,13 @@ function filteredCount(p?: TaskProgress): number {
   return Math.max(0, processed - success - fail)
 }
 
+function threadLine(p?: TaskProgress): string {
+  const root = Number(p?.root_cnt ?? 0)
+  const reply = Number(p?.reply_cnt ?? 0)
+  if (!Number.isFinite(root) || !Number.isFinite(reply) || root + reply <= 0) return ''
+  return `主贴 ${Math.max(0, root)} / 回复 ${Math.max(0, reply)}`
+}
+
 type ProgressStatus = 'success' | 'warning' | 'exception' | undefined
 
 function isTaskRunningNow(task: Task): boolean {
@@ -733,13 +740,14 @@ defineExpose({
                             {{ progressLine(progressMap[row.ID]) }}
                             <template v-if="hasTotal(progressMap[row.ID])">（{{ progressPct(progressMap[row.ID]) }}%）</template>
                           </div>
-                          <div class="tip-line">
-                            成功 {{ progressMap[row.ID]?.success_cnt ?? 0 }} / 失败 {{ progressMap[row.ID]?.fail_cnt ?? 0 }} /
-                            过滤 {{ filteredCount(progressMap[row.ID]) }}
-                          </div>
-                          <div class="tip-line">速度：{{ progressMap[row.ID]?.speed ?? '0 消息/秒' }}</div>
+                        <div class="tip-line">
+                          成功 {{ progressMap[row.ID]?.success_cnt ?? 0 }} / 失败 {{ progressMap[row.ID]?.fail_cnt ?? 0 }} /
+                          过滤 {{ filteredCount(progressMap[row.ID]) }}
                         </div>
-                      </template>
+                        <div v-if="threadLine(progressMap[row.ID])" class="tip-line">{{ threadLine(progressMap[row.ID]) }}</div>
+                        <div class="tip-line">速度：{{ progressMap[row.ID]?.speed ?? '0 消息/秒' }}</div>
+                      </div>
+                    </template>
                       <el-progress
                         :percentage="progressBarPercentage(row, progressMap[row.ID])"
                         :stroke-width="10"
@@ -761,6 +769,9 @@ defineExpose({
                           / 过滤 {{ filteredCount(progressMap[row.ID]) }}
                         </template>
                       </el-text>
+                    </div>
+                    <div v-if="threadLine(progressMap[row.ID])" class="sub">
+                      <el-text type="info">{{ threadLine(progressMap[row.ID]) }}</el-text>
                     </div>
                   </template>
                 </el-table-column>
@@ -841,6 +852,20 @@ defineExpose({
               <div class="log-meta">
                 <el-text type="info">源：{{ selectedTask.source_url }}</el-text>
                 <el-text type="info">目标：{{ selectedTask.target_url }}</el-text>
+              </div>
+
+              <div v-if="logProgress" class="log-meta">
+                <el-text type="info">
+                  进度：{{ progressLine(logProgress) }}
+                  <template v-if="hasTotal(logProgress)">（{{ progressPct(logProgress) }}%）</template>
+                  <template v-else>（未知总量）</template>
+                </el-text>
+                <el-text v-if="threadLine(logProgress)" type="info">{{ threadLine(logProgress) }}</el-text>
+                <el-text type="info">
+                  成功 {{ logProgress?.success_cnt ?? 0 }} / 失败 {{ logProgress?.fail_cnt ?? 0 }}
+                  <template v-if="filteredCount(logProgress) > 0"> / 过滤 {{ filteredCount(logProgress) }}</template>
+                  / 速度 {{ logProgress?.speed ?? '0 消息/秒' }}
+                </el-text>
               </div>
 
               <el-divider />

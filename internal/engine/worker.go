@@ -354,6 +354,11 @@ func (m *TaskManager) isActiveRun(taskID uint, runID uint64) bool {
 // record updates counters and appends a log line.
 // totalDelta is used by realtime mode when new messages arrive.
 func (m *TaskManager) record(taskID uint, runID uint64, totalDelta int, processedDelta int, successDelta int, failDelta int, logLine string) {
+	m.recordEx(taskID, runID, totalDelta, processedDelta, successDelta, failDelta, 0, 0, logLine)
+}
+
+// recordEx updates counters (including root/reply breakdown) and appends a log line.
+func (m *TaskManager) recordEx(taskID uint, runID uint64, totalDelta int, processedDelta int, successDelta int, failDelta int, rootDelta int, replyDelta int, logLine string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -386,6 +391,18 @@ func (m *TaskManager) record(taskID uint, runID uint64, totalDelta int, processe
 			st.Fail = 0
 		}
 	}
+	if rootDelta != 0 {
+		st.Root += rootDelta
+		if st.Root < 0 {
+			st.Root = 0
+		}
+	}
+	if replyDelta != 0 {
+		st.Reply += replyDelta
+		if st.Reply < 0 {
+			st.Reply = 0
+		}
+	}
 	if logLine != "" {
 		st.appendLogLocked(logLine)
 	}
@@ -413,11 +430,13 @@ func (m *TaskManager) recordDetail(taskID uint, runID uint64, logLine string) {
 }
 
 func (m *TaskManager) markCompleted(taskID uint, runID uint64, stopRun bool) {
+	var snap taskProgressSnapshot
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	st := m.states[taskID]
 	if st == nil || st.RunID != runID {
+		m.mu.Unlock()
 		return
 	}
 
@@ -431,6 +450,18 @@ func (m *TaskManager) markCompleted(taskID uint, runID uint64, stopRun bool) {
 		st.SpeedBaseTime = time.Time{}
 		st.SpeedBaseProcessed = st.Processed
 	}
+
+	snap = taskProgressSnapshot{
+		TotalMsg:     st.Total,
+		ProcessedCnt: st.Processed,
+		SuccessCnt:   st.Success,
+		FailCnt:      st.Fail,
+		RootCnt:      st.Root,
+		ReplyCnt:     st.Reply,
+	}
+	m.mu.Unlock()
+
+	_ = persistTaskProgressSnapshot(taskID, snap)
 }
 
 func normalizeTypeSet(in []string) map[string]struct{} {

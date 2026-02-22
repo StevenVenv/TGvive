@@ -682,7 +682,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if carrier != nil {
 						if out, skip := applyKeywordPolicyToMessage(carrier, t.keyword); skip {
 							global.AddFiltered(uint64(plan.Need))
-							recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, 0, 0)
+							rootDelta, replyDelta := classifyRootReplyBatch(batch)
+							recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, 0, 0, rootDelta, replyDelta)
 							if pullReserved > 0 {
 								Scheduler.ReleasePull(t.Task.ID, pullReserved)
 							}
@@ -739,7 +740,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if failDelta <= 0 {
 						failDelta = 1
 					}
-					recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, 0, failDelta)
+					rootDelta, replyDelta := classifyRootReplyBatch(batch)
+					recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, 0, failDelta, rootDelta, replyDelta)
 					if global.Logger != nil {
 						global.Logger.Error(
 							"realtime process album failed",
@@ -755,7 +757,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if plan.Need > 0 {
 						global.AddSuccess(uint64(plan.Need))
 					}
-					recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, plan.Need, 0)
+					rootDelta, replyDelta := classifyRootReplyBatch(batch)
+					recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, plan.Need, 0, rootDelta, replyDelta)
 
 					if commentEnabled && minID > 0 {
 						targetID := minPositiveInt(sentIDs)
@@ -815,7 +818,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				if t.allowedTypes != nil {
 					if _, ok := t.allowedTypes[ct]; !ok {
 						global.IncFiltered()
-						recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0)
+						rootDelta, replyDelta := classifyRootReply(msg)
+						recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0, rootDelta, replyDelta)
 						if job.fromPull && reservedTotal > 0 {
 							Scheduler.ReleasePull(t.Task.ID, reservedTotal)
 						}
@@ -825,7 +829,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 				if ct == "file" && !fileSuffixAllowed(msg, t.allowFileSuffixes, t.blockFileSuffixes) {
 					global.IncFiltered()
-					recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0, rootDelta, replyDelta)
 					if job.fromPull && reservedTotal > 0 {
 						Scheduler.ReleasePull(t.Task.ID, reservedTotal)
 					}
@@ -839,7 +844,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 						if msg.Media != nil || strings.TrimSpace(msg.Message) != "" {
 							global.IncFiltered()
 						}
-						recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0)
+						rootDelta, replyDelta := classifyRootReply(msg)
+						recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0, rootDelta, replyDelta)
 						if job.fromPull && reservedTotal > 0 {
 							Scheduler.ReleasePull(t.Task.ID, reservedTotal)
 						}
@@ -875,7 +881,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if failDelta <= 0 {
 						failDelta = 1
 					}
-					recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, failDelta)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, failDelta, rootDelta, replyDelta)
 					if global.Logger != nil {
 						global.Logger.Error(
 							"realtime process message failed",
@@ -888,7 +895,8 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if need > 0 {
 						global.AddSuccess(uint64(need))
 					}
-					recordTaskCounters(m, t.Task.ID, t.RunID, 1, need, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, t.Task.ID, t.RunID, 1, need, 0, rootDelta, replyDelta)
 					if commentEnabled {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {

@@ -106,4 +106,13 @@ type Task struct {
 	HistoryMaxID int `gorm:"type:int;default:0" json:"history_max_id"`
 	// 历史克隆方向：1-从旧到新，2-从新到旧
 	HistoryOrder int `gorm:"type:tinyint;default:1" json:"history_order"`
+
+	// Progress snapshots (persisted) used by UI task list to show last known totals/counters
+	// even after server restarts. These are best-effort and updated by the runtime.
+	ProgressTotalMsg     int `gorm:"type:int;default:0" json:"progress_total_msg,omitempty"`
+	ProgressProcessedCnt int `gorm:"type:int;default:0" json:"progress_processed_cnt,omitempty"`
+	ProgressSuccessCnt   int `gorm:"type:int;default:0" json:"progress_success_cnt,omitempty"`
+	ProgressFailCnt      int `gorm:"type:int;default:0" json:"progress_fail_cnt,omitempty"`
+	ProgressRootCnt      int `gorm:"type:int;default:0" json:"progress_root_cnt,omitempty"`
+	ProgressReplyCnt     int `gorm:"type:int;default:0" json:"progress_reply_cnt,omitempty"`
 }

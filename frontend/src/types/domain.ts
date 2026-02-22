@@ -141,6 +141,8 @@ export type TaskProgress = {
   processed_cnt: number
   success_cnt: number
   fail_cnt: number
+  root_cnt?: number
+  reply_cnt?: number
   total_msg: number
   logs: string[]
 }

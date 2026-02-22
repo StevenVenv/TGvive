@@ -158,14 +158,14 @@ func parseHistoryBounds(task model.Task) historyBounds {
 	return b
 }
 
-func recordTaskCounters(m *TaskManager, taskID uint, runID uint64, processedDelta int, successDelta int, failDelta int) {
+func recordTaskCounters(m *TaskManager, taskID uint, runID uint64, processedDelta int, successDelta int, failDelta int, rootDelta int, replyDelta int) {
 	if m == nil || taskID == 0 || runID == 0 {
 		return
 	}
-	if processedDelta == 0 && successDelta == 0 && failDelta == 0 {
+	if processedDelta == 0 && successDelta == 0 && failDelta == 0 && rootDelta == 0 && replyDelta == 0 {
 		return
 	}
-	m.record(taskID, runID, 0, processedDelta, successDelta, failDelta, "")
+	m.recordEx(taskID, runID, 0, processedDelta, successDelta, failDelta, rootDelta, replyDelta, "")
 }
 
 func getRemoteHistoryCountAndLatestID(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass) (count int, latestID int, err error) {
@@ -514,7 +514,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 								if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 									return err
 								}
-								recordTaskCounters(m, task.ID, runID, len(group), 0, 0)
+								rootDelta, replyDelta := classifyRootReplyBatch(group)
+								recordTaskCounters(m, task.ID, runID, len(group), 0, 0, rootDelta, replyDelta)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -570,7 +571,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 								if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 									return err
 								}
-								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need)
+								rootDelta, replyDelta := classifyRootReplyBatch(group)
+								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need, rootDelta, replyDelta)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -598,7 +600,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0)
+					rootDelta, replyDelta := classifyRootReplyBatch(group)
+					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0, rootDelta, replyDelta)
 					processed += len(group)
 					advanced = true
 					sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -616,7 +619,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -629,7 +633,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 					return err
 				}
-				recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+				rootDelta, replyDelta := classifyRootReply(msg)
+				recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 				processed++
 				advanced = true
 				i++
@@ -646,7 +651,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -694,7 +700,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					if failDelta <= 0 {
 						failDelta = 1
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -726,7 +733,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if err := persistHistoryMaxID(task.ID, cursor); err != nil {
 				return err
 			}
-			recordTaskCounters(m, task.ID, runID, 1, need, 0)
+			rootDelta, replyDelta := classifyRootReply(msg)
+			recordTaskCounters(m, task.ID, runID, 1, need, 0, rootDelta, replyDelta)
 			processed++
 			advanced = true
 			i++
@@ -950,7 +958,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 								if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 									return err
 								}
-								recordTaskCounters(m, task.ID, runID, len(group), 0, 0)
+								rootDelta, replyDelta := classifyRootReplyBatch(group)
+								recordTaskCounters(m, task.ID, runID, len(group), 0, 0, rootDelta, replyDelta)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1005,7 +1014,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 								if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 									return err
 								}
-								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need)
+								rootDelta, replyDelta := classifyRootReplyBatch(group)
+								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need, rootDelta, replyDelta)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1034,7 +1044,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0)
+					rootDelta, replyDelta := classifyRootReplyBatch(group)
+					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0, rootDelta, replyDelta)
 					processed += len(group)
 					advanced = true
 					sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1052,7 +1063,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -1065,7 +1077,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 					return err
 				}
-				recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+				rootDelta, replyDelta := classifyRootReply(msg)
+				recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 				processed++
 				advanced = true
 				i++
@@ -1082,7 +1095,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -1130,7 +1144,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					if failDelta <= 0 {
 						failDelta = 1
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -1162,7 +1177,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
 				return err
 			}
-			recordTaskCounters(m, task.ID, runID, 1, need, 0)
+			rootDelta, replyDelta := classifyRootReply(msg)
+			recordTaskCounters(m, task.ID, runID, 1, need, 0, rootDelta, replyDelta)
 			processed++
 			advanced = true
 			i++
@@ -1376,7 +1392,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 								if err := persistHistoryCursor(task.ID, cursor); err != nil {
 									return err
 								}
-								recordTaskCounters(m, task.ID, runID, len(group), 0, 0)
+								rootDelta, replyDelta := classifyRootReplyBatch(group)
+								recordTaskCounters(m, task.ID, runID, len(group), 0, 0, rootDelta, replyDelta)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1431,7 +1448,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 								if err := persistHistoryCursor(task.ID, cursor); err != nil {
 									return err
 								}
-								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need)
+								rootDelta, replyDelta := classifyRootReplyBatch(group)
+								recordTaskCounters(m, task.ID, runID, len(group), 0, plan.Need, rootDelta, replyDelta)
 								processed += len(group)
 								advanced = true
 								sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1459,7 +1477,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0)
+					rootDelta, replyDelta := classifyRootReplyBatch(group)
+					recordTaskCounters(m, task.ID, runID, len(group), plan.Need, 0, rootDelta, replyDelta)
 					processed += len(group)
 					advanced = true
 					sleepRandom(ctx, msgDelayMin, msgDelayMax)
@@ -1476,7 +1495,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -1489,7 +1509,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				if err := persistHistoryCursor(task.ID, cursor); err != nil {
 					return err
 				}
-				recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+				rootDelta, replyDelta := classifyRootReply(msg)
+				recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 				processed++
 				advanced = true
 				i++
@@ -1506,7 +1527,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if err := persistHistoryCursor(task.ID, cursor); err != nil {
 						return err
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, 0)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, 0, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -1554,7 +1576,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 					if failDelta <= 0 {
 						failDelta = 1
 					}
-					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta)
+					rootDelta, replyDelta := classifyRootReply(msg)
+					recordTaskCounters(m, task.ID, runID, 1, 0, failDelta, rootDelta, replyDelta)
 					processed++
 					advanced = true
 					i++
@@ -1586,7 +1609,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if err := persistHistoryCursor(task.ID, cursor); err != nil {
 				return err
 			}
-			recordTaskCounters(m, task.ID, runID, 1, need, 0)
+			rootDelta, replyDelta := classifyRootReply(msg)
+			recordTaskCounters(m, task.ID, runID, 1, need, 0, rootDelta, replyDelta)
 			processed++
 			advanced = true
 			i++

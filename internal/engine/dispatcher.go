@@ -21,6 +21,8 @@ type TaskProgress struct {
 	ProcessedCnt int      `json:"processed_cnt"`
 	SuccessCnt   int      `json:"success_cnt"`
 	FailCnt      int      `json:"fail_cnt"`
+	RootCnt      int      `json:"root_cnt"`
+	ReplyCnt     int      `json:"reply_cnt"`
 	TotalMsg     int      `json:"total_msg"`
 	Logs         []string `json:"logs"`
 }
@@ -72,6 +74,8 @@ type taskState struct {
 	Processed int
 	Success   int
 	Fail      int
+	Root      int
+	Reply     int
 
 	SpeedBaseTime      time.Time
 	SpeedBaseProcessed int
@@ -89,6 +93,8 @@ func (m *TaskManager) StartTask(t model.Task) {
 	if t.ID == 0 {
 		return
 	}
+
+	shouldClearPersistedProgress := false
 
 	m.mu.Lock()
 
@@ -115,8 +121,11 @@ func (m *TaskManager) StartTask(t model.Task) {
 		st.Processed = 0
 		st.Success = 0
 		st.Fail = 0
+		st.Root = 0
+		st.Reply = 0
 		st.Completed = false
 		st.Logs = nil
+		shouldClearPersistedProgress = true
 	}
 
 	st.Status = model.TaskStatusRunning
@@ -129,6 +138,10 @@ func (m *TaskManager) StartTask(t model.Task) {
 	st.appendLogLocked(fmt.Sprintf("开始转发任务 [%d]: %s -> %s", t.ID, t.SourceURL, t.TargetURL))
 
 	m.mu.Unlock()
+
+	if shouldClearPersistedProgress {
+		_ = persistTaskProgressSnapshot(t.ID, taskProgressSnapshot{})
+	}
 
 	if global.Logger != nil {
 		global.Logger.Info("task started", zap.Uint("task_id", t.ID))
@@ -152,11 +165,14 @@ func (m *TaskManager) RestartTask(t model.Task) {
 		st.Processed = 0
 		st.Success = 0
 		st.Fail = 0
+		st.Root = 0
+		st.Reply = 0
 		st.SpeedBaseTime = time.Time{}
 		st.SpeedBaseProcessed = 0
 		st.Logs = nil
 	}
 	m.mu.Unlock()
+	_ = persistTaskProgressSnapshot(t.ID, taskProgressSnapshot{})
 
 	m.StartTask(t)
 }
@@ -166,8 +182,9 @@ func (m *TaskManager) PauseTask(taskID uint) {
 		return
 	}
 
+	var snap taskProgressSnapshot
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.grouper != nil {
 		m.grouper.DropTask(taskID)
@@ -191,6 +208,18 @@ func (m *TaskManager) PauseTask(taskID uint) {
 	st.SpeedBaseTime = time.Time{}
 	st.SpeedBaseProcessed = st.Processed
 	st.appendLogLocked("任务已暂停")
+
+	snap = taskProgressSnapshot{
+		TotalMsg:     st.Total,
+		ProcessedCnt: st.Processed,
+		SuccessCnt:   st.Success,
+		FailCnt:      st.Fail,
+		RootCnt:      st.Root,
+		ReplyCnt:     st.Reply,
+	}
+	m.mu.Unlock()
+
+	_ = persistTaskProgressSnapshot(taskID, snap)
 }
 
 func (m *TaskManager) StopTask(taskID uint) {
@@ -198,8 +227,9 @@ func (m *TaskManager) StopTask(taskID uint) {
 		return
 	}
 
+	var snap taskProgressSnapshot
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.grouper != nil {
 		m.grouper.DropTask(taskID)
@@ -223,6 +253,18 @@ func (m *TaskManager) StopTask(taskID uint) {
 	st.SpeedBaseTime = time.Time{}
 	st.SpeedBaseProcessed = st.Processed
 	st.appendLogLocked("任务已停止")
+
+	snap = taskProgressSnapshot{
+		TotalMsg:     st.Total,
+		ProcessedCnt: st.Processed,
+		SuccessCnt:   st.Success,
+		FailCnt:      st.Fail,
+		RootCnt:      st.Root,
+		ReplyCnt:     st.Reply,
+	}
+	m.mu.Unlock()
+
+	_ = persistTaskProgressSnapshot(taskID, snap)
 }
 
 func (m *TaskManager) Shutdown(ctx context.Context) {
@@ -341,6 +383,24 @@ func (m *TaskManager) ensureStateLocked(t model.Task) *taskState {
 	if st.Total <= 0 {
 		st.Total = inferTotal(t)
 	}
+	if t.ProgressTotalMsg > 0 && t.ProgressTotalMsg > st.Total {
+		st.Total = t.ProgressTotalMsg
+	}
+	if t.ProgressProcessedCnt > 0 && t.ProgressProcessedCnt > st.Processed {
+		st.Processed = t.ProgressProcessedCnt
+	}
+	if t.ProgressSuccessCnt > 0 && t.ProgressSuccessCnt > st.Success {
+		st.Success = t.ProgressSuccessCnt
+	}
+	if t.ProgressFailCnt > 0 && t.ProgressFailCnt > st.Fail {
+		st.Fail = t.ProgressFailCnt
+	}
+	if t.ProgressRootCnt > 0 && t.ProgressRootCnt > st.Root {
+		st.Root = t.ProgressRootCnt
+	}
+	if t.ProgressReplyCnt > 0 && t.ProgressReplyCnt > st.Reply {
+		st.Reply = t.ProgressReplyCnt
+	}
 	if st.Status == 0 && t.Status != 0 {
 		st.Status = t.Status
 	} else if st.Status == 0 && t.Status == 0 {
@@ -367,8 +427,26 @@ func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
 		st = cur
 	}
 
-	if st.Total <= 0 {
-		st.Total = inferTotal(t)
+	if inferred := inferTotal(t); inferred > st.Total {
+		st.Total = inferred
+	}
+	if t.ProgressTotalMsg > st.Total {
+		st.Total = t.ProgressTotalMsg
+	}
+	if t.ProgressProcessedCnt > st.Processed {
+		st.Processed = t.ProgressProcessedCnt
+	}
+	if t.ProgressSuccessCnt > st.Success {
+		st.Success = t.ProgressSuccessCnt
+	}
+	if t.ProgressFailCnt > st.Fail {
+		st.Fail = t.ProgressFailCnt
+	}
+	if t.ProgressRootCnt > st.Root {
+		st.Root = t.ProgressRootCnt
+	}
+	if t.ProgressReplyCnt > st.Reply {
+		st.Reply = t.ProgressReplyCnt
 	}
 	st.Realtime = t.Realtime
 
@@ -439,6 +517,8 @@ func snapshotLocked(now time.Time, st *taskState) TaskProgress {
 		ProcessedCnt: processed,
 		SuccessCnt:   st.Success,
 		FailCnt:      st.Fail,
+		RootCnt:      st.Root,
+		ReplyCnt:     st.Reply,
 		TotalMsg:     total,
 		Logs:         tail(st.Logs, maxRespLogs),
 	}
@@ -512,6 +592,13 @@ func inferTotal(t model.Task) int {
 				return end - start + 1
 			}
 		}
+	}
+
+	if t.ProgressTotalMsg > 0 {
+		return t.ProgressTotalMsg
+	}
+	if t.HistoryMaxID > 0 {
+		return t.HistoryMaxID
 	}
 
 	return defaultTotalMsg
