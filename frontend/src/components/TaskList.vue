@@ -201,6 +201,15 @@ function hasTotal(p?: TaskProgress): boolean {
 }
 
 function progressPct(p?: TaskProgress): number {
+  const processed = Number(p?.processed_cnt ?? 0)
+  const total = Number(p?.total_msg ?? 0)
+  if (Number.isFinite(processed) && processed >= 0 && Number.isFinite(total) && total > 0) {
+    const pct = (processed / total) * 100
+    if (!Number.isFinite(pct) || pct <= 0) return 0
+    if (pct >= 100) return 100
+    return Math.round(pct * 10) / 10
+  }
+
   const pct = Number(p?.progress_pct ?? 0)
   if (!Number.isFinite(pct) || pct <= 0) return 0
   if (pct >= 100) return 100
@@ -212,6 +221,36 @@ function filteredCount(p?: TaskProgress): number {
   const success = Number(p?.success_cnt ?? 0)
   const fail = Number(p?.fail_cnt ?? 0)
   return Math.max(0, processed - success - fail)
+}
+
+type ProgressStatus = 'success' | 'warning' | 'exception' | undefined
+
+function isTaskRunningNow(task: Task): boolean {
+  const status = Number(task?.status ?? 0)
+  if (status !== 1) return false
+  if (task?.realtime) return true
+
+  const next = parseNextRunTime(task?.next_run_time)
+  if (next && next.getTime() > Date.now()) return false
+  return true
+}
+
+function progressBarStatus(task: Task, p?: TaskProgress): ProgressStatus {
+  const status = Number(task?.status ?? 0)
+  if (status === 3) return 'exception'
+  if (status === 2) return 'warning'
+  if (p?.status === '已完成') return 'success'
+  return undefined
+}
+
+function progressBarIndeterminate(task: Task, p?: TaskProgress): boolean {
+  return !hasTotal(p) && isTaskRunningNow(task)
+}
+
+function progressBarPercentage(task: Task, p?: TaskProgress): number {
+  if (hasTotal(p)) return progressPct(p)
+  if (progressBarIndeterminate(task, p)) return 40
+  return 0
 }
 
 async function reloadTasks() {
@@ -630,12 +669,11 @@ defineExpose({
                         </div>
                       </template>
                       <el-progress
-                        :percentage="hasTotal(progressMap[row.ID]) ? progressPct(progressMap[row.ID]) : 100"
+                        :percentage="progressBarPercentage(row, progressMap[row.ID])"
                         :stroke-width="10"
                         :show-text="false"
-                        :indeterminate="!hasTotal(progressMap[row.ID])"
-                        :striped="!hasTotal(progressMap[row.ID])"
-                        :striped-flow="!hasTotal(progressMap[row.ID])"
+                        :indeterminate="progressBarIndeterminate(row, progressMap[row.ID])"
+                        :status="progressBarStatus(row, progressMap[row.ID])"
                       />
                     </el-tooltip>
                     <div class="sub">
