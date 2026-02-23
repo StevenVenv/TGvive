@@ -31,6 +31,7 @@ func TestBuildImageOverlayFilter_Bounce(t *testing.T) {
 		"colorchannelmixer=aa=0.35",
 		"scale2ref=w=ref_w*0.15",
 		"overlay=x='",
+		"shortest=1",
 		"sin(2*PI*t/12)",
 		"PI/2",
 		"[outv]",

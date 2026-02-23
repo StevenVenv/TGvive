@@ -417,7 +417,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		if err != nil {
 			return 0, err
 		}
-		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, fullMsg, false)
+		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, fullMsg, false, uploadPath)
 		if err != nil {
 			return 0, err
 		}
@@ -766,7 +766,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 								}
 
 								uploadPath := localPath
-								wmCleanup := func() error(nil)
+								wmCleanup := (func() error)(nil)
 								if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, localPath, vidRule); err != nil {
 									if cleanup != nil {
 										_ = cleanup()
@@ -790,7 +790,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 									break
 								}
 
-								uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, fullMsg, false)
+								uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, fullMsg, false, uploadPath)
 								if err != nil {
 									if wmCleanup != nil {
 										_ = wmCleanup()

@@ -262,7 +262,7 @@ func buildImageOverlayFilter(rule model.VideoWatermarkRule, imagePath string) (f
 	filter = strings.Join([]string{
 		"[1:v]format=rgba,colorchannelmixer=aa=" + formatFloat(opacity) + "[wm0]",
 		"[wm0][0:v]scale2ref=w=ref_w*" + formatFloat(scale) + ":h=-1[wm][base]",
-		"[base][wm]overlay=x='" + xExpr + "':y='" + yExpr + "':format=auto[outv]",
+		"[base][wm]overlay=x='" + xExpr + "':y='" + yExpr + "':format=auto:shortest=1[outv]",
 	}, ";")
 	return filter, "[outv]", nil
 }

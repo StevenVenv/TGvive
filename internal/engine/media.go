@@ -383,7 +383,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	// Only safe when we do not need any local mutations (no watermark/processor/MD5 change).
 	if !enableMediaEdit && !task.ChangeMD5 && !wmCandidate && !vidWmCandidate {
 		if inputFile, _, serr := m.TransferMediaStream(ctx, api, sourcePeer, msg); serr == nil && inputFile != nil {
-			uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, false)
+			uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, false, "")
 			if err == nil && uploaded != nil {
 				rid, err := randomID()
 				if err != nil {
@@ -600,7 +600,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 		return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 	}
 
-	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
+	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename, uploadPath)
 	if err != nil {
 		return nil, err
 	}
@@ -882,7 +882,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 			return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 		}
 
-		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
+		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename, uploadPath)
 		if err != nil {
 			return nil, err
 		}

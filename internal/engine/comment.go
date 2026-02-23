@@ -1035,7 +1035,7 @@ func (m *TaskManager) sendCommentWithFallback(ctx context.Context, api *tg.Clien
 		return nil, err
 	}
 
-	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
+	uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, task.ChangeMD5 && task.RandomFilename, localPath)
 	if err != nil {
 		return nil, err
 	}

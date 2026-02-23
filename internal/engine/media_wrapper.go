@@ -4,10 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"my-go-server/internal/global"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -16,7 +21,7 @@ import (
 
 // WrapUploadedMedia 将上传后的文件封装为可发送的媒体对象（CloneMode=3）。
 // 使用原始消息的元数据（如 Attributes / Spoiler / TTLSeconds）来尽量还原显示效果。
-func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inputFile tg.InputFileClass, originalMsg *tg.Message, randomFilename bool) (tg.InputMediaClass, error) {
+func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inputFile tg.InputFileClass, originalMsg *tg.Message, randomFilename bool, localPath string) (tg.InputMediaClass, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -93,6 +98,16 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 			mime = "application/octet-stream"
 		}
 
+		localPath = strings.TrimSpace(localPath)
+		if localPath != "" && isVideoDocument(media) {
+			if strings.EqualFold(filepath.Ext(localPath), ".mp4") {
+				mime = "video/mp4"
+			}
+			if w, h, err := probeVideoDisplaySize(ctx, localPath); err == nil && w > 0 && h > 0 {
+				applyVideoSizeToAttrs(attrs, w, h)
+			}
+		}
+
 		out := &tg.InputMediaUploadedDocument{
 			File:       inputFile,
 			MimeType:   mime,
@@ -119,6 +134,110 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 	}
 
 	return nil, nil
+}
+
+type ffprobeOut struct {
+	Streams []struct {
+		Width        int `json:"width"`
+		Height       int `json:"height"`
+		SideDataList []struct {
+			Rotation *float64 `json:"rotation,omitempty"`
+		} `json:"side_data_list"`
+	} `json:"streams"`
+}
+
+func ffprobePath() (string, error) {
+	ffmpegPath := strings.TrimSpace(global.Config.Processor.Video.FFmpegPath)
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+
+	ext := filepath.Ext(ffmpegPath)
+	base := strings.TrimSuffix(filepath.Base(ffmpegPath), ext)
+	if base == "ffmpeg" && strings.ContainsAny(ffmpegPath, `/\`) {
+		cand := filepath.Join(filepath.Dir(ffmpegPath), "ffprobe"+ext)
+		if p, err := exec.LookPath(cand); err == nil {
+			return p, nil
+		}
+	}
+
+	if p, err := exec.LookPath("ffprobe"); err == nil {
+		return p, nil
+	}
+	return "", errors.New("ffprobe not found")
+}
+
+func probeVideoDisplaySize(ctx context.Context, path string) (w int, h int, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return 0, 0, errors.New("empty path")
+	}
+
+	ffprobe, err := ffprobePath()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	args := []string{
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height:stream_side_data_list",
+		"-of", "json",
+		path,
+	}
+	cmd := exec.CommandContext(ctx, ffprobe, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	var parsed ffprobeOut
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return 0, 0, err
+	}
+	if len(parsed.Streams) == 0 {
+		return 0, 0, errors.New("no video stream found")
+	}
+	s := parsed.Streams[0]
+	if s.Width <= 0 || s.Height <= 0 {
+		return 0, 0, errors.New("invalid video dimensions")
+	}
+
+	rotation := 0
+	for _, sd := range s.SideDataList {
+		if sd.Rotation == nil {
+			continue
+		}
+		rotation = int(*sd.Rotation)
+		break
+	}
+
+	rot := rotation % 360
+	if rot < 0 {
+		rot += 360
+	}
+	if rot == 90 || rot == 270 {
+		return s.Height, s.Width, nil
+	}
+	return s.Width, s.Height, nil
+}
+
+func applyVideoSizeToAttrs(attrs []tg.DocumentAttributeClass, w, h int) {
+	if w <= 0 || h <= 0 || len(attrs) == 0 {
+		return
+	}
+	for _, a := range attrs {
+		if a == nil {
+			continue
+		}
+		if v, ok := a.(*tg.DocumentAttributeVideo); ok && v != nil {
+			v.W = w
+			v.H = h
+		}
+	}
 }
 
 func randomizeFilename(origName, mime string) (string, error) {

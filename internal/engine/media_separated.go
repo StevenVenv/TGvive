@@ -225,7 +225,7 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 		return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 	}
 
-	uploaded, err := m.WrapUploadedMedia(ctx, sendAPI, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
+	uploaded, err := m.WrapUploadedMedia(ctx, sendAPI, inputFile, msg, task.ChangeMD5 && task.RandomFilename, uploadPath)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +501,7 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 			return nil, fmt.Errorf("upload file %q: %w", uploadPath, err)
 		}
 
-		uploaded, err := m.WrapUploadedMedia(ctx, sendAPI, inputFile, msg, task.ChangeMD5 && task.RandomFilename)
+		uploaded, err := m.WrapUploadedMedia(ctx, sendAPI, inputFile, msg, task.ChangeMD5 && task.RandomFilename, uploadPath)
 		if err != nil {
 			return nil, err
 		}
