@@ -448,14 +448,14 @@ watch(
     <div v-loading="loading" class="body">
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-form-item label="源频道 (Source)" prop="source_url">
-          <el-input v-model="form.source_url" placeholder="例如：https://t.me/source 或 @source 或 -100123456789 (私密频道)" />
+          <el-input v-model="form.source_url" placeholder="ID 链接 @user" />
           <div v-if="sourcePeerLoading" class="hint muted">解析中...</div>
           <div v-else-if="sourcePeerInfo" class="hint muted">已解析：{{ peerInfoText(sourcePeerInfo) }}</div>
           <div v-else-if="sourcePeerErr" class="hint err">{{ sourcePeerErr }}</div>
         </el-form-item>
 
         <el-form-item label="目标频道 (Target)" prop="target_url">
-          <el-input v-model="form.target_url" placeholder="例如：@target 或 -100123456789 (私密频道)" />
+          <el-input v-model="form.target_url" placeholder="ID 链接 @user" />
           <div v-if="targetPeerLoading" class="hint muted">解析中...</div>
           <div v-else-if="targetPeerInfo" class="hint muted">已解析：{{ peerInfoText(targetPeerInfo) }}</div>
           <div v-else-if="targetPeerErr" class="hint err">{{ targetPeerErr }}</div>

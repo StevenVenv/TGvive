@@ -7,8 +7,6 @@ server:
     allow_origins:
       - http://localhost:5173
       - http://127.0.0.1:5173
-      - http://localhost:4173
-      - http://127.0.0.1:4173
     allow_credentials: true
 
 mysql:
@@ -23,7 +21,4 @@ jwt:
   secret: change_me
 
 telegram:
-  api_id: 15055931
-  api_hash: 021d433426cbb920eeb95164498fe3d3
   session_path: ./sessions/
-
