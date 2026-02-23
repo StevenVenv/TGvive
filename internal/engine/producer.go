@@ -109,6 +109,17 @@ func (m *TaskManager) StoreMappingForTrunk(
 		return sourceRootID, targetRootID, err
 	}
 
+	// Repair: some comment updates may reference the source channel post msg_id (not discussion root).
+	// Rewrite pending rows to discussion root once we know the mapping.
+	if sourceChannelMsgID > 0 && sourceRootID > 0 && sourceChannelMsgID != sourceRootID {
+		// Avoid accidental collisions: if sourceChannelMsgID is already a mapped root, keep it unchanged.
+		if !hasRootMapping(cfg.LocalDB, sourceChannelMsgID) {
+			_ = cfg.LocalDB.Model(&localdb.CommentQueue{}).
+				Where("reply_to_root_id = ? AND status = ?", sourceChannelMsgID, localdb.CommentStatusPending).
+				Update("reply_to_root_id", sourceRootID).Error
+		}
+	}
+
 	return sourceRootID, targetRootID, nil
 }
 
@@ -144,6 +155,7 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 
 	comments, err := fetchRepliesByRoot(ctx, api, cfg.SourceLinkedPeer, srcRoot, commentFetchPageSize, commentFetchMaxTotal)
 	if err != nil {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("评论抓取失败: source_root=%d err=%v", srcRoot, err))
 		if global.Logger != nil {
 			global.Logger.Warn("fetch replies failed", zap.Uint("task_id", task.ID), zap.Int("source_root_id", srcRoot), zap.Error(err))
 		}
@@ -173,26 +185,33 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 	}
 	blockLower := lowerKeywordList(rule.BlockKeywords)
 
+	queued := 0
+	skipped := 0
 	for _, msg := range comments {
 		if err := ctx.Err(); err != nil {
 			return srcRoot, dstRoot
 		}
 		if msg == nil || msg.ID <= 0 {
+			skipped++
 			continue
 		}
 		if extractCommentRootMsgID(msg) != srcRoot {
+			skipped++
 			continue
 		}
 		if !shouldCloneCommentByIdentity(msg, cfg.SourceChannelID, rule.FilterMode, trustedSet, rule.AllowAnonymous) {
+			skipped++
 			continue
 		}
 		if allowedSet != nil {
 			ct := m.DetectContentType(msg)
 			if _, ok := allowedSet[ct]; !ok {
+				skipped++
 				continue
 			}
 		}
 		if hitBlockKeywords(msg.Message, blockLower) {
+			skipped++
 			continue
 		}
 
@@ -201,13 +220,16 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 			if global.Logger != nil {
 				global.Logger.Warn("wash comment failed", zap.Uint("task_id", task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
 			}
+			skipped++
 			continue
 		}
 		if payload == nil {
+			skipped++
 			continue
 		}
 		b, err := json.Marshal(payload)
 		if err != nil {
+			skipped++
 			continue
 		}
 
@@ -220,14 +242,29 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 			Payload:       b,
 		}
 
-		if err := cfg.LocalDB.
+		res := cfg.LocalDB.
 			Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "msg_id"}},
 				DoNothing: true,
 			}).
-			Create(&rec).Error; err != nil && global.Logger != nil {
-			global.Logger.Warn("store local comment failed", zap.Uint("task_id", task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
+			Create(&rec)
+		if err := res.Error; err != nil {
+			skipped++
+			if global.Logger != nil {
+				global.Logger.Warn("store local comment failed", zap.Uint("task_id", task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
+			}
+			continue
 		}
+		if res.RowsAffected > 0 {
+			queued++
+		} else {
+			skipped++
+		}
+	}
+
+	// Only log when there are actual replies (avoid spamming empty roots).
+	if len(comments) > 0 {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("评论抓取: source_root=%d fetched=%d queued=%d skipped=%d", srcRoot, len(comments), queued, skipped))
 	}
 
 	return srcRoot, dstRoot

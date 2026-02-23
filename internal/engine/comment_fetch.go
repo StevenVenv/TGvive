@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -12,6 +13,10 @@ import (
 const (
 	commentFetchPageSize = 200
 	commentFetchMaxTotal = 200
+
+	commentFetchMsgIDInvalidMaxRetries = 4
+	commentFetchMsgIDInvalidDelayMin   = 250 * time.Millisecond
+	commentFetchMsgIDInvalidDelayMax   = 900 * time.Millisecond
 )
 
 func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, rootMsgID int, limit int, maxTotal int) ([]*tg.Message, error) {
@@ -43,6 +48,8 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 
 	didFallbackLimit := false
 	offsetID := 0
+	invalidRetries := 0
+	invalidRetriesOffsetID := -1
 	for len(out) < maxTotal {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -71,8 +78,23 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 				didFallbackLimit = true
 				continue
 			}
+			// Occasionally Telegram returns MSG_ID_INVALID for discussion roots that are not fully ready yet.
+			// Retry a few times with jitter before giving up.
+			if tgerr.Is(err, "MSG_ID_INVALID") {
+				if invalidRetriesOffsetID != offsetID {
+					invalidRetriesOffsetID = offsetID
+					invalidRetries = 0
+				}
+				if invalidRetries < commentFetchMsgIDInvalidMaxRetries {
+					invalidRetries++
+					sleepRandom(ctx, commentFetchMsgIDInvalidDelayMin, commentFetchMsgIDInvalidDelayMax)
+					continue
+				}
+			}
 			return nil, err
 		}
+		invalidRetries = 0
+		invalidRetriesOffsetID = -1
 
 		msgs := extractTGMessages(r)
 		if len(msgs) == 0 {

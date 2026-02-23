@@ -165,10 +165,57 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		return true
 	}
 
+	pendingBefore := int64(0)
+	_ = db.Model(&localdb.CommentQueue{}).
+		Where("reply_to_root_id = ? AND status = ?", sourceRootID, localdb.CommentStatusPending).
+		Count(&pendingBefore).Error
+	if pendingBefore <= 0 {
+		return
+	}
+
+	publisher := "account"
+	if useBot {
+		publisher = "bot"
+	}
+
+	attempted := 0
+	sentOK := 0
+	markedFailed := 0
+	sendErrCnt := 0
+
+	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
+		if attempted == 0 && sentOK == 0 && markedFailed == 0 && sendErrCnt == 0 {
+			return
+		}
+		pendingAfter := int64(0)
+		_ = db.Model(&localdb.CommentQueue{}).
+			Where("reply_to_root_id = ? AND status = ?", sourceRootID, localdb.CommentStatusPending).
+			Count(&pendingAfter).Error
+		recordTaskDetailFromCtx(
+			ctx,
+			fmt.Sprintf(
+				"评论发送(%s): source_root=%d target_root=%d pending=%d attempt=%d ok=%d failed=%d send_err=%d left=%d",
+				publisher,
+				sourceRootID,
+				targetRootID,
+				pendingBefore,
+				attempted,
+				sentOK,
+				markedFailed,
+				sendErrCnt,
+				pendingAfter,
+			),
+		)
+	}()
+
 	markFailed := func(ids []int) {
 		if len(ids) == 0 {
 			return
 		}
+		markedFailed += len(ids)
 		_ = db.Model(&localdb.CommentQueue{}).
 			Where("reply_to_root_id = ? AND msg_id IN ? AND status = ?", sourceRootID, ids, localdb.CommentStatusPending).
 			Update("status", localdb.CommentStatusFailed).Error
@@ -409,6 +456,8 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					continue
 				}
 
+				attempted += len(sendItems)
+
 				// Try preserve album grouping when possible.
 				if okAlbum && len(sendItems) >= 2 {
 					targetIDs := []int(nil)
@@ -530,6 +579,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					}
 
 					if sendErr == nil {
+						sentOK += len(sendItems)
 						if len(targetIDs) == len(sendItems) {
 							for idx, it := range sendItems {
 								casOK := markSuccessWithCAS(it.rec, targetIDs[idx])
@@ -571,6 +621,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 
 					targetID, sendErr := sendOne(it.rec, it.payload)
 					if sendErr != nil {
+						sendErrCnt++
 						if d, ok := tgerr.AsFloodWait(sendErr); ok {
 							if global.Logger != nil {
 								global.Logger.Warn(
@@ -596,6 +647,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					}
 
 					if targetID > 0 {
+						sentOK++
 						casOK := markSuccessWithCAS(it.rec, targetID)
 						if !casOK && !useBot {
 							m.submitCommentEdit(ctx, api, task.ID, cfg, it.rec.MsgID, targetID)
@@ -626,8 +678,10 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				continue
 			}
 
+			attempted++
 			targetID, sendErr := sendOne(item, payload)
 			if sendErr != nil {
+				sendErrCnt++
 				if d, ok := tgerr.AsFloodWait(sendErr); ok {
 					if global.Logger != nil {
 						global.Logger.Warn(
@@ -653,6 +707,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 			}
 
 			if targetID > 0 {
+				sentOK++
 				casOK := markSuccessWithCAS(item, targetID)
 				if !casOK && !useBot {
 					m.submitCommentEdit(ctx, api, task.ID, cfg, item.MsgID, targetID)
