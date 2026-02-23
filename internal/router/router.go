@@ -1,6 +1,12 @@
 package router
 
 import (
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
 	"my-go-server/internal/api/v1"
 	"my-go-server/internal/global"
 	"my-go-server/internal/middleware"
@@ -121,5 +127,78 @@ func SetupRouter() *gin.Engine {
 		}
 	}
 
+	setupFrontendSPA(r)
 	return r
+}
+
+func setupFrontendSPA(r *gin.Engine) {
+	if r == nil {
+		return
+	}
+
+	dir := strings.TrimSpace(global.Config.Server.FrontendDir)
+	if dir == "" {
+		dir = "./frontend_dist"
+	}
+	fi, err := os.Stat(dir)
+	if err != nil || fi == nil || !fi.IsDir() {
+		return
+	}
+
+	indexPath := filepath.Join(dir, "index.html")
+	if st, err := os.Stat(indexPath); err != nil || st == nil || st.IsDir() {
+		return
+	}
+
+	r.NoRoute(func(c *gin.Context) {
+		if c == nil || c.Request == nil || c.Request.URL == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		urlPath := strings.TrimSpace(c.Request.URL.Path)
+		if urlPath == "" {
+			urlPath = "/"
+		}
+		if urlPath == "/api" || strings.HasPrefix(urlPath, "/api/") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		clean := path.Clean("/" + urlPath)
+		clean = strings.TrimPrefix(clean, "/")
+
+		// Root or explicit directory: always return SPA index.
+		if clean == "" || strings.HasSuffix(urlPath, "/") {
+			c.Header("Cache-Control", "no-cache")
+			c.File(indexPath)
+			return
+		}
+
+		// Try to serve exact file first.
+		filePath := filepath.Join(dir, filepath.FromSlash(clean))
+		if st, err := os.Stat(filePath); err == nil && st != nil && !st.IsDir() {
+			if strings.HasPrefix(clean, "assets/") {
+				c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				c.Header("Cache-Control", "no-cache")
+			}
+			c.File(filePath)
+			return
+		}
+
+		// Missing static asset: do not fall back to index.html.
+		if filepath.Ext(clean) != "" {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		// SPA route fallback.
+		c.Header("Cache-Control", "no-cache")
+		c.File(indexPath)
+	})
 }

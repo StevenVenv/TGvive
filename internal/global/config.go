@@ -17,6 +17,10 @@ type ServerConfig struct {
 	// intended ONLY for local development.
 	AllowAnonymousDebug bool `mapstructure:"allow_anonymous_debug"`
 
+	// FrontendDir points to a built frontend directory (Vite dist).
+	// When present, the server will serve it as a SPA (fallback to index.html).
+	FrontendDir string `mapstructure:"frontend_dir"`
+
 	ShutdownTimeoutSec int        `mapstructure:"shutdown_timeout_sec"`
 	CORS               CORSConfig `mapstructure:"cors"`
 }

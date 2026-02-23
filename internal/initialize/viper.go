@@ -22,6 +22,7 @@ func InitConfig() error {
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.mode", "release")
 	v.SetDefault("server.allow_anonymous_debug", false)
+	v.SetDefault("server.frontend_dir", "./frontend_dist")
 	v.SetDefault("server.shutdown_timeout_sec", 10)
 
 	v.SetDefault("server.cors.allow_origins", []string{

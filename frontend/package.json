@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:tmp": "vue-tsc -b && vite build --outDir ../tmp/frontend_dist --emptyOutDir",
     "preview": "vite preview"
   },
   "dependencies": {
