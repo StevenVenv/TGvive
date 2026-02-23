@@ -26,6 +26,9 @@ type Task struct {
 	SourceURL string `gorm:"type:varchar(255);not null" json:"source_url"` // 对方频道/群组
 	TargetURL string `gorm:"type:varchar(255);not null" json:"target_url"` // 自己频道/群组
 
+	// Remark is an optional human note for identifying tasks.
+	Remark string `gorm:"type:varchar(255);default:''" json:"remark,omitempty"`
+
 	// ExecuteBy 指定爬虫账号（session key，对应 sessions/session_{key}.json）。
 	ExecuteBy string `gorm:"type:varchar(64);default:'';index" json:"session_key"`
 

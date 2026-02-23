@@ -26,6 +26,8 @@ type CreateTaskReq struct {
 	TargetURL  string `json:"target_url" binding:"required"`
 	SessionKey string `json:"session_key" binding:"required"` // crawler
 
+	Remark string `json:"remark"`
+
 	// PublishType: ""(same as crawler) | account | bot | same(alias)
 	PublishType       string `json:"publish_type" binding:"omitempty,oneof=account bot same"`
 	PublishSessionKey string `json:"publish_session_key"`
@@ -39,6 +41,8 @@ type UpdateTaskReq struct {
 	SourceURL  string `json:"source_url" binding:"required"`
 	TargetURL  string `json:"target_url" binding:"required"`
 	SessionKey string `json:"session_key" binding:"required"` // crawler
+
+	Remark string `json:"remark"`
 
 	PublishType       string `json:"publish_type" binding:"omitempty,oneof=account bot same"`
 	PublishSessionKey string `json:"publish_session_key"`
@@ -65,6 +69,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	req.TargetURL = strings.TrimSpace(req.TargetURL)
 	req.SessionKey = strings.TrimSpace(req.SessionKey)
+	req.Remark = strings.TrimSpace(req.Remark)
 	req.PublishType = strings.TrimSpace(req.PublishType)
 	req.PublishSessionKey = strings.TrimSpace(req.PublishSessionKey)
 	req.PublishBotID = strings.TrimSpace(req.PublishBotID)
@@ -134,6 +139,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		UserID:            userID,
 		SourceURL:         req.SourceURL,
 		TargetURL:         req.TargetURL,
+		Remark:            req.Remark,
 		ExecuteBy:         req.SessionKey,
 		PublishType:       req.PublishType,
 		PublishSessionKey: req.PublishSessionKey,
@@ -348,6 +354,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	req.TargetURL = strings.TrimSpace(req.TargetURL)
 	req.SessionKey = strings.TrimSpace(req.SessionKey)
+	req.Remark = strings.TrimSpace(req.Remark)
 	req.PublishType = strings.TrimSpace(req.PublishType)
 	req.PublishSessionKey = strings.TrimSpace(req.PublishSessionKey)
 	req.PublishBotID = strings.TrimSpace(req.PublishBotID)
@@ -415,6 +422,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	payload := model.Task{
 		SourceURL:         req.SourceURL,
 		TargetURL:         req.TargetURL,
+		Remark:            req.Remark,
 		ExecuteBy:         req.SessionKey,
 		PublishType:       req.PublishType,
 		PublishSessionKey: req.PublishSessionKey,

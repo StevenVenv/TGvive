@@ -223,6 +223,12 @@ export function listTGAccountDialogs(key: string, limit = 500): Promise<TGDialog
   return apiFetch<TGDialogItem[]>(`/api/v1/tg/accounts/${safe}/dialogs?${q.toString()}`, { method: 'GET' })
 }
 
+export function resolveTGAccountPeer(key: string, peer: string): Promise<TGDialogItem> {
+  const safe = encodeURIComponent(key || '')
+  const q = new URLSearchParams({ peer: String(peer || '') })
+  return apiFetch<TGDialogItem>(`/api/v1/tg/accounts/${safe}/resolve?${q.toString()}`, { method: 'GET' })
+}
+
 export function startAccountQR(): Promise<{ session_id: string }> {
   return apiFetch<{ session_id: string }>('/api/v1/tg/accounts/qr', {
     method: 'POST',

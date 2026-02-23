@@ -4,6 +4,7 @@ export type Task = {
   user_id?: number
   source_url: string
   target_url: string
+  remark?: string
   session_key?: string
   publish_type?: string
   publish_session_key?: string

@@ -99,6 +99,7 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	src := strings.TrimSpace(payload.SourceURL)
 	dst := strings.TrimSpace(payload.TargetURL)
 	exec := strings.TrimSpace(payload.ExecuteBy)
+	remark := strings.TrimSpace(payload.Remark)
 	pubType := strings.TrimSpace(payload.PublishType)
 	pubSession := strings.TrimSpace(payload.PublishSessionKey)
 	pubBotID := strings.TrimSpace(payload.PublishBotID)
@@ -113,6 +114,7 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	if exec != "" {
 		task.ExecuteBy = exec
 	}
+	task.Remark = remark
 	switch pubType {
 	case "":
 		task.PublishType = ""

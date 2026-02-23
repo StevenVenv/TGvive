@@ -44,6 +44,16 @@ type KeywordProfileItem = {
   replace_rules?: Array<{ from: string; to: string }>
 }
 
+type TGDialogItem = {
+  kind: 'channel' | 'supergroup' | 'group' | string
+  title: string
+  username?: string
+  channel_id?: number
+  chat_id?: number
+  bot_chat_id: string
+  task_value: string
+}
+
 const accounts = ref<AccountItem[]>([])
 const strategies = ref<StrategyItem[]>([])
 const keywordProfiles = ref<KeywordProfileItem[]>([])
@@ -61,6 +71,7 @@ const bots = ref<BotItem[]>([])
 const form = reactive({
   source_url: '',
   target_url: '',
+  remark: '',
   session_key: '',
   publish_type: 'same' as 'same' | 'account' | 'bot',
   publish_session_key: '',
@@ -114,6 +125,7 @@ const rules: FormRules = {
 function resetForm() {
   form.source_url = ''
   form.target_url = ''
+  form.remark = ''
   form.session_key = ''
   form.publish_type = 'same'
   form.publish_session_key = ''
@@ -148,6 +160,108 @@ async function apiPost<T>(path: string, body: any): Promise<T> {
   })
   if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')
   return res.data.data
+}
+
+function kindLabel(kind: string): string {
+  if (kind === 'supergroup') return '超级群'
+  if (kind === 'group') return '群组'
+  return '频道'
+}
+
+function peerInfoText(info: TGDialogItem | null): string {
+  const title = String(info?.title || '').trim()
+  const u = String(info?.username || '').trim()
+  const k = kindLabel(String(info?.kind || '').trim())
+  if (!title) return k
+  return u ? `${k} · ${title} (@${u})` : `${k} · ${title}`
+}
+
+const sourcePeerInfo = ref<TGDialogItem | null>(null)
+const sourcePeerErr = ref('')
+const sourcePeerLoading = ref(false)
+
+const targetPeerInfo = ref<TGDialogItem | null>(null)
+const targetPeerErr = ref('')
+const targetPeerLoading = ref(false)
+
+async function resolvePeerTitle(sessionKey: string, peer: string): Promise<TGDialogItem> {
+  const key = encodeURIComponent(String(sessionKey || '').trim())
+  const p = String(peer || '').trim()
+  const q = new URLSearchParams({ peer: p })
+  return apiGet<TGDialogItem>(`/api/v1/tg/accounts/${key}/resolve?${q.toString()}`)
+}
+
+let sourceResolveTimer = 0
+let targetResolveTimer = 0
+let sourceResolveSeq = 0
+let targetResolveSeq = 0
+
+function scheduleResolveSource() {
+  if (sourceResolveTimer) window.clearTimeout(sourceResolveTimer)
+  sourceResolveTimer = window.setTimeout(() => {
+    void resolveSourceNow()
+  }, 550)
+}
+
+function scheduleResolveTarget() {
+  if (targetResolveTimer) window.clearTimeout(targetResolveTimer)
+  targetResolveTimer = window.setTimeout(() => {
+    void resolveTargetNow()
+  }, 550)
+}
+
+async function resolveSourceNow() {
+  if (!open.value) return
+  const key = String(form.session_key || '').trim()
+  const peer = String(form.source_url || '').trim()
+  if (!key || !peer) {
+    sourcePeerInfo.value = null
+    sourcePeerErr.value = ''
+    sourcePeerLoading.value = false
+    return
+  }
+
+  const seq = ++sourceResolveSeq
+  sourcePeerLoading.value = true
+  sourcePeerErr.value = ''
+  try {
+    const info = await resolvePeerTitle(key, peer)
+    if (seq !== sourceResolveSeq) return
+    sourcePeerInfo.value = info
+  } catch (err: any) {
+    if (seq !== sourceResolveSeq) return
+    sourcePeerInfo.value = null
+    sourcePeerErr.value = String(err?.message || '解析失败')
+  } finally {
+    if (seq === sourceResolveSeq) sourcePeerLoading.value = false
+  }
+}
+
+async function resolveTargetNow() {
+  if (!open.value) return
+  const key = String(form.session_key || '').trim()
+  const peer = String(form.target_url || '').trim()
+  if (!key || !peer) {
+    targetPeerInfo.value = null
+    targetPeerErr.value = ''
+    targetPeerLoading.value = false
+    return
+  }
+
+  const seq = ++targetResolveSeq
+  targetPeerLoading.value = true
+  targetPeerErr.value = ''
+  try {
+    const info = await resolvePeerTitle(key, peer)
+    if (seq !== targetResolveSeq) return
+    targetPeerInfo.value = info
+  } catch (err: any) {
+    if (seq !== targetResolveSeq) return
+    targetPeerInfo.value = null
+    targetPeerErr.value = String(err?.message || '解析失败')
+  } finally {
+    if (seq === targetResolveSeq) targetPeerLoading.value = false
+  }
 }
 
 function accountLabel(a: AccountItem): string {
@@ -227,6 +341,7 @@ async function submit() {
   const payload = {
     source_url: (form.source_url || '').trim(),
     target_url: (form.target_url || '').trim(),
+    remark: (form.remark || '').trim(),
     session_key: (form.session_key || '').trim(),
     publish_type: form.publish_type,
     publish_session_key: (form.publish_session_key || '').trim(),
@@ -266,12 +381,40 @@ watch(open, (v) => {
   if (!v) {
     formRef.value?.clearValidate()
     resetForm()
+    sourcePeerInfo.value = null
+    sourcePeerErr.value = ''
+    sourcePeerLoading.value = false
+    targetPeerInfo.value = null
+    targetPeerErr.value = ''
+    targetPeerLoading.value = false
+    sourceResolveSeq++
+    targetResolveSeq++
+    if (sourceResolveTimer) window.clearTimeout(sourceResolveTimer)
+    if (targetResolveTimer) window.clearTimeout(targetResolveTimer)
+    sourceResolveTimer = 0
+    targetResolveTimer = 0
   }
 })
 
 onMounted(() => {
   void loadOptions()
 })
+
+watch(
+  () => [open.value, form.session_key, form.source_url],
+  () => {
+    if (!open.value) return
+    scheduleResolveSource()
+  },
+)
+
+watch(
+  () => [open.value, form.session_key, form.target_url],
+  () => {
+    if (!open.value) return
+    scheduleResolveTarget()
+  },
+)
 
 watch(
   () => form.publish_type,
@@ -306,10 +449,20 @@ watch(
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-form-item label="源频道 (Source)" prop="source_url">
           <el-input v-model="form.source_url" placeholder="例如：https://t.me/source 或 @source 或 -100123456789 (私密频道)" />
+          <div v-if="sourcePeerLoading" class="hint muted">解析中...</div>
+          <div v-else-if="sourcePeerInfo" class="hint muted">已解析：{{ peerInfoText(sourcePeerInfo) }}</div>
+          <div v-else-if="sourcePeerErr" class="hint err">{{ sourcePeerErr }}</div>
         </el-form-item>
 
         <el-form-item label="目标频道 (Target)" prop="target_url">
           <el-input v-model="form.target_url" placeholder="例如：@target 或 -100123456789 (私密频道)" />
+          <div v-if="targetPeerLoading" class="hint muted">解析中...</div>
+          <div v-else-if="targetPeerInfo" class="hint muted">已解析：{{ peerInfoText(targetPeerInfo) }}</div>
+          <div v-else-if="targetPeerErr" class="hint err">{{ targetPeerErr }}</div>
+        </el-form-item>
+
+        <el-form-item label="任务备注（可选）">
+          <el-input v-model="form.remark" placeholder="可选：用于区分任务用途/来源" maxlength="255" show-word-limit />
         </el-form-item>
 
         <el-divider content-position="left">账号策略</el-divider>

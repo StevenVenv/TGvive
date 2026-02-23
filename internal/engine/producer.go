@@ -218,7 +218,7 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 
 		msgToQueue := msg
 		if msg.GroupedID == 0 {
-			if cfg != nil && cfg.Keyword != nil {
+			if cfg.Keyword != nil {
 				out, skip := applyKeywordPolicyToMessage(msg, cfg.Keyword)
 				if skip {
 					skipped++

@@ -12,12 +12,14 @@ import {
   getTasks,
   listTGAccounts,
   listTGBots,
+  resolveTGAccountPeer,
   taskAction,
   type KeywordProfile,
   type Strategy,
   type Task,
   type TaskProgress,
   type TGAccount,
+  type TGDialogItem,
   type TGBot,
 } from '../api'
 import { deleteTask, updateTask } from '../api/task'
@@ -32,6 +34,94 @@ const tasks = ref<Task[]>([])
 const loading = ref(false)
 const progressMap = ref<Record<number, TaskProgress>>({})
 const autoRefresh = ref(true)
+
+const peerInfoMap = ref<Record<string, TGDialogItem>>({})
+const peerErrMap = ref<Record<string, string>>({})
+const peerInFlight = new Set<string>()
+
+function peerMapKey(sessionKey: string, rawPeer: string): string {
+  return `${String(sessionKey || '').trim()}::${String(rawPeer || '').trim()}`
+}
+
+function kindLabel(kind: string): string {
+  if (kind === 'supergroup') return '超级群'
+  if (kind === 'group') return '群组'
+  return '频道'
+}
+
+function peerInfoText(info: TGDialogItem | null): string {
+  const title = String(info?.title || '').trim()
+  const u = String(info?.username || '').trim()
+  const k = kindLabel(String(info?.kind || '').trim())
+  if (!title) return k
+  return u ? `${k} · ${title} (@${u})` : `${k} · ${title}`
+}
+
+function peerInfoFor(task: Task, rawPeer: string): TGDialogItem | null {
+  const sessionKey = String(task?.session_key || '').trim()
+  const peer = String(rawPeer || '').trim()
+  if (!sessionKey || !peer) return null
+  return peerInfoMap.value[peerMapKey(sessionKey, peer)] || null
+}
+
+function peerErrFor(task: Task, rawPeer: string): string {
+  const sessionKey = String(task?.session_key || '').trim()
+  const peer = String(rawPeer || '').trim()
+  if (!sessionKey || !peer) return ''
+  return String(peerErrMap.value[peerMapKey(sessionKey, peer)] || '').trim()
+}
+
+async function resolvePeerNamesForTasks() {
+  const list = tasks.value || []
+  if (list.length === 0) return
+
+  const needed = new Set<string>()
+  const queue: Array<{ mapKey: string; sessionKey: string; peer: string }> = []
+
+  for (const t of list) {
+    const sessionKey = String(t?.session_key || '').trim()
+    if (!sessionKey) continue
+
+    for (const raw of [t?.source_url, t?.target_url]) {
+      const peer = String(raw || '').trim()
+      if (!peer) continue
+
+      const mk = peerMapKey(sessionKey, peer)
+      needed.add(mk)
+      if (peerInfoMap.value[mk] || peerErrMap.value[mk] || peerInFlight.has(mk)) continue
+      queue.push({ mapKey: mk, sessionKey, peer })
+    }
+  }
+
+  // Prune caches to avoid unbounded growth.
+  peerInfoMap.value = Object.fromEntries(Object.entries(peerInfoMap.value).filter(([k]) => needed.has(k)))
+  peerErrMap.value = Object.fromEntries(Object.entries(peerErrMap.value).filter(([k]) => needed.has(k)))
+
+  if (queue.length === 0) return
+
+  let idx = 0
+  const worker = async () => {
+    for (;;) {
+      const cur = queue[idx++]
+      if (!cur) return
+
+      const mk = cur.mapKey
+      if (peerInFlight.has(mk) || peerInfoMap.value[mk] || peerErrMap.value[mk]) continue
+
+      peerInFlight.add(mk)
+      try {
+        const info = await resolveTGAccountPeer(cur.sessionKey, cur.peer)
+        peerInfoMap.value = { ...peerInfoMap.value, [mk]: info }
+      } catch (err: any) {
+        peerErrMap.value = { ...peerErrMap.value, [mk]: String(err?.message || '解析失败') }
+      } finally {
+        peerInFlight.delete(mk)
+      }
+    }
+  }
+
+  await Promise.all([worker(), worker(), worker(), worker()])
+}
 
 const selectedTaskId = ref<number>(0)
 const selectedTask = computed(() => tasks.value.find((t) => t.ID === selectedTaskId.value) || null)
@@ -69,6 +159,7 @@ const editForm = reactive({
   id: 0,
   source_url: '',
   target_url: '',
+  remark: '',
   session_key: '',
   publish_type: 'same' as 'same' | 'account' | 'bot',
   publish_session_key: '',
@@ -294,6 +385,7 @@ async function reloadTasks() {
   loading.value = true
   try {
     tasks.value = await getTasks()
+    void resolvePeerNamesForTasks()
     logCache.prune(tasks.value.map((t) => t.ID))
     if (selectedTaskId.value > 0 && !tasks.value.some((t) => t.ID === selectedTaskId.value)) {
       selectedTaskId.value = 0
@@ -394,6 +486,7 @@ function openEdit(task: Task) {
     id: Number(task.ID || 0),
     source_url: String(task.source_url || '').trim(),
     target_url: String(task.target_url || '').trim(),
+    remark: String((task as any).remark || '').trim(),
     session_key: String(task.session_key || '').trim(),
     publish_type: publishType,
     publish_session_key: String((task as any).publish_session_key || '').trim(),
@@ -423,6 +516,7 @@ async function submitEdit() {
   const payload = {
     source_url: String(editForm.source_url || '').trim(),
     target_url: String(editForm.target_url || '').trim(),
+    remark: String(editForm.remark || '').trim(),
     session_key: String(editForm.session_key || '').trim(),
     publish_type: editForm.publish_type,
     publish_session_key: String(editForm.publish_session_key || '').trim(),
@@ -705,12 +799,31 @@ defineExpose({
                     <div class="peers">
                       <div class="peer">
                         <el-text type="info">源：</el-text>
-                        <el-text>{{ row.source_url }}</el-text>
+                        <div class="peer-body">
+                          <el-text>{{ row.source_url }}</el-text>
+                          <div v-if="peerInfoFor(row, row.source_url)" class="peer-meta muted">
+                            {{ peerInfoText(peerInfoFor(row, row.source_url)) }}
+                          </div>
+                          <el-tooltip v-else-if="peerErrFor(row, row.source_url)" :content="peerErrFor(row, row.source_url)" placement="top" :show-after="200">
+                            <div class="peer-meta muted">未解析</div>
+                          </el-tooltip>
+                          <div v-else class="peer-meta muted">未解析</div>
+                        </div>
                       </div>
                       <div class="peer">
                         <el-text type="info">目标：</el-text>
-                        <el-text>{{ row.target_url }}</el-text>
+                        <div class="peer-body">
+                          <el-text>{{ row.target_url }}</el-text>
+                          <div v-if="peerInfoFor(row, row.target_url)" class="peer-meta muted">
+                            {{ peerInfoText(peerInfoFor(row, row.target_url)) }}
+                          </div>
+                          <el-tooltip v-else-if="peerErrFor(row, row.target_url)" :content="peerErrFor(row, row.target_url)" placement="top" :show-after="200">
+                            <div class="peer-meta muted">未解析</div>
+                          </el-tooltip>
+                          <div v-else class="peer-meta muted">未解析</div>
+                        </div>
                       </div>
+                      <div v-if="row.remark" class="peer-remark muted">备注：{{ row.remark }}</div>
                     </div>
                   </template>
                 </el-table-column>
@@ -894,6 +1007,10 @@ defineExpose({
 
           <el-form-item label="目标频道 (Target)" prop="target_url">
             <el-input v-model="editForm.target_url" placeholder="例如：@target 或 -100123456789 (私密频道)" />
+          </el-form-item>
+
+          <el-form-item label="任务备注（可选）">
+            <el-input v-model="editForm.remark" placeholder="可选：用于区分任务用途/来源" maxlength="255" show-word-limit />
           </el-form-item>
 
           <el-divider content-position="left">账号策略</el-divider>
@@ -1108,6 +1225,19 @@ defineExpose({
 .peer {
   display: flex;
   gap: 6px;
+}
+
+.peer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.peer-meta,
+.peer-remark {
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .sub {

@@ -265,7 +265,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <div class="actions" @click.stop>
               <el-button class="btn mini" @click.stop="runTest(row)" :loading="getCheckState(row.id).status === 'checking'">
@@ -450,7 +450,9 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 6px;
+  row-gap: 6px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .danger {
