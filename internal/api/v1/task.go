@@ -241,6 +241,19 @@ func (a *TaskApi) UpdateTaskStatus(c *gin.Context) {
 		return
 	}
 
+	// Runtime side-effects are handled in API layer to keep service package DB-only
+	// (prevents service -> engine dependency and potential import cycles).
+	switch req.Action {
+	case "start":
+		engine.Manager.StartTask(task)
+	case "restart":
+		engine.Manager.RestartTask(task)
+	case "pause":
+		engine.Manager.PauseTask(task.ID)
+	case "stop":
+		engine.Manager.StopTask(task.ID)
+	}
+
 	app.OkWithData(gin.H{"status": task.Status, "msg": "指令已发送"}, c)
 }
 
@@ -479,6 +492,9 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		payload.DailyLimit = 0
 	}
 
+	// Ensure the worker is stopped before applying changes.
+	engine.Manager.StopTask(uint(idU64))
+
 	updated, err := service.UpdateTask(userID, uint(idU64), &payload)
 	if err != nil {
 		app.FailWithMsg("任务更新失败: "+err.Error(), c)
@@ -500,6 +516,12 @@ func (a *TaskApi) DeleteTask(c *gin.Context) {
 	if err != nil || idU64 == 0 {
 		app.FailWithMsg("任务ID不合法", c)
 		return
+	}
+
+	taskID := uint(idU64)
+	engine.Manager.StopTask(taskID)
+	if err := engine.Manager.DestroyLocalDB(taskID); err != nil && global.Logger != nil {
+		global.Logger.Warn("destroy task localdb failed: " + err.Error())
 	}
 
 	if err := service.DeleteTask(userID, uint(idU64)); err != nil {

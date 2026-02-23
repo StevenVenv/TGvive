@@ -39,6 +39,14 @@ func (a *DashboardApi) DashboardWS(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// Hardening: bound memory usage and enable keepalive via ping/pong.
+	conn.SetReadLimit(64 * 1024)
+	_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
+		return nil
+	})
+
 	logSub := global.Stats.SubscribeLogs(160)
 	defer global.Stats.UnsubscribeLogs(logSub)
 

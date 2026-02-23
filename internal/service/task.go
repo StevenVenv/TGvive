@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 
-	"my-go-server/internal/engine"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 )
@@ -67,19 +66,6 @@ func ApplyTaskAction(userID uint, taskID uint, action string) (model.Task, error
 		return task, err
 	}
 
-	switch status {
-	case model.TaskStatusRunning:
-		if action == "restart" {
-			engine.Manager.RestartTask(task)
-		} else {
-			engine.Manager.StartTask(task)
-		}
-	case model.TaskStatusPaused:
-		engine.Manager.PauseTask(task.ID)
-	case model.TaskStatusStopped:
-		engine.Manager.StopTask(task.ID)
-	}
-
 	return task, nil
 }
 
@@ -92,9 +78,6 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	if err != nil {
 		return task, err
 	}
-
-	// Ensure the worker is stopped before applying changes.
-	engine.Manager.StopTask(task.ID)
 
 	src := strings.TrimSpace(payload.SourceURL)
 	dst := strings.TrimSpace(payload.TargetURL)
@@ -181,11 +164,6 @@ func DeleteTask(userID uint, taskID uint) error {
 	task, err := GetTaskByID(userID, taskID)
 	if err != nil {
 		return err
-	}
-
-	engine.Manager.StopTask(task.ID)
-	if err := engine.Manager.DestroyLocalDB(task.ID); err != nil && global.Logger != nil {
-		global.Logger.Warn("destroy task localdb failed: " + err.Error())
 	}
 	return global.DB.Delete(&task).Error
 }

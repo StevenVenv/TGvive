@@ -24,6 +24,11 @@ func (a *AuthApi) DevToken(c *gin.Context) {
 		app.FailWithMsg("dev token 仅在 debug 模式可用", c)
 		return
 	}
+	// Hardening: only allow local access, never via reverse proxy.
+	if middleware.HasForwardedHeaders(c.Request) || !middleware.IsLoopbackRemoteAddr(c.Request) {
+		app.FailWithMsg("dev token 仅允许本机访问", c)
+		return
+	}
 	if global.DB == nil {
 		app.FailWithMsg("数据库未初始化", c)
 		return

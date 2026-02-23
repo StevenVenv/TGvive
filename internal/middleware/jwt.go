@@ -101,10 +101,17 @@ func allowAnonymousDebug(c *gin.Context) bool {
 	if !global.Config.Server.AllowAnonymousDebug {
 		return false
 	}
-	return isLoopbackRemoteAddr(c.Request)
+	// Hardening: do not allow bypass when request comes through a reverse proxy.
+	// RemoteAddr would be the proxy (often loopback) which makes this unsafe.
+	if HasForwardedHeaders(c.Request) {
+		return false
+	}
+	return IsLoopbackRemoteAddr(c.Request)
 }
 
-func isLoopbackRemoteAddr(r *http.Request) bool {
+// IsLoopbackRemoteAddr checks whether the direct TCP peer is a loopback IP.
+// Note: it does NOT trust X-Forwarded-For; callers should also gate by HasForwardedHeaders.
+func IsLoopbackRemoteAddr(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
@@ -114,6 +121,24 @@ func isLoopbackRemoteAddr(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// HasForwardedHeaders reports whether the request appears to be forwarded by a proxy.
+// We intentionally treat any non-empty forwarded header as "proxied" to avoid auth bypass in debug mode.
+func HasForwardedHeaders(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if strings.TrimSpace(r.Header.Get("Forwarded")) != "" {
+		return true
+	}
+	if strings.TrimSpace(r.Header.Get("X-Forwarded-For")) != "" {
+		return true
+	}
+	if strings.TrimSpace(r.Header.Get("X-Real-IP")) != "" {
+		return true
+	}
+	return false
 }
 
 func isWebSocketUpgrade(r *http.Request) bool {

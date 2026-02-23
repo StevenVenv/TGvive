@@ -85,6 +85,14 @@ func (a *TGAuthApi) QRWebSocket(c *gin.Context) {
 	}
 	defer conn.Close()
 
+	// Hardening: bound memory usage and enable keepalive via ping/pong.
+	conn.SetReadLimit(64 * 1024)
+	_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
+		return nil
+	})
+
 	updates, unsubscribe := engine.SubscribeQR(sessionID)
 	defer unsubscribe()
 
