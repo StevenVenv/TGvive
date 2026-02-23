@@ -38,6 +38,11 @@ func (c *StrategyCache) Set(strategy *model.Strategy) {
 		copy(raw, cp.WatermarkRule)
 		cp.WatermarkRule = raw
 	}
+	if len(cp.VideoWatermarkRule) > 0 {
+		raw := make([]byte, len(cp.VideoWatermarkRule))
+		copy(raw, cp.VideoWatermarkRule)
+		cp.VideoWatermarkRule = raw
+	}
 
 	c.mu.Lock()
 	if c.strategies == nil {

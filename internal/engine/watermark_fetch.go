@@ -26,6 +26,18 @@ func isWatermarkableImageMessage(msg *tg.Message) bool {
 	}
 }
 
+func isWatermarkableVideoMessage(msg *tg.Message) bool {
+	if msg == nil || msg.Media == nil {
+		return false
+	}
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaDocument:
+		return isVideoDocument(media)
+	default:
+		return false
+	}
+}
+
 func messageSpoilerTTL(msg *tg.Message) (spoiler bool, ttl int) {
 	if msg == nil || msg.Media == nil {
 		return false, 0
@@ -128,5 +140,14 @@ func uploadBytes(ctx context.Context, api *tg.Client, name string, b []byte) (tg
 func watermarkRuleForTask(task model.Task) (model.WatermarkRule, bool) {
 	st := ResolveRuntimeStrategy(task)
 	rule, enabled, _ := resolveWatermarkRule(st)
+	return rule, enabled
+}
+
+func videoWatermarkRuleForTask(task model.Task) (model.VideoWatermarkRule, bool) {
+	if task.CloneMode != 3 {
+		return model.VideoWatermarkRule{}, false
+	}
+	st := ResolveRuntimeStrategy(task)
+	rule, enabled, _ := resolveVideoWatermarkRule(st)
 	return rule, enabled
 }

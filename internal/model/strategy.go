@@ -55,6 +55,9 @@ type Strategy struct {
 	// WatermarkRule stores image watermark rules (Strategy-level).
 	WatermarkRule datatypes.JSON `gorm:"type:json" json:"watermark_rule"`
 
+	// VideoWatermarkRule stores video watermark rules (Strategy-level, FFmpeg).
+	VideoWatermarkRule datatypes.JSON `gorm:"type:json" json:"video_watermark_rule"`
+
 	// 开关配置 (布尔值)
 	KeepReply bool `gorm:"default:false" json:"keep_reply"`
 	// Realtime is kept for backward compatibility (legacy field).

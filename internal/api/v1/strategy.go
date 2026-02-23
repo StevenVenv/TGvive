@@ -3,11 +3,14 @@ package v1
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"my-go-server/internal/engine"
+	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 	"my-go-server/internal/service"
 	"my-go-server/pkg/app"
@@ -511,6 +514,249 @@ func normalizeAndSyncStrategyWatermarkRuleForUpdate(existing model.Strategy, pay
 	return nil
 }
 
+func defaultVideoWatermarkRule() model.VideoWatermarkRule {
+	return model.VideoWatermarkRule{
+		Enable:          true,
+		Type:            "text",
+		TextStyle:       "stroke",
+		TextColor:       "#FFFFFF",
+		StrokeColor:     "#000000",
+		ShadowColor:     "#000000",
+		Position:        "bottom_right",
+		Margin:          0.02,
+		Opacity:         0.35,
+		ScaleRatio:      0, // decided by Type
+		Motion:          "bounce",
+		MotionPeriodSec: 12,
+	}
+}
+
+func normalizeVideoWatermarkRule(in model.VideoWatermarkRule) model.VideoWatermarkRule {
+	out := in
+	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
+	out.Position = strings.ToLower(strings.TrimSpace(out.Position))
+	out.Motion = strings.ToLower(strings.TrimSpace(out.Motion))
+	out.Text = strings.TrimSpace(out.Text)
+	out.TextStyle = strings.ToLower(strings.TrimSpace(out.TextStyle))
+	out.TextColor = normalizeHexColor(out.TextColor, "#FFFFFF")
+	out.StrokeColor = normalizeHexColor(out.StrokeColor, "#000000")
+	out.ShadowColor = normalizeHexColor(out.ShadowColor, "#000000")
+	out.FontPath = strings.TrimSpace(out.FontPath)
+	out.ImagePath = strings.TrimSpace(out.ImagePath)
+
+	// Infer type if empty.
+	if out.Type == "" {
+		if out.ImagePath != "" {
+			out.Type = "image"
+		} else {
+			out.Type = "text"
+		}
+	}
+	switch out.Type {
+	case "text", "image":
+	default:
+		if out.ImagePath != "" {
+			out.Type = "image"
+		} else {
+			out.Type = "text"
+		}
+	}
+
+	switch out.TextStyle {
+	case "plain", "stroke", "shadow", "stroke_shadow":
+	default:
+		out.TextStyle = "stroke"
+	}
+
+	switch out.Position {
+	case "bottom_right", "bottom_left", "top_right", "top_left", "center", "custom":
+	default:
+		out.Position = "bottom_right"
+	}
+
+	out.CustomX = clamp01(out.CustomX)
+	out.CustomY = clamp01(out.CustomY)
+
+	out.Margin = clamp01(out.Margin)
+	if out.Margin == 0 {
+		out.Margin = 0.02
+	}
+	if out.Margin > 0.1 {
+		out.Margin = 0.1
+	}
+
+	out.Opacity = clamp01(out.Opacity)
+	if out.Opacity == 0 {
+		out.Opacity = 0.35
+	}
+
+	out.ScaleRatio = clamp01(out.ScaleRatio)
+	if out.ScaleRatio == 0 {
+		if out.Type == "image" {
+			out.ScaleRatio = 0.15
+		} else {
+			out.ScaleRatio = 0.03
+		}
+	}
+	if out.ScaleRatio < 0.01 {
+		out.ScaleRatio = 0.01
+	}
+	if out.ScaleRatio > 0.5 {
+		out.ScaleRatio = 0.5
+	}
+
+	switch out.Motion {
+	case "", "bounce":
+		out.Motion = "bounce"
+	case "static":
+		// ok
+	default:
+		out.Motion = "bounce"
+	}
+	if out.MotionPeriodSec <= 0 {
+		out.MotionPeriodSec = 12
+	}
+	if out.MotionPeriodSec < 2 {
+		out.MotionPeriodSec = 2
+	}
+	if out.MotionPeriodSec > 120 {
+		out.MotionPeriodSec = 120
+	}
+
+	return out
+}
+
+func validateVideoWatermarkRule(r model.VideoWatermarkRule) error {
+	if !r.Enable {
+		return nil
+	}
+
+	cfg := global.Config.Processor.Video
+	if !cfg.Enabled {
+		return errors.New("video_watermark_rule 需要先开启 processor.video.enabled")
+	}
+	ffmpegPath := strings.TrimSpace(cfg.FFmpegPath)
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+	if _, err := exec.LookPath(ffmpegPath); err != nil {
+		return fmt.Errorf("video_watermark_rule 未找到 FFmpeg: %s", ffmpegPath)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(r.Motion)) {
+	case "bounce", "static":
+	default:
+		return errors.New("video_watermark_rule motion 仅支持 bounce/static")
+	}
+
+	switch r.Type {
+	case "image":
+		if strings.TrimSpace(r.ImagePath) == "" {
+			return errors.New("video_watermark_rule image_path 不能为空")
+		}
+		if p := strings.TrimSpace(r.ImagePath); p != "" && !filepath.IsAbs(p) {
+			norm := strings.ReplaceAll(p, "\\", "/")
+			norm = strings.TrimPrefix(norm, "./")
+			clean := strings.ReplaceAll(filepath.Clean(norm), "\\", "/")
+			base := strings.TrimSpace(filepath.Base(clean))
+			if base == "" || base == "." || base == ".." {
+				return errors.New("video_watermark_rule image_path 不合法")
+			}
+			if !strings.HasSuffix(strings.ToLower(base), ".png") {
+				return errors.New("video_watermark_rule image_path 仅支持 .png")
+			}
+			if strings.ContainsAny(norm, `/\`) && !strings.HasPrefix(clean, "data/watermarks/") {
+				return errors.New("video_watermark_rule image_path 必须是绝对路径或 data/watermarks/ 下的文件名")
+			}
+		}
+	case "text":
+		if strings.TrimSpace(r.Text) == "" {
+			return errors.New("video_watermark_rule text 不能为空")
+		}
+		if p := strings.TrimSpace(r.FontPath); p != "" && !filepath.IsAbs(p) {
+			norm := strings.ReplaceAll(p, "\\", "/")
+			norm = strings.TrimPrefix(norm, "./")
+			clean := strings.ReplaceAll(filepath.Clean(norm), "\\", "/")
+			base := strings.TrimSpace(filepath.Base(clean))
+			if base == "" || base == "." || base == ".." {
+				return errors.New("video_watermark_rule font_path 不合法")
+			}
+			ext := strings.ToLower(filepath.Ext(base))
+			if ext != ".ttf" && ext != ".otf" {
+				return errors.New("video_watermark_rule font_path 仅支持 .ttf/.otf")
+			}
+			if strings.ContainsAny(norm, `/\`) && !strings.HasPrefix(clean, "data/watermarks/fonts/") {
+				return errors.New("video_watermark_rule font_path 必须是绝对路径或 data/watermarks/fonts/ 下的文件名")
+			}
+		}
+	default:
+		return errors.New("video_watermark_rule type 仅支持 text/image")
+	}
+
+	return nil
+}
+
+func normalizeAndSyncStrategyVideoWatermarkRuleForCreate(s *model.Strategy) error {
+	if s == nil {
+		return nil
+	}
+
+	raw := s.VideoWatermarkRule
+	if isEmptyJSON(raw) {
+		s.VideoWatermarkRule = nil
+		return nil
+	}
+
+	var r model.VideoWatermarkRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("video_watermark_rule 格式错误: " + err.Error())
+	}
+	r = normalizeVideoWatermarkRule(r)
+	if !r.Enable {
+		s.VideoWatermarkRule = nil
+		return nil
+	}
+	if err := validateVideoWatermarkRule(r); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(r)
+	s.VideoWatermarkRule = b
+	return nil
+}
+
+func normalizeAndSyncStrategyVideoWatermarkRuleForUpdate(existing model.Strategy, payload *model.Strategy) error {
+	if payload == nil {
+		return nil
+	}
+
+	raw := payload.VideoWatermarkRule
+	if raw == nil {
+		raw = existing.VideoWatermarkRule
+	}
+
+	if isEmptyJSON(raw) {
+		payload.VideoWatermarkRule = nil
+		return nil
+	}
+
+	var r model.VideoWatermarkRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("video_watermark_rule 格式错误: " + err.Error())
+	}
+
+	r = normalizeVideoWatermarkRule(r)
+	if !r.Enable {
+		payload.VideoWatermarkRule = nil
+		return nil
+	}
+	if err := validateVideoWatermarkRule(r); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(r)
+	payload.VideoWatermarkRule = b
+	return nil
+}
+
 // CreateStrategy 创建策略模板
 func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 	var s model.Strategy
@@ -573,6 +819,10 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 		return
 	}
 	if err := normalizeAndSyncStrategyWatermarkRuleForCreate(&s); err != nil {
+		app.FailWithMsg(err.Error(), c)
+		return
+	}
+	if err := normalizeAndSyncStrategyVideoWatermarkRuleForCreate(&s); err != nil {
 		app.FailWithMsg(err.Error(), c)
 		return
 	}
@@ -677,6 +927,10 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 		return
 	}
 	if err := normalizeAndSyncStrategyWatermarkRuleForUpdate(existing, &payload); err != nil {
+		app.FailWithMsg(err.Error(), c)
+		return
+	}
+	if err := normalizeAndSyncStrategyVideoWatermarkRuleForUpdate(existing, &payload); err != nil {
 		app.FailWithMsg(err.Error(), c)
 		return
 	}

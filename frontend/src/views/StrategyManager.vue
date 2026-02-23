@@ -11,6 +11,7 @@ import {
   getStrategies,
   updateKeywordProfile,
   updateStrategy,
+  type VideoWatermarkRule,
   type WatermarkRule,
   type KeywordProfile,
   type Strategy,
@@ -93,6 +94,26 @@ function emptyModel(): StrategyFormModel {
       opacity: 0.35,
     },
 
+    video_watermark_rule: {
+      enable: false,
+      type: 'text',
+      text: '',
+      text_style: 'stroke',
+      text_color: '#FFFFFF',
+      stroke_color: '#000000',
+      shadow_color: '#000000',
+      font_path: '',
+      image_path: '',
+      position: 'bottom_right',
+      custom_x: 0.5,
+      custom_y: 0.5,
+      margin: 0.02,
+      scale_ratio: 0.03,
+      opacity: 0.35,
+      motion: 'bounce',
+      motion_period_sec: 12,
+    },
+
     keep_reply: false,
     realtime: false,
     clone_comment: false,
@@ -149,6 +170,7 @@ function summarizeTags(s: Strategy): string[] {
   if (s.keep_reply) tags.push('保留回复')
   if (s.clone_comment) tags.push('克隆评论')
   if (Boolean((s as any)?.watermark_rule?.enable)) tags.push('水印')
+  if (Boolean((s as any)?.video_watermark_rule?.enable)) tags.push('视频水印')
   if (s.gpu_accel) tags.push('GPU')
   if (s.change_md5) tags.push('改MD5')
   if ((s as any).random_filename) tags.push('随机文件名')
@@ -299,6 +321,9 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
   const comment_rule = normalizeCommentRule((m as any).comment_rule, commentEnable)
   const rawWatermark = (m as any).watermark_rule
   const watermark_rule = rawWatermark && typeof rawWatermark === 'object' ? (rawWatermark as WatermarkRule) : undefined
+  const rawVideoWatermark = (m as any).video_watermark_rule
+  const video_watermark_rule =
+    rawVideoWatermark && typeof rawVideoWatermark === 'object' ? (rawVideoWatermark as VideoWatermarkRule) : undefined
   return {
     name: (m.name || '').trim(),
     remark: (m.remark || '').trim(),
@@ -324,6 +349,7 @@ function buildPayload(m: StrategyFormModel): Partial<Strategy> {
     clone_comment: commentEnable,
     comment_rule,
     watermark_rule,
+    video_watermark_rule,
     gpu_accel: Boolean(m.gpu_accel),
     change_md5: Boolean(m.change_md5),
     random_filename: Boolean((m as any).random_filename),
@@ -355,6 +381,11 @@ function fillEdit(row: Strategy) {
     rawWatermark && typeof rawWatermark === 'object'
       ? ({ ...emptyModel().watermark_rule, ...(rawWatermark as any) } as WatermarkRule)
       : emptyModel().watermark_rule
+  const rawVideoWatermark = (row as any).video_watermark_rule
+  const video_watermark_rule =
+    rawVideoWatermark && typeof rawVideoWatermark === 'object'
+      ? ({ ...emptyModel().video_watermark_rule, ...(rawVideoWatermark as any) } as VideoWatermarkRule)
+      : emptyModel().video_watermark_rule
   Object.assign(editModel, emptyModel(), {
     ID: Number(row.ID || 0),
     name: (row.name || '').trim(),
@@ -375,6 +406,7 @@ function fillEdit(row: Strategy) {
 
     comment_rule,
     watermark_rule,
+    video_watermark_rule,
 
     keep_reply: Boolean(row.keep_reply),
     realtime: enable,

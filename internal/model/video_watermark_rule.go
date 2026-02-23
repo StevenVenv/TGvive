@@ -1,0 +1,57 @@
+package model
+
+// VideoWatermarkRule controls per-strategy watermarking for videos (FFmpeg based).
+//
+// It is stored as JSON in Strategy.VideoWatermarkRule.
+type VideoWatermarkRule struct {
+	Enable bool `json:"enable"`
+
+	// Type: "text" or "image".
+	Type string `json:"type"`
+
+	// Text is used when Type == "text".
+	Text string `json:"text"`
+
+	// TextStyle controls how to draw text watermark: "plain", "stroke", "shadow", "stroke_shadow".
+	TextStyle string `json:"text_style"`
+
+	// TextColor is the main text color (hex like "#FFFFFF").
+	TextColor string `json:"text_color"`
+
+	// StrokeColor is used by stroke styles (hex like "#000000").
+	StrokeColor string `json:"stroke_color"`
+
+	// ShadowColor is used by shadow styles (hex like "#000000").
+	ShadowColor string `json:"shadow_color"`
+
+	// FontPath is a local font path (.ttf/.otf) used when Type == "text".
+	// It can be an absolute path, or a filename stored under data/watermarks/fonts (recommended).
+	FontPath string `json:"font_path"`
+
+	// ImagePath is used when Type == "image". It can be an absolute path, or a filename stored under
+	// data/watermarks (recommended). PNG only.
+	ImagePath string `json:"image_path"`
+
+	// Position: "bottom_right", "bottom_left", "top_right", "top_left", "center", "custom".
+	Position string `json:"position"`
+
+	// CustomX/CustomY are used when Position == "custom" (0..1).
+	CustomX float64 `json:"custom_x"`
+	CustomY float64 `json:"custom_y"`
+
+	// Margin is a ratio of the base video width (0..1).
+	Margin float64 `json:"margin"`
+
+	// ScaleRatio is watermark width ratio relative to base video width (0..1).
+	ScaleRatio float64 `json:"scale_ratio"`
+
+	// Opacity is 0..1.
+	Opacity float64 `json:"opacity"`
+
+	// Motion: "bounce" or "static".
+	Motion string `json:"motion"`
+
+	// MotionPeriodSec controls the bounce motion cycle time (seconds).
+	MotionPeriodSec float64 `json:"motion_period_sec"`
+}
+

@@ -61,6 +61,7 @@ func UpdateStrategy(ctx context.Context, userID uint, strategyID uint, payload *
 	s.ScheduleRules = payload.ScheduleRules
 	s.CommentRule = payload.CommentRule
 	s.WatermarkRule = payload.WatermarkRule
+	s.VideoWatermarkRule = payload.VideoWatermarkRule
 
 	s.KeepReply = payload.KeepReply
 	s.Realtime = payload.Realtime

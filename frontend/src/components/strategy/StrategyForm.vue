@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
-import { apiFetchBlob, uploadWatermarkFont, uploadWatermarkPNG, type CommentRule, type WatermarkRule } from '../../api'
+import {
+  apiFetchBlob,
+  getSystemCapabilities,
+  uploadWatermarkFont,
+  uploadWatermarkPNG,
+  type CommentRule,
+  type SystemCapabilities,
+  type VideoWatermarkRule,
+  type WatermarkRule,
+} from '../../api'
 
 export type ScheduleRule = {
   start: string
@@ -30,6 +39,7 @@ export type StrategyFormModel = {
 
   comment_rule: CommentRule
   watermark_rule: WatermarkRule
+  video_watermark_rule: VideoWatermarkRule
 
   keep_reply: boolean
   realtime: boolean
@@ -88,6 +98,7 @@ watch(
   (mode) => {
     if (mode !== 3) {
       form.value.enable_media_edit = false
+      ensureVideoWatermarkRule().enable = false
     }
   },
   { immediate: true },
@@ -129,6 +140,40 @@ const enablePull = computed<boolean>({
 
 const commentCollapse = ref<string[]>([])
 const mediaCollapse = ref<string[]>([])
+
+const systemCaps = ref<SystemCapabilities | null>(null)
+const systemCapsLoading = ref(false)
+
+function ffmpegCapOK(caps: SystemCapabilities | null): boolean {
+  return Boolean(caps?.ffmpeg?.enabled && caps?.ffmpeg?.available)
+}
+
+async function refreshSystemCaps(): Promise<SystemCapabilities | null> {
+  systemCapsLoading.value = true
+  try {
+    const caps = await getSystemCapabilities()
+    systemCaps.value = caps
+    return caps
+  } catch {
+    systemCaps.value = null
+    return null
+  } finally {
+    systemCapsLoading.value = false
+  }
+}
+
+async function ensureFFmpegAvailable(): Promise<boolean> {
+  if (ffmpegCapOK(systemCaps.value)) return true
+  const caps = await refreshSystemCaps()
+  if (ffmpegCapOK(caps)) return true
+  const reason = String(caps?.ffmpeg?.reason || 'FFmpeg 不可用').trim() || 'FFmpeg 不可用'
+  ElMessage.error(reason)
+  return false
+}
+
+onMounted(() => {
+  void refreshSystemCaps()
+})
 
 type CommentAllowedTypeKey = 'text' | 'image' | 'file' | 'video'
 
@@ -191,6 +236,28 @@ function defaultWatermarkRule(enable: boolean): WatermarkRule {
   }
 }
 
+function defaultVideoWatermarkRule(enable: boolean): VideoWatermarkRule {
+  return {
+    enable,
+    type: 'text',
+    text: '',
+    text_style: 'stroke',
+    text_color: '#FFFFFF',
+    stroke_color: '#000000',
+    shadow_color: '#000000',
+    font_path: '',
+    image_path: '',
+    position: 'bottom_right',
+    custom_x: 0.5,
+    custom_y: 0.5,
+    margin: 0.02,
+    scale_ratio: 0.03,
+    opacity: 0.35,
+    motion: 'bounce',
+    motion_period_sec: 12,
+  }
+}
+
 function clampFloat01(v: any): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return 0
@@ -214,6 +281,10 @@ function nearlyEqual(a: number, b: number, eps = 1e-6): boolean {
 
 function fmtPct(v: number): string {
   return `${Math.round(Number(v || 0))}%`
+}
+
+function fmtSec(v: number): string {
+  return `${Math.round(Number(v || 0))}s`
 }
 
 function ensureWatermarkRule(): WatermarkRule {
@@ -250,6 +321,53 @@ function ensureWatermarkRule(): WatermarkRule {
 
   r.opacity = clampFloat01((r as any).opacity)
   if (r.opacity === 0) r.opacity = 0.35
+
+  return r
+}
+
+function ensureVideoWatermarkRule(): VideoWatermarkRule {
+  const f = form.value as any
+  let r = f.video_watermark_rule as VideoWatermarkRule | undefined
+  if (!r || typeof r !== 'object') {
+    r = defaultVideoWatermarkRule(false)
+    f.video_watermark_rule = r
+  }
+
+  r.enable = Boolean((r as any).enable)
+  r.type = String((r as any).type || 'text')
+  r.text = String((r as any).text || '')
+  r.text_style = String((r as any).text_style || 'stroke')
+  r.text_color = String((r as any).text_color || '#FFFFFF')
+  r.stroke_color = String((r as any).stroke_color || '#000000')
+  r.shadow_color = String((r as any).shadow_color || '#000000')
+  r.font_path = normalizeUploadedWatermarkPath(String((r as any).font_path || ''))
+  r.image_path = normalizeUploadedWatermarkPath(String((r as any).image_path || ''))
+  r.position = String((r as any).position || 'bottom_right')
+
+  r.custom_x = clampFloat01((r as any).custom_x)
+  r.custom_y = clampFloat01((r as any).custom_y)
+
+  r.margin = clampFloat01((r as any).margin)
+  if (r.margin === 0) r.margin = 0.02
+  if (r.margin > 0.1) r.margin = 0.1
+
+  r.scale_ratio = clampFloat01((r as any).scale_ratio)
+  if (r.scale_ratio === 0) {
+    r.scale_ratio = String(r.type).trim().toLowerCase() === 'image' ? 0.15 : 0.03
+  }
+  if (r.scale_ratio < 0.01) r.scale_ratio = 0.01
+  if (r.scale_ratio > 0.5) r.scale_ratio = 0.5
+
+  r.opacity = clampFloat01((r as any).opacity)
+  if (r.opacity === 0) r.opacity = 0.35
+
+  const mraw = String((r as any).motion || 'bounce')
+    .trim()
+    .toLowerCase()
+  r.motion = mraw === 'static' ? 'static' : 'bounce'
+
+  const per = clampInt(2, Number((r as any).motion_period_sec ?? 12), 120)
+  r.motion_period_sec = per
 
   return r
 }
@@ -805,6 +923,590 @@ const watermarkOpacityPct = computed<number>({
   },
 })
 
+const videoWmDisabled = computed<boolean>(() => !isUploadMode.value)
+
+const videoWmEnable = computed<boolean>({
+  get() {
+    return Boolean(ensureVideoWatermarkRule().enable)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().enable = Boolean(v)
+  },
+})
+
+async function beforeToggleVideoWatermark(): Promise<boolean> {
+  // turning off is always allowed
+  if (videoWmEnable.value) return true
+  if (videoWmDisabled.value) {
+    ElMessage.error('仅“下载上传”模式支持视频水印')
+    return false
+  }
+  return ensureFFmpegAvailable()
+}
+
+const videoWmType = computed<'text' | 'image'>({
+  get() {
+    const raw = String(ensureVideoWatermarkRule().type || '')
+      .trim()
+      .toLowerCase()
+    if (raw === 'image') return 'image'
+    return 'text'
+  },
+  set(v) {
+    const r = ensureVideoWatermarkRule()
+    const prev = String(r.type || 'text')
+      .trim()
+      .toLowerCase()
+    const prevType = prev === 'image' ? 'image' : 'text'
+    if (prevType !== v) {
+      if (prevType === 'text' && nearlyEqual(Number(r.scale_ratio || 0), 0.03)) r.scale_ratio = 0.15
+      if (prevType === 'image' && nearlyEqual(Number(r.scale_ratio || 0), 0.15)) r.scale_ratio = 0.03
+    }
+    r.type = v
+  },
+})
+
+const videoWmText = computed<string>({
+  get() {
+    return String(ensureVideoWatermarkRule().text || '')
+  },
+  set(v) {
+    ensureVideoWatermarkRule().text = String(v || '')
+  },
+})
+
+const videoWmTextStyle = computed<WatermarkTextStyleKey>({
+  get() {
+    const raw = String(ensureVideoWatermarkRule().text_style || '')
+      .trim()
+      .toLowerCase()
+    switch (raw) {
+      case 'plain':
+        return 'plain'
+      case 'shadow':
+        return 'shadow'
+      case 'stroke_shadow':
+        return 'stroke_shadow'
+      case 'stroke':
+      default:
+        return 'stroke'
+    }
+  },
+  set(v) {
+    ensureVideoWatermarkRule().text_style = v
+  },
+})
+
+const videoWmTextColor = computed<string>({
+  get() {
+    return String(ensureVideoWatermarkRule().text_color || '#FFFFFF')
+  },
+  set(v) {
+    ensureVideoWatermarkRule().text_color = String(v || '').trim() || '#FFFFFF'
+  },
+})
+
+const videoWmStrokeColor = computed<string>({
+  get() {
+    return String(ensureVideoWatermarkRule().stroke_color || '#000000')
+  },
+  set(v) {
+    ensureVideoWatermarkRule().stroke_color = String(v || '').trim() || '#000000'
+  },
+})
+
+const videoWmShadowColor = computed<string>({
+  get() {
+    return String(ensureVideoWatermarkRule().shadow_color || '#000000')
+  },
+  set(v) {
+    ensureVideoWatermarkRule().shadow_color = String(v || '').trim() || '#000000'
+  },
+})
+
+const videoWmFontPath = computed<string>({
+  get() {
+    return String(ensureVideoWatermarkRule().font_path || '')
+  },
+  set(v) {
+    ensureVideoWatermarkRule().font_path = String(v || '').trim()
+  },
+})
+
+const videoWmImagePath = computed<string>({
+  get() {
+    return String(ensureVideoWatermarkRule().image_path || '')
+  },
+  set(v) {
+    ensureVideoWatermarkRule().image_path = String(v || '')
+  },
+})
+
+type VideoWmMotionKey = 'bounce' | 'static'
+
+const videoWmMotion = computed<VideoWmMotionKey>({
+  get() {
+    const raw = String(ensureVideoWatermarkRule().motion || '')
+      .trim()
+      .toLowerCase()
+    if (raw === 'static') return 'static'
+    return 'bounce'
+  },
+  set(v) {
+    ensureVideoWatermarkRule().motion = v
+  },
+})
+
+const videoWmPeriodSec = computed<number>({
+  get() {
+    return clampInt(2, Math.round(Number(ensureVideoWatermarkRule().motion_period_sec || 12)), 120)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().motion_period_sec = clampInt(2, v, 120)
+  },
+})
+
+const videoWmImageUploading = ref(false)
+const videoWmFontUploading = ref(false)
+
+async function uploadVideoWmPNGRequest(opts: UploadRequestOptions) {
+  const file = opts.file as File
+  if (!file) {
+    opts.onError?.(new Error('no file') as any)
+    return
+  }
+  videoWmImageUploading.value = true
+  try {
+    const res = await uploadWatermarkPNG(file)
+    videoWmType.value = 'image'
+    videoWmImagePath.value = normalizeUploadedWatermarkPath(String(res?.name || res?.path || ''))
+    ElMessage.success('水印已上传')
+    opts.onSuccess?.(res as any)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '上传失败')
+    opts.onError?.(e as any)
+  } finally {
+    videoWmImageUploading.value = false
+  }
+}
+
+async function uploadVideoWmFontRequest(opts: UploadRequestOptions) {
+  const file = opts.file as File
+  if (!file) {
+    opts.onError?.(new Error('no file') as any)
+    return
+  }
+  videoWmFontUploading.value = true
+  try {
+    const res = await uploadWatermarkFont(file)
+    videoWmType.value = 'text'
+    videoWmFontPath.value = normalizeUploadedWatermarkPath(String(res?.name || res?.path || ''))
+    ElMessage.success('字体已上传')
+    opts.onSuccess?.(res as any)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '上传失败')
+    opts.onError?.(e as any)
+  } finally {
+    videoWmFontUploading.value = false
+  }
+}
+
+const videoWmImagePreviewURL = computed<string>(() => {
+  const name = pathBasename(videoWmImagePath.value)
+  if (!name) return ''
+  return `/api/v1/watermarks/files/${encodeURIComponent(name)}`
+})
+
+const videoWmImagePreviewSrc = ref('')
+const videoWmImagePreviewLoading = ref(false)
+const videoWmImagePreviewOK = ref(true)
+
+watch(
+  () => [videoWmEnable.value, videoWmType.value, videoWmImagePreviewURL.value] as const,
+  async ([enable, typ, url], _, onCleanup) => {
+    videoWmImagePreviewOK.value = true
+    videoWmImagePreviewLoading.value = false
+    videoWmImagePreviewSrc.value = ''
+
+    if (!enable || typ !== 'image' || !url) {
+      return
+    }
+    if (
+      typeof URL === 'undefined' ||
+      typeof URL.createObjectURL !== 'function' ||
+      typeof URL.revokeObjectURL !== 'function'
+    ) {
+      videoWmImagePreviewOK.value = false
+      return
+    }
+
+    const ac = new AbortController()
+    onCleanup(() => ac.abort())
+
+    let objectURL = ''
+    onCleanup(() => {
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    })
+
+    videoWmImagePreviewLoading.value = true
+    try {
+      const blob = await apiFetchBlob(url, { method: 'GET', signal: ac.signal })
+      if (ac.signal.aborted) return
+      objectURL = URL.createObjectURL(blob)
+      videoWmImagePreviewSrc.value = objectURL
+      videoWmImagePreviewOK.value = true
+    } catch {
+      if (ac.signal.aborted) return
+      videoWmImagePreviewOK.value = false
+      videoWmImagePreviewSrc.value = ''
+    } finally {
+      if (!ac.signal.aborted) videoWmImagePreviewLoading.value = false
+    }
+  },
+  { immediate: true },
+)
+
+const videoWmFontPreviewURL = computed<string>(() => {
+  const name = pathBasename(videoWmFontPath.value)
+  if (!name) return ''
+  return `/api/v1/watermarks/fonts/${encodeURIComponent(name)}`
+})
+
+const videoWmFontPreviewSrc = ref('')
+const videoWmFontPreviewLoading = ref(false)
+
+const videoWmPreviewFontFamily = ref('')
+const videoWmPreviewFontError = ref('')
+
+async function loadVideoWmPreviewFont(url: string) {
+  if (!url) {
+    videoWmPreviewFontFamily.value = ''
+    videoWmPreviewFontError.value = ''
+    return
+  }
+  if (typeof FontFace === 'undefined' || typeof document === 'undefined' || !(document as any).fonts) {
+    return
+  }
+
+  const key = encodeURIComponent(url).replace(/[^a-zA-Z0-9]/g, '')
+  const family = `vwm_${key.slice(-24) || 'custom'}`
+  if (videoWmPreviewFontFamily.value === family) return
+
+  try {
+    const face = new FontFace(family, `url(${url})`)
+    await face.load()
+    ;(document as any).fonts.add(face)
+    videoWmPreviewFontFamily.value = family
+    videoWmPreviewFontError.value = ''
+  } catch {
+    videoWmPreviewFontFamily.value = ''
+    videoWmPreviewFontError.value = '字体预览加载失败'
+  }
+}
+
+watch(
+  () => [videoWmEnable.value, videoWmType.value, videoWmFontPreviewURL.value] as const,
+  async ([enable, typ, url], _, onCleanup) => {
+    videoWmFontPreviewLoading.value = false
+    videoWmFontPreviewSrc.value = ''
+
+    if (!enable || typ !== 'text') {
+      videoWmPreviewFontFamily.value = ''
+      videoWmPreviewFontError.value = ''
+      return
+    }
+    if (!url) {
+      await loadVideoWmPreviewFont('')
+      return
+    }
+    if (
+      typeof URL === 'undefined' ||
+      typeof URL.createObjectURL !== 'function' ||
+      typeof URL.revokeObjectURL !== 'function'
+    ) {
+      videoWmPreviewFontFamily.value = ''
+      videoWmPreviewFontError.value = '字体预览不支持'
+      return
+    }
+
+    const ac = new AbortController()
+    onCleanup(() => ac.abort())
+
+    let objectURL = ''
+    onCleanup(() => {
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    })
+
+    videoWmFontPreviewLoading.value = true
+    try {
+      const blob = await apiFetchBlob(url, { method: 'GET', signal: ac.signal })
+      if (ac.signal.aborted) return
+      objectURL = URL.createObjectURL(blob)
+      videoWmFontPreviewSrc.value = objectURL
+      await loadVideoWmPreviewFont(objectURL)
+    } catch {
+      if (ac.signal.aborted) return
+      videoWmPreviewFontFamily.value = ''
+      videoWmPreviewFontError.value = '字体预览加载失败'
+    } finally {
+      if (!ac.signal.aborted) videoWmFontPreviewLoading.value = false
+    }
+  },
+  { immediate: true },
+)
+
+const videoWmPreviewStageRef = ref<HTMLElement | null>(null)
+const videoWmPreviewStageW = ref(0)
+const videoWmPreviewStageH = ref(0)
+let videoWmPreviewRO: ResizeObserver | undefined
+
+function refreshVideoWmPreviewStageSize() {
+  const el = videoWmPreviewStageRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  videoWmPreviewStageW.value = Math.max(0, Math.round(rect.width || 0))
+  videoWmPreviewStageH.value = Math.max(0, Math.round(rect.height || 0))
+}
+
+onMounted(() => {
+  refreshVideoWmPreviewStageSize()
+  if (typeof ResizeObserver !== 'undefined') {
+    videoWmPreviewRO = new ResizeObserver(() => refreshVideoWmPreviewStageSize())
+    if (videoWmPreviewStageRef.value) videoWmPreviewRO.observe(videoWmPreviewStageRef.value)
+  } else if (typeof window !== 'undefined') {
+    window.addEventListener('resize', refreshVideoWmPreviewStageSize)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (videoWmPreviewRO) videoWmPreviewRO.disconnect()
+  if (typeof window !== 'undefined') window.removeEventListener('resize', refreshVideoWmPreviewStageSize)
+})
+
+watch(videoWmPreviewStageRef, (el, prev) => {
+  if (videoWmPreviewRO && prev) videoWmPreviewRO.unobserve(prev)
+  if (videoWmPreviewRO && el) videoWmPreviewRO.observe(el)
+  refreshVideoWmPreviewStageSize()
+})
+
+const videoWmPreviewOverlayRef = ref<HTMLElement | null>(null)
+const videoWmOverlayW = ref(0)
+const videoWmOverlayH = ref(0)
+
+function refreshVideoWmOverlaySize() {
+  const el = videoWmPreviewOverlayRef.value as any
+  if (!el) {
+    videoWmOverlayW.value = 0
+    videoWmOverlayH.value = 0
+    return
+  }
+  videoWmOverlayW.value = Math.max(0, Math.round(Number(el.offsetWidth || 0)))
+  videoWmOverlayH.value = Math.max(0, Math.round(Number(el.offsetHeight || 0)))
+}
+
+watch(
+  () =>
+    [
+      videoWmEnable.value,
+      videoWmType.value,
+      videoWmText.value,
+      ensureVideoWatermarkRule().scale_ratio,
+      videoWmImagePreviewSrc.value,
+      videoWmPreviewFontFamily.value,
+      videoWmPreviewStageW.value,
+      videoWmPreviewStageH.value,
+    ] as const,
+  () => {
+    void nextTick(() => refreshVideoWmOverlaySize())
+  },
+  { immediate: true },
+)
+
+watch(videoWmPreviewOverlayRef, () => {
+  void nextTick(() => refreshVideoWmOverlaySize())
+})
+
+const videoWmPreviewTextStyle = computed<Record<string, string>>(() => {
+  const r = ensureVideoWatermarkRule()
+  const baseW = videoWmPreviewStageW.value > 0 ? videoWmPreviewStageW.value : 360
+  let fontSize = baseW * clampFloat01(Number(r.scale_ratio || 0))
+  if (!Number.isFinite(fontSize) || fontSize <= 0) fontSize = 32
+  if (fontSize < 8) fontSize = 8
+
+  const ff = videoWmPreviewFontFamily.value
+  const family = ff ? `'${ff}', sans-serif` : 'inherit'
+
+  return {
+    fontFamily: family,
+    fontSize: `${Math.round(fontSize)}px`,
+    color: videoWmTextColor.value,
+    textShadow: previewTextShadow(videoWmTextStyle.value, videoWmStrokeColor.value, videoWmShadowColor.value),
+    whiteSpace: 'pre-line',
+    lineHeight: '1.2',
+  }
+})
+
+const videoWmPreviewStaticOverlayStyle = computed<Record<string, string>>(() => {
+  const r = ensureVideoWatermarkRule()
+  const stageW = videoWmPreviewStageW.value > 0 ? videoWmPreviewStageW.value : 360
+  const stageH = videoWmPreviewStageH.value > 0 ? videoWmPreviewStageH.value : 200
+  const marginPx = Math.round(stageW * clampFloat01(Number(r.margin || 0)))
+  const opacity = clampFloat01(Number(r.opacity || 0.35)) || 0.35
+
+  const pos = String(r.position || '')
+    .trim()
+    .toLowerCase()
+  const st: Record<string, string> = {
+    position: 'absolute',
+    pointerEvents: 'none',
+    opacity: String(opacity),
+  }
+
+  switch (pos) {
+    case 'center':
+      st.left = '50%'
+      st.top = '50%'
+      st.transform = 'translate(-50%, -50%)'
+      return st
+    case 'top_right':
+      st.right = `${marginPx}px`
+      st.top = `${marginPx}px`
+      return st
+    case 'top_left':
+      st.left = `${marginPx}px`
+      st.top = `${marginPx}px`
+      return st
+    case 'bottom_left':
+      st.left = `${marginPx}px`
+      st.bottom = `${marginPx}px`
+      return st
+    case 'custom':
+      st.left = `${Math.round(stageW * clampFloat01(Number(r.custom_x || 0)))}px`
+      st.top = `${Math.round(stageH * clampFloat01(Number(r.custom_y || 0)))}px`
+      return st
+    case 'bottom_right':
+    default:
+      st.right = `${marginPx}px`
+      st.bottom = `${marginPx}px`
+      return st
+  }
+})
+
+const videoWmPreviewBounceOverlayStyle = computed<Record<string, string>>(() => {
+  const r = ensureVideoWatermarkRule()
+  const stageW = videoWmPreviewStageW.value > 0 ? videoWmPreviewStageW.value : 360
+  const stageH = videoWmPreviewStageH.value > 0 ? videoWmPreviewStageH.value : 200
+  const marginPx = Math.round(stageW * clampFloat01(Number(r.margin || 0)))
+  const opacity = clampFloat01(Number(r.opacity || 0.35)) || 0.35
+  const overlayW = videoWmOverlayW.value || 0
+  const overlayH = videoWmOverlayH.value || 0
+  const dx = Math.max(0, stageW - overlayW - marginPx * 2)
+  const dy = Math.max(0, stageH - overlayH - marginPx * 2)
+  const period = clampInt(2, Math.round(Number(r.motion_period_sec || 12)), 120)
+
+  return {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    pointerEvents: 'none',
+    opacity: String(opacity),
+    '--wm-m': `${marginPx}px`,
+    '--wm-dx': `${dx}px`,
+    '--wm-dy': `${dy}px`,
+    animation: `wm-bounce ${period}s linear infinite`,
+  }
+})
+
+const videoWmPreviewOverlayStyle = computed<Record<string, string>>(() => {
+  if (videoWmMotion.value === 'bounce') return videoWmPreviewBounceOverlayStyle.value
+  return videoWmPreviewStaticOverlayStyle.value
+})
+
+const videoWmPreviewImageStyle = computed<Record<string, string>>(() => {
+  const r = ensureVideoWatermarkRule()
+  const stageW = videoWmPreviewStageW.value > 0 ? videoWmPreviewStageW.value : 360
+  const scale = clampFloat01(Number(r.scale_ratio || 0))
+  const widthPx = clampInt(1, Math.round(stageW * scale), stageW)
+  return {
+    width: `${widthPx}px`,
+    height: 'auto',
+    display: 'block',
+  }
+})
+
+type VideoWmPositionKey = 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left' | 'center' | 'custom'
+
+const videoWmPosition = computed<VideoWmPositionKey>({
+  get() {
+    const raw = String(ensureVideoWatermarkRule().position || '')
+      .trim()
+      .toLowerCase()
+    switch (raw) {
+      case 'bottom_left':
+        return 'bottom_left'
+      case 'top_right':
+        return 'top_right'
+      case 'top_left':
+        return 'top_left'
+      case 'center':
+        return 'center'
+      case 'custom':
+        return 'custom'
+      case 'bottom_right':
+      default:
+        return 'bottom_right'
+    }
+  },
+  set(v) {
+    ensureVideoWatermarkRule().position = v
+  },
+})
+
+const videoWmCustomX = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureVideoWatermarkRule().custom_x) * 100), 100)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().custom_x = clampInt(0, v, 100) / 100
+  },
+})
+
+const videoWmCustomY = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureVideoWatermarkRule().custom_y) * 100), 100)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().custom_y = clampInt(0, v, 100) / 100
+  },
+})
+
+const videoWmMarginPct = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureVideoWatermarkRule().margin) * 100), 10)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().margin = clampInt(0, v, 10) / 100
+  },
+})
+
+const videoWmScalePct = computed<number>({
+  get() {
+    return clampInt(1, Math.round(clampFloat01(ensureVideoWatermarkRule().scale_ratio) * 100), 50)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().scale_ratio = clampInt(1, v, 50) / 100
+  },
+})
+
+const videoWmOpacityPct = computed<number>({
+  get() {
+    return clampInt(0, Math.round(clampFloat01(ensureVideoWatermarkRule().opacity) * 100), 100)
+  },
+  set(v) {
+    ensureVideoWatermarkRule().opacity = clampInt(0, v, 100) / 100
+  },
+})
+
 const commentEnable = computed<boolean>({
   get() {
     return Boolean(ensureCommentRule().enable)
@@ -1208,6 +1910,41 @@ function syncToModel() {
     if (r.opacity === 0) r.opacity = 0.35
 
     ;(form.value as any).watermark_rule = r
+  }
+
+  // normalize video_watermark_rule (percent sliders -> float)
+  {
+    const r = ensureVideoWatermarkRule()
+    r.enable = Boolean(videoWmEnable.value)
+    r.type = videoWmType.value
+    r.text = String(r.text || '').trim()
+    r.text_style = videoWmTextStyle.value
+    r.text_color = String(videoWmTextColor.value || '').trim() || '#FFFFFF'
+    r.stroke_color = String(videoWmStrokeColor.value || '').trim() || '#000000'
+    r.shadow_color = String(videoWmShadowColor.value || '').trim() || '#000000'
+    r.font_path = String(videoWmFontPath.value || '').trim()
+    r.image_path = String(r.image_path || '').trim()
+    r.position = videoWmPosition.value
+
+    r.custom_x = clampFloat01(r.custom_x)
+    r.custom_y = clampFloat01(r.custom_y)
+
+    r.margin = clampFloat01(r.margin)
+    if (r.margin === 0) r.margin = 0.02
+    if (r.margin > 0.1) r.margin = 0.1
+
+    r.scale_ratio = clampFloat01(r.scale_ratio)
+    if (r.scale_ratio === 0) r.scale_ratio = r.type === 'image' ? 0.15 : 0.03
+    if (r.scale_ratio < 0.01) r.scale_ratio = 0.01
+    if (r.scale_ratio > 0.5) r.scale_ratio = 0.5
+
+    r.opacity = clampFloat01(r.opacity)
+    if (r.opacity === 0) r.opacity = 0.35
+
+    r.motion = videoWmMotion.value
+    r.motion_period_sec = videoWmPeriodSec.value
+
+    ;(form.value as any).video_watermark_rule = r
   }
 }
 
@@ -1865,12 +2602,12 @@ defineExpose<StrategyFormExpose>({
 	                </el-col>
 	              </el-row>
 
-	              <div v-if="watermarkEnable" class="wm-preview">
-	                <div class="wm-preview-head">
-	                  <i class="ri-eye-line" />
-	                  <span>水印预览</span>
-	                </div>
-	                <div class="wm-preview-stage" ref="wmPreviewStageRef">
+		              <div v-if="watermarkEnable" class="wm-preview">
+		                <div class="wm-preview-head">
+		                  <i class="ri-eye-line" />
+		                  <span>水印预览</span>
+		                </div>
+		                <div class="wm-preview-stage" ref="wmPreviewStageRef">
 	                  <template v-if="watermarkType === 'text'">
 	                    <div class="wm-preview-overlay" :style="watermarkPreviewOverlayStyle">
 	                      <div class="wm-preview-text" :style="watermarkPreviewTextStyle">
@@ -1890,12 +2627,342 @@ defineExpose<StrategyFormExpose>({
 	                    <div v-else class="wm-preview-empty hint compact">
 	                      {{ watermarkImagePreviewLoading ? '水印加载中…' : '无可预览图片（请先上传 PNG）' }}
 	                    </div>
+		                  </template>
+		                </div>
+			              </div>
+	            </el-collapse-item>
+
+	            <el-collapse-item name="video_wm">
+	              <template #title>
+	                <span class="label-with-icon">
+	                  <i class="ri-movie-2-line" />
+	                  <span>媒体视频水印 (FFmpeg)</span>
+	                </span>
+	              </template>
+
+	              <el-row :gutter="12">
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="启用视频水印">
+	                    <el-tooltip v-if="videoWmDisabled" content="仅“下载上传”(CloneMode=3) 支持" placement="top">
+	                      <span>
+	                        <el-switch
+	                          v-model="videoWmEnable"
+	                          inline-prompt
+	                          active-text="开"
+	                          inactive-text="关"
+	                          :before-change="beforeToggleVideoWatermark"
+	                          :disabled="true"
+	                        />
+	                      </span>
+	                    </el-tooltip>
+	                    <el-switch
+	                      v-else
+	                      v-model="videoWmEnable"
+	                      inline-prompt
+	                      active-text="开"
+	                      inactive-text="关"
+	                      :before-change="beforeToggleVideoWatermark"
+	                    />
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="16">
+	                  <div class="hint compact">
+	                    仅 CloneMode=3 生效；需要服务器可用 FFmpeg；会重新编码，速度较慢（评论区 + 主贴）。
+	                    <span v-if="systemCapsLoading">（检测中…）</span>
+	                    <span v-else-if="systemCaps && !ffmpegCapOK(systemCaps)">（{{ systemCaps.ffmpeg.reason || 'FFmpeg 不可用' }}）</span>
+	                  </div>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable" :gutter="12">
+	                <el-col :xs="24" :sm="12">
+	                  <el-form-item label="水印类型">
+	                    <el-radio-group v-model="videoWmType" class="radio-dense">
+	                      <el-radio label="text">文字水印</el-radio>
+	                      <el-radio label="image">图片水印 (PNG)</el-radio>
+	                    </el-radio-group>
+	                  </el-form-item>
+	                </el-col>
+
+	                <el-col v-if="videoWmType === 'text'" :xs="24" :sm="12">
+	                  <el-form-item label="文字内容">
+	                    <el-input v-model="videoWmText" placeholder="例如：@MyChannel" />
+	                  </el-form-item>
+	                </el-col>
+	                <el-col v-else :xs="24" :sm="12">
+	                  <el-form-item label="PNG 路径/文件名">
+	                    <div class="wm-upload">
+	                      <el-input v-model="videoWmImagePath" placeholder="例如：wm_xxx.png 或 /var/www/watermark/logo.png" />
+	                      <el-upload
+	                        :show-file-list="false"
+	                        accept="image/png"
+	                        :before-upload="beforeUploadWatermarkPNG"
+	                        :http-request="uploadVideoWmPNGRequest"
+	                        :disabled="videoWmImageUploading"
+	                      >
+	                        <el-button plain size="small" :loading="videoWmImageUploading">
+	                          <i class="ri-upload-2-line" />
+	                          上传 PNG
+	                        </el-button>
+	                      </el-upload>
+	                    </div>
+	                    <div class="hint compact">上传后仅保存文件名（data/watermarks/ 下），避免暴露本机绝对路径。</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable && videoWmType === 'text'" :gutter="12">
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="文字样式">
+	                    <el-select v-model="videoWmTextStyle" class="ctrl ctrl-sm" popper-class="tgvive-dark-popper">
+	                      <el-option value="stroke" label="描边" />
+	                      <el-option value="shadow" label="阴影" />
+	                      <el-option value="stroke_shadow" label="描边 + 阴影" />
+	                      <el-option value="plain" label="无" />
+	                    </el-select>
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="文字颜色">
+	                    <el-color-picker v-model="videoWmTextColor" color-format="hex" />
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item :label="videoWmTextStyle === 'shadow' ? '阴影颜色' : '描边颜色'">
+	                    <el-color-picker v-if="videoWmTextStyle === 'shadow'" v-model="videoWmShadowColor" color-format="hex" />
+	                    <el-color-picker v-else v-model="videoWmStrokeColor" color-format="hex" />
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable && videoWmType === 'text'" :gutter="12">
+	                <el-col :xs="24">
+	                  <el-form-item label="自定义字体（可选）">
+	                    <div class="wm-upload">
+	                      <el-input v-model="videoWmFontPath" placeholder="例如：font_xxx.ttf 或 /abs/custom.ttf" />
+	                      <el-upload
+	                        :show-file-list="false"
+	                        accept=".ttf,.otf"
+	                        :before-upload="beforeUploadWatermarkFont"
+	                        :http-request="uploadVideoWmFontRequest"
+	                        :disabled="videoWmFontUploading"
+	                      >
+	                        <el-button plain size="small" :loading="videoWmFontUploading">
+	                          <i class="ri-upload-2-line" />
+	                          上传字体
+	                        </el-button>
+	                      </el-upload>
+	                    </div>
+	                    <div class="hint compact">上传后仅保存文件名（data/watermarks/fonts/ 下），并自动用于预览与渲染。</div>
+	                    <div v-if="videoWmPreviewFontError" class="hint compact">{{ videoWmPreviewFontError }}</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable" :gutter="12">
+	                <el-col :xs="24" :sm="12">
+	                  <el-form-item label="运动方式">
+	                    <el-radio-group v-model="videoWmMotion" class="radio-dense">
+	                      <el-radio label="bounce">动态（弹跳）</el-radio>
+	                      <el-radio label="static">静止</el-radio>
+	                    </el-radio-group>
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="12">
+	                  <el-form-item label="运动周期（2-120s）">
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">2s</span>
+	                      <el-slider
+	                        v-model="videoWmPeriodSec"
+	                        :min="2"
+	                        :max="120"
+	                        :step="1"
+	                        :format-tooltip="fmtSec"
+	                        class="wm-slider"
+	                        :disabled="videoWmMotion !== 'bounce'"
+	                      />
+	                      <span class="wm-bound">120s</span>
+	                      <el-input-number
+	                        v-model="videoWmPeriodSec"
+	                        :min="2"
+	                        :max="120"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                        :disabled="videoWmMotion !== 'bounce'"
+	                      />
+	                    </div>
+	                    <div class="hint compact">值越大，水印移动越慢。</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable" :gutter="12">
+	                <el-col :xs="24" :sm="12">
+	                  <el-form-item label="位置">
+	                    <el-select v-model="videoWmPosition" class="ctrl ctrl-sm" popper-class="tgvive-dark-popper">
+	                      <el-option value="bottom_right" label="右下角" />
+	                      <el-option value="bottom_left" label="左下角" />
+	                      <el-option value="top_right" label="右上角" />
+	                      <el-option value="top_left" label="左上角" />
+	                      <el-option value="center" label="正中心" />
+	                      <el-option value="custom" label="自定义坐标" />
+	                    </el-select>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable && videoWmPosition === 'custom'" :gutter="12">
+	                <el-col :xs="24" :sm="12">
+	                  <el-form-item label="自定义 X（%）">
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">0%</span>
+	                      <el-slider
+	                        v-model="videoWmCustomX"
+	                        :min="0"
+	                        :max="100"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">100%</span>
+	                      <el-input-number v-model="videoWmCustomX" :min="0" :max="100" :step="1" controls-position="right" class="wm-num" />
+	                    </div>
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="12">
+	                  <el-form-item label="自定义 Y（%）">
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">0%</span>
+	                      <el-slider
+	                        v-model="videoWmCustomY"
+	                        :min="0"
+	                        :max="100"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">100%</span>
+	                      <el-input-number v-model="videoWmCustomY" :min="0" :max="100" :step="1" controls-position="right" class="wm-num" />
+	                    </div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <el-row v-if="videoWmEnable" :gutter="12">
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="边距（0-10%）">
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">0%</span>
+	                      <el-slider
+	                        v-model="videoWmMarginPct"
+	                        :min="0"
+	                        :max="10"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">10%</span>
+	                      <el-input-number
+	                        v-model="videoWmMarginPct"
+	                        :min="0"
+	                        :max="10"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                      />
+	                    </div>
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="缩放占比（1-50%）">
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">1%</span>
+	                      <el-slider
+	                        v-model="videoWmScalePct"
+	                        :min="1"
+	                        :max="50"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">50%</span>
+	                      <el-input-number
+	                        v-model="videoWmScalePct"
+	                        :min="1"
+	                        :max="50"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                      />
+	                    </div>
+	                    <div class="hint compact">控制水印占画面宽度的比例。</div>
+	                  </el-form-item>
+	                </el-col>
+	                <el-col :xs="24" :sm="8">
+	                  <el-form-item label="透明度（0-100%）">
+	                    <div class="wm-slider-row">
+	                      <span class="wm-bound">0%</span>
+	                      <el-slider
+	                        v-model="videoWmOpacityPct"
+	                        :min="0"
+	                        :max="100"
+	                        :step="1"
+	                        :format-tooltip="fmtPct"
+	                        class="wm-slider"
+	                      />
+	                      <span class="wm-bound">100%</span>
+	                      <el-input-number
+	                        v-model="videoWmOpacityPct"
+	                        :min="0"
+	                        :max="100"
+	                        :step="1"
+	                        controls-position="right"
+	                        class="wm-num"
+	                      />
+	                    </div>
+	                    <div class="hint compact">100% 为完全不透明。</div>
+	                  </el-form-item>
+	                </el-col>
+	              </el-row>
+
+	              <div v-if="videoWmEnable" class="wm-preview">
+	                <div class="wm-preview-head">
+	                  <i class="ri-eye-line" />
+	                  <span>视频水印预览</span>
+	                </div>
+	                <div class="wm-preview-stage" ref="videoWmPreviewStageRef">
+	                  <template v-if="videoWmType === 'text'">
+	                    <div ref="videoWmPreviewOverlayRef" class="wm-preview-overlay" :style="videoWmPreviewOverlayStyle">
+	                      <div class="wm-preview-text" :style="videoWmPreviewTextStyle">
+	                        {{ videoWmText || '@Preview' }}
+	                      </div>
+	                    </div>
+	                  </template>
+	                  <template v-else>
+	                    <div
+	                      v-if="videoWmImagePreviewSrc && videoWmImagePreviewOK"
+	                      ref="videoWmPreviewOverlayRef"
+	                      class="wm-preview-overlay"
+	                      :style="videoWmPreviewOverlayStyle"
+	                    >
+	                      <img
+	                        :src="videoWmImagePreviewSrc"
+	                        class="wm-preview-img"
+	                        :style="videoWmPreviewImageStyle"
+	                        @error="videoWmImagePreviewOK = false"
+	                      />
+	                    </div>
+	                    <div v-else class="wm-preview-empty hint compact">
+	                      {{ videoWmImagePreviewLoading ? '水印加载中…' : '无可预览图片（请先上传 PNG）' }}
+	                    </div>
 	                  </template>
 	                </div>
-		              </div>
+	              </div>
 	            </el-collapse-item>
-	          </el-collapse>
-        </el-card>
+
+		          </el-collapse>
+	        </el-card>
       </el-form>
     </div>
 
@@ -2046,6 +3113,11 @@ defineExpose<StrategyFormExpose>({
   overflow: hidden;
 }
 
+.wm-preview-overlay {
+  display: inline-block;
+  will-change: transform;
+}
+
 .wm-preview-empty {
   position: absolute;
   inset: 0;
@@ -2067,6 +3139,24 @@ defineExpose<StrategyFormExpose>({
   object-fit: contain;
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.2);
+}
+
+@keyframes wm-bounce {
+  0% {
+    transform: translate(var(--wm-m), var(--wm-m));
+  }
+  25% {
+    transform: translate(calc(var(--wm-m) + var(--wm-dx)), var(--wm-m));
+  }
+  50% {
+    transform: translate(calc(var(--wm-m) + var(--wm-dx)), calc(var(--wm-m) + var(--wm-dy)));
+  }
+  75% {
+    transform: translate(var(--wm-m), calc(var(--wm-m) + var(--wm-dy)));
+  }
+  100% {
+    transform: translate(var(--wm-m), var(--wm-m));
+  }
 }
 
 .actions {

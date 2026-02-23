@@ -47,6 +47,8 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 
 	wmRule, wmEnabled := watermarkRuleForTask(task)
 	wmCandidate := wmEnabled && isWatermarkableImageMessage(msg)
+	vidRule, vidEnabled := videoWatermarkRuleForTask(task)
+	vidWmCandidate := vidEnabled && isWatermarkableVideoMessage(msg)
 
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, downloadAPI, sourcePeer, msg, task.ID)
 	if err != nil {
@@ -58,6 +60,24 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 
 	uploadPath := localPath
 	var thumb tg.InputFileClass
+
+	if vidWmCandidate {
+		if procs.Video != nil && procs.Video.Enabled() {
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用视频水印: %s", filepath.Base(uploadPath)))
+			if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, uploadPath, vidRule); err != nil {
+				if global.Logger != nil {
+					global.Logger.Warn("video watermark failed, skipped", zap.Error(err))
+				}
+			} else if changed {
+				uploadPath = outPath
+				if c != nil {
+					defer func() { _ = c() }()
+				}
+			}
+		} else if global.Logger != nil {
+			global.Logger.Warn("video watermark skipped (video processor disabled)")
+		}
+	}
 
 	if enableMediaEdit {
 		switch media := msg.Media.(type) {
@@ -87,7 +107,7 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 					_ = f.Close()
 					defer func() { _ = os.Remove(coverPath) }()
 
-					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+					if ok, err := procs.Video.ExtractCover(ctx, uploadPath, coverPath); err != nil {
 						if global.Logger != nil {
 							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
 						}
@@ -315,9 +335,11 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 	enableMediaEdit := task.CloneMode == 3 && task.EnableMediaEdit
 	procs := m.processors()
 	wmRule, wmEnabled := watermarkRuleForTask(task)
+	vidRule, vidEnabled := videoWatermarkRuleForTask(task)
 
 	for _, msg := range mediaMsgs {
 		wmCandidate := wmEnabled && isWatermarkableImageMessage(msg)
+		vidWmCandidate := vidEnabled && isWatermarkableVideoMessage(msg)
 
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, downloadAPI, sourcePeer, msg, task.ID)
 		if err != nil {
@@ -328,6 +350,24 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 
 		uploadPath := localPath
 		var thumb tg.InputFileClass
+
+		if vidWmCandidate {
+			if procs.Video != nil && procs.Video.Enabled() {
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用视频水印: %s", filepath.Base(uploadPath)))
+				if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, uploadPath, vidRule); err != nil {
+					if global.Logger != nil {
+						global.Logger.Warn("video watermark failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						cleanups = append(cleanups, c)
+					}
+				}
+			} else if global.Logger != nil {
+				global.Logger.Warn("video watermark skipped (video processor disabled)")
+			}
+		}
 
 		if enableMediaEdit {
 			switch media := msg.Media.(type) {
@@ -357,7 +397,7 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 						_ = f.Close()
 						cleanups = append(cleanups, func() error { return os.Remove(coverPath) })
 
-						if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+						if ok, err := procs.Video.ExtractCover(ctx, uploadPath, coverPath); err != nil {
 							if global.Logger != nil {
 								global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
 							}

@@ -73,6 +73,27 @@ export type WatermarkRule = {
   opacity: number
 }
 
+export type VideoWatermarkRule = {
+  enable: boolean
+  type: 'text' | 'image' | string
+  text: string
+  text_style: 'plain' | 'stroke' | 'shadow' | 'stroke_shadow' | string
+  text_color: string
+  stroke_color: string
+  shadow_color: string
+  font_path: string
+  image_path: string
+  position: 'bottom_right' | 'bottom_left' | 'top_right' | 'top_left' | 'center' | 'custom' | string
+  custom_x: number
+  custom_y: number
+  margin: number
+  scale_ratio: number
+  opacity: number
+
+  motion: 'bounce' | 'static' | string
+  motion_period_sec: number
+}
+
 export type Strategy = {
   ID: number
 
@@ -96,6 +117,7 @@ export type Strategy = {
 
   comment_rule?: CommentRule
   watermark_rule?: WatermarkRule
+  video_watermark_rule?: VideoWatermarkRule
 
   keep_reply?: boolean
   realtime?: boolean

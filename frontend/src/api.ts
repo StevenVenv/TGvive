@@ -35,6 +35,7 @@ export type {
   TGDialogItem,
   TGBot,
   TGBotTestResult,
+  VideoWatermarkRule,
   WatermarkRule,
 } from './types/domain'
 
@@ -160,6 +161,14 @@ export function uploadWatermarkFont(file: File): Promise<WatermarkUploadResult> 
   const form = new FormData()
   form.append('file', file)
   return apiUpload<WatermarkUploadResult>('/api/v1/watermarks/fonts/upload', form)
+}
+
+export type SystemCapabilities = {
+  ffmpeg: { enabled: boolean; path: string; available: boolean; reason?: string }
+}
+
+export function getSystemCapabilities(): Promise<SystemCapabilities> {
+  return apiFetch<SystemCapabilities>('/api/v1/system/capabilities', { method: 'GET' })
 }
 
 export function getKeywordProfiles(): Promise<KeywordProfile[]> {

@@ -170,3 +170,113 @@ func resolveWatermarkRule(st *model.Strategy) (rule model.WatermarkRule, enabled
 	}
 	return model.WatermarkRule{}, false, "off"
 }
+
+func normalizeRuntimeVideoWatermarkRule(in model.VideoWatermarkRule) model.VideoWatermarkRule {
+	out := in
+	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
+	out.Position = strings.ToLower(strings.TrimSpace(out.Position))
+	out.Motion = strings.ToLower(strings.TrimSpace(out.Motion))
+	out.Text = strings.TrimSpace(out.Text)
+	out.TextStyle = strings.ToLower(strings.TrimSpace(out.TextStyle))
+	out.TextColor = normalizeHexColor(out.TextColor, "#FFFFFF")
+	out.StrokeColor = normalizeHexColor(out.StrokeColor, "#000000")
+	out.ShadowColor = normalizeHexColor(out.ShadowColor, "#000000")
+	out.FontPath = resolveUploadedWatermarkFontPath(out.FontPath)
+	out.ImagePath = resolveUploadedWatermarkImagePath(out.ImagePath)
+
+	if out.Type == "" {
+		if out.ImagePath != "" {
+			out.Type = "image"
+		} else {
+			out.Type = "text"
+		}
+	}
+	switch out.Type {
+	case "text", "image":
+	default:
+		if out.ImagePath != "" {
+			out.Type = "image"
+		} else {
+			out.Type = "text"
+		}
+	}
+
+	switch out.TextStyle {
+	case "plain", "stroke", "shadow", "stroke_shadow":
+	default:
+		out.TextStyle = "stroke"
+	}
+
+	switch out.Position {
+	case "bottom_right", "bottom_left", "top_right", "top_left", "center", "custom":
+	default:
+		out.Position = "bottom_right"
+	}
+
+	out.CustomX = clampFloat01(out.CustomX)
+	out.CustomY = clampFloat01(out.CustomY)
+
+	out.Margin = clampFloat01(out.Margin)
+	if out.Margin == 0 {
+		out.Margin = 0.02
+	}
+	if out.Margin > 0.1 {
+		out.Margin = 0.1
+	}
+
+	out.ScaleRatio = clampFloat01(out.ScaleRatio)
+	if out.ScaleRatio == 0 {
+		if out.Type == "image" {
+			out.ScaleRatio = 0.15
+		} else {
+			out.ScaleRatio = 0.03
+		}
+	}
+	if out.ScaleRatio < 0.01 {
+		out.ScaleRatio = 0.01
+	}
+	if out.ScaleRatio > 0.5 {
+		out.ScaleRatio = 0.5
+	}
+
+	out.Opacity = clampFloat01(out.Opacity)
+	if out.Opacity == 0 {
+		out.Opacity = 0.35
+	}
+
+	switch out.Motion {
+	case "", "bounce":
+		out.Motion = "bounce"
+	case "static":
+		// ok
+	default:
+		out.Motion = "bounce"
+	}
+
+	if out.MotionPeriodSec <= 0 {
+		out.MotionPeriodSec = 12
+	}
+	if out.MotionPeriodSec < 2 {
+		out.MotionPeriodSec = 2
+	}
+	if out.MotionPeriodSec > 120 {
+		out.MotionPeriodSec = 120
+	}
+
+	return out
+}
+
+func resolveVideoWatermarkRule(st *model.Strategy) (rule model.VideoWatermarkRule, enabled bool, key string) {
+	if st != nil && len(st.VideoWatermarkRule) > 0 && strings.TrimSpace(string(st.VideoWatermarkRule)) != "null" {
+		var r model.VideoWatermarkRule
+		if err := json.Unmarshal(st.VideoWatermarkRule, &r); err == nil {
+			r = normalizeRuntimeVideoWatermarkRule(r)
+			if !r.Enable {
+				return model.VideoWatermarkRule{}, false, "off"
+			}
+			b, _ := json.Marshal(r)
+			return r, true, string(b)
+		}
+	}
+	return model.VideoWatermarkRule{}, false, "off"
+}

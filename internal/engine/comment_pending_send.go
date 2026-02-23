@@ -80,6 +80,8 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 	db := cfg.LocalDB
 
 	wmRule, wmEnabled := watermarkRuleForTask(task)
+	vidRule, vidEnabled := videoWatermarkRuleForTask(task)
+	procs := m.processors()
 
 	st := ResolveRuntimeStrategy(task)
 	rule, enabled, _ := resolveCommentRule(task, st)
@@ -374,6 +376,75 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		return minPositiveInt(extractSentMsgIDs(upd)), err
 	}
 
+	sendWatermarkedVideo := func(sourceCommentMsgID int, payload localdb.LightPayload, replyToMsgID int) (int, error) {
+		if sourceCommentMsgID <= 0 {
+			return 0, errors.New("source_comment_msg_id is required")
+		}
+		if replyToMsgID <= 0 {
+			return 0, errors.New("reply_to_msg_id is required")
+		}
+		if procs.Video == nil || !procs.Video.Enabled() {
+			return 0, errors.New("video processor is disabled")
+		}
+
+		fullMsg, err := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, sourceCommentMsgID)
+		if err != nil {
+			return 0, err
+		}
+		if fullMsg == nil || !isWatermarkableVideoMessage(fullMsg) {
+			return 0, errors.New("message is not watermarkable")
+		}
+
+		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, cfg.SourceLinkedPeer, fullMsg, task.ID)
+		if err != nil {
+			return 0, err
+		}
+		if cleanup != nil {
+			defer func() { _ = cleanup() }()
+		}
+
+		uploadPath := localPath
+		if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, localPath, vidRule); err != nil {
+			return 0, err
+		} else if changed {
+			uploadPath = outPath
+			if c != nil {
+				defer func() { _ = c() }()
+			}
+		}
+
+		inputFile, err := m.UploadFile(ctx, api, uploadPath)
+		if err != nil {
+			return 0, err
+		}
+		uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, fullMsg, false)
+		if err != nil {
+			return 0, err
+		}
+		if uploaded == nil {
+			return 0, ErrUnsupportedMedia
+		}
+
+		rid, err := randomID()
+		if err != nil {
+			return 0, err
+		}
+
+		replyTo := &tg.InputReplyToMessage{ReplyToMsgID: replyToMsgID}
+		caption := payload.Text
+		if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+			caption = out
+		}
+		upd, err := api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer:     cfg.TargetLinkedPeer,
+			ReplyTo:  replyTo,
+			Media:    uploaded,
+			Message:  caption,
+			RandomID: rid,
+		})
+		return minPositiveInt(extractSentMsgIDs(upd)), err
+	}
+
 	sendOne := func(item localdb.CommentQueue, payload localdb.LightPayload) (int, error) {
 		replyToMsgID := resolveReplyToTargetMsgID(payload)
 
@@ -410,6 +481,13 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		// MTProto publisher.
 		if wmEnabled && strings.EqualFold(payload.MediaType, "image") {
 			if id, err := sendWatermarkedImage(item.MsgID, payload, replyToMsgID); err == nil {
+				return id, nil
+			} else if _, ok := tgerr.AsFloodWait(err); ok {
+				return 0, err
+			}
+		}
+		if vidEnabled && strings.EqualFold(payload.MediaType, "video") {
+			if id, err := sendWatermarkedVideo(item.MsgID, payload, replyToMsgID); err == nil {
 				return id, nil
 			} else if _, ok := tgerr.AsFloodWait(err); ok {
 				return 0, err
@@ -528,6 +606,8 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					}
 
 					if wmEnabled && strings.EqualFold(p.MediaType, "image") {
+						needWM = true
+					} else if vidEnabled && strings.EqualFold(p.MediaType, "video") {
 						needWM = true
 					} else if len(p.MediaBytes) == 0 {
 						okAlbum = false
@@ -663,6 +743,83 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 									Spoiler:    spoiler,
 									TTLSeconds: ttl,
 								}
+							} else if vidEnabled && strings.EqualFold(p.MediaType, "video") {
+								if procs.Video == nil || !procs.Video.Enabled() {
+									sendErr = errors.New("video processor is disabled")
+									break
+								}
+
+								fullMsg, err := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, it.rec.MsgID)
+								if err != nil {
+									sendErr = err
+									break
+								}
+								if fullMsg == nil || !isWatermarkableVideoMessage(fullMsg) {
+									sendErr = errors.New("message is not watermarkable")
+									break
+								}
+
+								localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, cfg.SourceLinkedPeer, fullMsg, task.ID)
+								if err != nil {
+									sendErr = err
+									break
+								}
+
+								uploadPath := localPath
+								wmCleanup := func() error(nil)
+								if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, localPath, vidRule); err != nil {
+									if cleanup != nil {
+										_ = cleanup()
+									}
+									sendErr = err
+									break
+								} else if changed {
+									uploadPath = outPath
+									wmCleanup = c
+								}
+
+								inputFile, err := m.UploadFile(ctx, api, uploadPath)
+								if err != nil {
+									if wmCleanup != nil {
+										_ = wmCleanup()
+									}
+									if cleanup != nil {
+										_ = cleanup()
+									}
+									sendErr = err
+									break
+								}
+
+								uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, fullMsg, false)
+								if err != nil {
+									if wmCleanup != nil {
+										_ = wmCleanup()
+									}
+									if cleanup != nil {
+										_ = cleanup()
+									}
+									sendErr = err
+									break
+								}
+								if uploaded == nil {
+									if wmCleanup != nil {
+										_ = wmCleanup()
+									}
+									if cleanup != nil {
+										_ = cleanup()
+									}
+									sendErr = ErrUnsupportedMedia
+									break
+								}
+
+								if wmCleanup != nil {
+									_ = wmCleanup()
+								}
+								if cleanup != nil {
+									_ = cleanup()
+								}
+
+								im = uploaded
 							} else if len(p.MediaBytes) > 0 {
 								decoded, err := tg.DecodeInputMedia(&bin.Buffer{Buf: p.MediaBytes})
 								if err != nil || decoded == nil {

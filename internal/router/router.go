@@ -31,6 +31,7 @@ func SetupRouter() *gin.Engine {
 	tgBotApi := v1.TGBotApi{}
 	dashboardApi := v1.DashboardApi{}
 	watermarkApi := v1.WatermarkApi{}
+	systemApi := v1.SystemApi{}
 	proxyApi := v1.ProxyApi{}
 	apiV1 := r.Group("/api/v1")
 	{
@@ -77,6 +78,11 @@ func SetupRouter() *gin.Engine {
 				settingsV1.GET("/proxy", proxyApi.Get)
 				settingsV1.PUT("/proxy", proxyApi.Update)
 				settingsV1.POST("/proxy/test", proxyApi.Test)
+			}
+
+			systemV1 := protected.Group("/system")
+			{
+				systemV1.GET("/capabilities", systemApi.Capabilities)
 			}
 		}
 

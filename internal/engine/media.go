@@ -376,10 +376,12 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 
 	wmRule, wmEnabled := watermarkRuleForTask(task)
 	wmCandidate := wmEnabled && isWatermarkableImageMessage(msg)
+	vidRule, vidEnabled := videoWatermarkRuleForTask(task)
+	vidWmCandidate := vidEnabled && isWatermarkableVideoMessage(msg)
 
 	// Fast path: stream download->upload without touching disk (large file friendly).
 	// Only safe when we do not need any local mutations (no watermark/processor/MD5 change).
-	if !enableMediaEdit && !task.ChangeMD5 && !wmCandidate {
+	if !enableMediaEdit && !task.ChangeMD5 && !wmCandidate && !vidWmCandidate {
 		if inputFile, _, serr := m.TransferMediaStream(ctx, api, sourcePeer, msg); serr == nil && inputFile != nil {
 			uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, false)
 			if err == nil && uploaded != nil {
@@ -434,6 +436,24 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	uploadPath := localPath
 	var thumb tg.InputFileClass
 
+	if vidWmCandidate {
+		if procs.Video != nil && procs.Video.Enabled() {
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用视频水印: %s", filepath.Base(uploadPath)))
+			if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, uploadPath, vidRule); err != nil {
+				if global.Logger != nil {
+					global.Logger.Warn("video watermark failed, skipped", zap.Error(err))
+				}
+			} else if changed {
+				uploadPath = outPath
+				if c != nil {
+					defer func() { _ = c() }()
+				}
+			}
+		} else if global.Logger != nil {
+			global.Logger.Warn("video watermark skipped (video processor disabled)")
+		}
+	}
+
 	if enableMediaEdit {
 		switch media := msg.Media.(type) {
 		case *tg.MessageMediaPhoto:
@@ -462,7 +482,7 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 					_ = f.Close()
 					defer func() { _ = os.Remove(coverPath) }()
 
-					if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+					if ok, err := procs.Video.ExtractCover(ctx, uploadPath, coverPath); err != nil {
 						if global.Logger != nil {
 							global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
 						}
@@ -688,9 +708,11 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 	enableMediaEdit := task.CloneMode == 3 && task.EnableMediaEdit
 	procs := m.processors()
 	wmRule, wmEnabled := watermarkRuleForTask(task)
+	vidRule, vidEnabled := videoWatermarkRuleForTask(task)
 
 	for _, msg := range mediaMsgs {
 		wmCandidate := wmEnabled && isWatermarkableImageMessage(msg)
+		vidWmCandidate := vidEnabled && isWatermarkableVideoMessage(msg)
 
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 		if err != nil {
@@ -708,6 +730,24 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 
 		uploadPath := localPath
 		var thumb tg.InputFileClass
+
+		if vidWmCandidate {
+			if procs.Video != nil && procs.Video.Enabled() {
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用视频水印: %s", filepath.Base(uploadPath)))
+				if outPath, c, changed, err := procs.Video.WatermarkPath(ctx, uploadPath, vidRule); err != nil {
+					if global.Logger != nil {
+						global.Logger.Warn("video watermark failed, skipped", zap.Error(err))
+					}
+				} else if changed {
+					uploadPath = outPath
+					if c != nil {
+						cleanups = append(cleanups, c)
+					}
+				}
+			} else if global.Logger != nil {
+				global.Logger.Warn("video watermark skipped (video processor disabled)")
+			}
+		}
 
 		if enableMediaEdit {
 			switch media := msg.Media.(type) {
@@ -737,7 +777,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 						_ = f.Close()
 						cleanups = append(cleanups, func() error { return os.Remove(coverPath) })
 
-						if ok, err := procs.Video.ExtractCover(ctx, localPath, coverPath); err != nil {
+						if ok, err := procs.Video.ExtractCover(ctx, uploadPath, coverPath); err != nil {
 							if global.Logger != nil {
 								global.Logger.Warn("extract video cover failed, skipped", zap.Error(err))
 							}
