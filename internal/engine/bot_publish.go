@@ -30,6 +30,17 @@ func resolveBotChatID(targetURL string) (string, error) {
 		return "", errors.New("target_url is empty")
 	}
 
+	// Private channels/supergroups (no username):
+	// - -100123...
+	// - https://t.me/c/<id>/<msg>
+	// - tg://privatepost?channel=<id>&post=<msg>
+	if ref, ok, err := parsePrivatePeerRef(s); ok {
+		if err != nil {
+			return "", err
+		}
+		return ref.BotChatID, nil
+	}
+
 	// Numeric chat id (e.g. -100xxxx).
 	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return s, nil
@@ -72,7 +83,8 @@ func resolveBotChatID(targetURL string) (string, error) {
 				}
 			}
 			if len(parts) >= 2 && parts[0] == "c" {
-				return "", errors.New("t.me/c/... is not a bot chat id")
+				// handled by parsePrivatePeerRef above
+				return "", errors.New("invalid t.me/c url")
 			}
 			return "", errors.New("unsupported t.me url path: " + path)
 		}

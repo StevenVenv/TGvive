@@ -305,11 +305,11 @@ watch(
     <div v-loading="loading" class="body">
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="form">
         <el-form-item label="源频道 (Source)" prop="source_url">
-          <el-input v-model="form.source_url" placeholder="例如：https://t.me/source 或 @source" />
+          <el-input v-model="form.source_url" placeholder="例如：https://t.me/source 或 @source 或 -100123456789 (私密频道)" />
         </el-form-item>
 
         <el-form-item label="目标频道 (Target)" prop="target_url">
-          <el-input v-model="form.target_url" placeholder="@channel_id" />
+          <el-input v-model="form.target_url" placeholder="例如：@target 或 -100123456789 (私密频道)" />
         </el-form-item>
 
         <el-divider content-position="left">账号策略</el-divider>

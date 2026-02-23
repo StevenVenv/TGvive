@@ -160,6 +160,18 @@ export type TGAccount = {
   meta_updated_at?: number
 }
 
+export type TGDialogItem = {
+  kind: 'channel' | 'supergroup' | 'group' | string
+  title: string
+  username?: string
+
+  channel_id?: number
+  chat_id?: number
+
+  bot_chat_id: string
+  task_value: string
+}
+
 export type TGBot = {
   id: string
   name: string

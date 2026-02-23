@@ -8,6 +8,7 @@ import type {
   Task,
   TaskProgress,
   TGAccount,
+  TGDialogItem,
   TGBot,
   TGBotTestResult,
 } from './types/domain'
@@ -31,6 +32,7 @@ export type {
   Task,
   TaskProgress,
   TGAccount,
+  TGDialogItem,
   TGBot,
   TGBotTestResult,
   WatermarkRule,
@@ -213,6 +215,12 @@ export function listTGAccounts(): Promise<TGAccount[]> {
 export function deleteTGAccount(key: string): Promise<{ ok: boolean }> {
   const safe = encodeURIComponent(key || '')
   return apiFetch<{ ok: boolean }>(`/api/v1/tg/accounts/${safe}`, { method: 'DELETE' })
+}
+
+export function listTGAccountDialogs(key: string, limit = 500): Promise<TGDialogItem[]> {
+  const safe = encodeURIComponent(key || '')
+  const q = new URLSearchParams({ limit: String(Math.max(1, Math.floor(Number(limit || 0) || 500))) })
+  return apiFetch<TGDialogItem[]>(`/api/v1/tg/accounts/${safe}/dialogs?${q.toString()}`, { method: 'GET' })
 }
 
 export function startAccountQR(): Promise<{ session_id: string }> {

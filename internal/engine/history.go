@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1745,6 +1746,25 @@ func resolveInputPeer(ctx context.Context, api *tg.Client, raw string) (tg.Input
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, errors.New("empty peer")
+	}
+
+	// Private channels/supergroups have no username; allow resolving by:
+	// - Bot API chat_id: -100123...
+	// - private post link: https://t.me/c/<id>/<msg>
+	// - tg://privatepost?channel=<id>&post=<msg>
+	if ref, ok, err := parsePrivatePeerRef(raw); ok {
+		if err != nil {
+			return nil, err
+		}
+		return resolveChannelPeerByID(ctx, api, ref.ChannelID)
+	}
+
+	// Bot API basic group chat id is negative (no -100 prefix). Convert to MTProto chat_id.
+	// (InputPeerChat doesn't require access_hash.)
+	if strings.HasPrefix(raw, "-") {
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id < 0 {
+			return &tg.InputPeerChat{ChatID: -id}, nil
+		}
 	}
 
 	s := message.NewSender(api)

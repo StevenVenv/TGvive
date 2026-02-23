@@ -51,6 +51,7 @@ func SetupRouter() *gin.Engine {
 				tgV1.DELETE("/accounts/:key", tgAuthApi.RemoveAccount)
 				tgV1.POST("/accounts/qr", tgAuthApi.StartAccountQR)
 				tgV1.GET("/accounts/qr/status", tgAuthApi.CheckQRStatus)
+				tgV1.GET("/accounts/:key/dialogs", tgAuthApi.ListAccountDialogs)
 				tgV1.POST("/accounts/qr/password", tgAuthApi.SubmitQRPassword)
 				tgV1.POST("/accounts/code", tgAuthApi.StartCodeLogin)
 				tgV1.GET("/accounts/code/status", tgAuthApi.CheckCodeStatus)

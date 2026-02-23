@@ -889,11 +889,11 @@ defineExpose({
       <div v-loading="editLoading" class="edit-body">
         <el-form ref="editFormRef" :model="editForm" :rules="editRules" label-position="top" class="edit-form">
           <el-form-item label="源频道 (Source)" prop="source_url">
-            <el-input v-model="editForm.source_url" placeholder="例如：https://t.me/source 或 @source" />
+            <el-input v-model="editForm.source_url" placeholder="例如：https://t.me/source 或 @source 或 -100123456789 (私密频道)" />
           </el-form-item>
 
           <el-form-item label="目标频道 (Target)" prop="target_url">
-            <el-input v-model="editForm.target_url" placeholder="@channel_id" />
+            <el-input v-model="editForm.target_url" placeholder="例如：@target 或 -100123456789 (私密频道)" />
           </el-form-item>
 
           <el-divider content-position="left">账号策略</el-divider>
