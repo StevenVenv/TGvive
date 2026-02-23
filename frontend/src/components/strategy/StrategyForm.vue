@@ -1636,7 +1636,7 @@ defineExpose<StrategyFormExpose>({
               <template #title>
                 <span class="label-with-icon">
                   <i class="ri-brush-line" />
-                  <span>媒体加工</span>
+                  <span>媒体图片加工</span>
                 </span>
               </template>
 
