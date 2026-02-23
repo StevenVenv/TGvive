@@ -177,15 +177,14 @@ func (cfg *commentPipelineConfig) FetchComments(ctx context.Context, api *tg.Cli
 		return nil, nil
 	}
 
-	res, err := api.MessagesGetDiscussionMessage(ctx, &tg.MessagesGetDiscussionMessageRequest{
-		Peer:  sourceChannelPeer,
-		MsgID: sourceChannelMsgID,
-	})
+	rootID, hasReplies, err := getDiscussionRootMetaWithRetry(ctx, api, sourceChannelPeer, sourceChannelMsgID, cfg.SourceLinkedChatID)
 	if err != nil {
 		return nil, err
 	}
-	rootID := findDiscussionRootMsgID(res, cfg.SourceLinkedChatID)
 	if rootID <= 0 {
+		return nil, nil
+	}
+	if !hasReplies {
 		return nil, nil
 	}
 

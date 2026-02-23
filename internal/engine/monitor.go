@@ -763,7 +763,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if commentEnabled && minID > 0 {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {
-							srcRoot, dstRoot, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID)
+							srcRoot, dstRoot, _, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, minID, targetID)
 							if werr != nil && global.Logger != nil {
 								global.Logger.Warn(
 									"store local mapping failed",
@@ -900,7 +900,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					if commentEnabled {
 						targetID := minPositiveInt(sentIDs)
 						if targetID > 0 {
-							srcRoot, dstRoot, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID)
+							srcRoot, dstRoot, _, werr := m.StoreMappingForTrunk(t.Ctx, api, t.Task, t.comment, t.SourcePeer, t.TargetPeer, msg.ID, targetID)
 							if werr != nil && global.Logger != nil {
 								global.Logger.Warn(
 									"store local mapping failed",

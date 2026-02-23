@@ -46,47 +46,47 @@ func (m *TaskManager) StoreMappingForTrunk(
 	targetChannelPeer tg.InputPeerClass,
 	sourceChannelMsgID int,
 	targetChannelMsgID int,
-) (sourceRootID int, targetRootID int, err error) {
+) (sourceRootID int, targetRootID int, sourceHasReplies bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	if m == nil || api == nil {
-		return 0, 0, errors.New("engine not initialized")
+		return 0, 0, false, errors.New("engine not initialized")
 	}
 	if cfg == nil || !cfg.Enabled || cfg.LocalDB == nil {
-		return 0, 0, nil
+		return 0, 0, false, nil
 	}
 	if sourceChannelPeer == nil || targetChannelPeer == nil {
-		return 0, 0, errors.New("tg peer is nil")
+		return 0, 0, false, errors.New("tg peer is nil")
 	}
 	if sourceChannelMsgID <= 0 || targetChannelMsgID <= 0 {
-		return 0, 0, nil
+		return 0, 0, false, nil
 	}
 	if cfg.SourceLinkedChatID == 0 || cfg.TargetLinkedChatID == 0 {
-		return 0, 0, nil
+		return 0, 0, false, nil
 	}
 
 	// Only channels have linked discussions.
 	_, okSrc := sourceChannelPeer.(*tg.InputPeerChannel)
 	_, okDst := targetChannelPeer.(*tg.InputPeerChannel)
 	if !okSrc || !okDst {
-		return 0, 0, nil
+		return 0, 0, false, nil
 	}
 
-	sourceRootID, err = getDiscussionRootIDWithRetry(ctx, api, sourceChannelPeer, sourceChannelMsgID, cfg.SourceLinkedChatID)
+	sourceRootID, sourceHasReplies, err = getDiscussionRootMetaWithRetry(ctx, api, sourceChannelPeer, sourceChannelMsgID, cfg.SourceLinkedChatID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("get source discussion message: %w", err)
+		return 0, 0, false, fmt.Errorf("get source discussion message: %w", err)
 	}
 	if sourceRootID <= 0 {
-		return 0, 0, nil
+		return 0, 0, sourceHasReplies, nil
 	}
 
 	targetRootID, err = getDiscussionRootIDWithRetry(ctx, api, targetChannelPeer, targetChannelMsgID, cfg.TargetLinkedChatID)
 	if err != nil {
-		return sourceRootID, 0, fmt.Errorf("get target discussion message: %w", err)
+		return sourceRootID, 0, sourceHasReplies, fmt.Errorf("get target discussion message: %w", err)
 	}
 	if targetRootID <= 0 {
-		return sourceRootID, 0, nil
+		return sourceRootID, 0, sourceHasReplies, nil
 	}
 
 	rec := localdb.RootMapping{
@@ -106,7 +106,7 @@ func (m *TaskManager) StoreMappingForTrunk(
 		if global.Logger != nil {
 			global.Logger.Warn("store root mapping failed", zap.Uint("task_id", task.ID), zap.Error(err))
 		}
-		return sourceRootID, targetRootID, err
+		return sourceRootID, targetRootID, sourceHasReplies, err
 	}
 
 	// Repair: some comment updates may reference the source channel post msg_id (not discussion root).
@@ -120,7 +120,7 @@ func (m *TaskManager) StoreMappingForTrunk(
 		}
 	}
 
-	return sourceRootID, targetRootID, nil
+	return sourceRootID, targetRootID, sourceHasReplies, nil
 }
 
 // ProduceHistoryCommentsForTrunk fetches historical replies for a trunk post and stores them into local SQLite.
@@ -145,11 +145,16 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 		return 0, 0
 	}
 
-	srcRoot, dstRoot, err := m.StoreMappingForTrunk(ctx, api, task, cfg, sourceChannelPeer, targetChannelPeer, sourceChannelMsgID, targetChannelMsgID)
+	srcRoot, dstRoot, sourceHasReplies, err := m.StoreMappingForTrunk(ctx, api, task, cfg, sourceChannelPeer, targetChannelPeer, sourceChannelMsgID, targetChannelMsgID)
 	if err != nil || srcRoot <= 0 || dstRoot <= 0 {
 		if err != nil && global.Logger != nil {
 			global.Logger.Warn("store trunk mapping failed", zap.Uint("task_id", task.ID), zap.Int("source_msg_id", sourceChannelMsgID), zap.Error(err))
 		}
+		return srcRoot, dstRoot
+	}
+
+	// No existing replies/comments: skip backfill to avoid transient MSG_ID_INVALID for newly created discussion roots.
+	if !sourceHasReplies {
 		return srcRoot, dstRoot
 	}
 
