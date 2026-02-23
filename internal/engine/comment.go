@@ -52,6 +52,9 @@ type commentPipelineConfig struct {
 	// It is nil when comment mirroring is disabled or localdb init failed.
 	LocalDB *gorm.DB
 
+	// Keyword is the task keyword profile applied to comment text (best-effort).
+	Keyword *keywordPolicy
+
 	// sendMu prevents concurrent flushes (trunk mapping flush vs realtime comment flush).
 	sendMu sync.Mutex
 }
@@ -423,15 +426,27 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 					}
 				}
 
-				// Keyword blacklist.
-				if hitBlockKeywords(msg.Message, blockKeywords) {
-					continue
+				msgToQueue := msg
+				if msg.GroupedID == 0 {
+					if t.comment != nil && t.comment.Keyword != nil {
+						out, skip := applyKeywordPolicyToMessage(msg, t.comment.Keyword)
+						if skip {
+							continue
+						}
+						msgToQueue = out
+					}
+
+					// Keyword blacklist.
+					if hitBlockKeywords(msgToQueue.Message, blockKeywords) {
+						continue
+					}
 				}
 
-				payload, err := localdb.WashMessage(msg, m.DetectContentType)
+				payload, err := localdb.WashMessage(msgToQueue, m.DetectContentType)
 				if err != nil || payload == nil {
 					continue
 				}
+				payload.ReplyToMsgID = extractCommentReplyToMsgIDInLinkedChat(msgToQueue, rootID, t.comment)
 				b, err := json.Marshal(payload)
 				if err != nil {
 					continue
@@ -465,7 +480,20 @@ func (t *commentProducerTask) run(m *TaskManager, api *tg.Client) {
 
 				flushRoot(rootID)
 			case commentEventEdit:
-				payload, err := localdb.WashMessage(msg, m.DetectContentType)
+				msgToWash := msg
+				if t.comment != nil && t.comment.Keyword != nil {
+					out, skip := applyKeywordPolicyToMessage(msg, t.comment.Keyword)
+					if skip {
+						// Prevent blocked edits from being sent later.
+						_ = t.comment.LocalDB.Model(&localdb.CommentQueue{}).
+							Where("msg_id = ? AND status = ?", msg.ID, localdb.CommentStatusPending).
+							Update("status", localdb.CommentStatusFailed).Error
+						continue
+					}
+					msgToWash = out
+				}
+
+				payload, err := localdb.WashMessage(msgToWash, m.DetectContentType)
 				if err != nil || payload == nil {
 					continue
 				}

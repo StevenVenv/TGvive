@@ -239,6 +239,8 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 								SourceLinkedPeer: srcLinked.Peer,
 								TargetLinkedPeer: dstLinked.Peer,
+
+								Keyword: kw,
 							}
 
 							// Open task localdb (SQLite) for comment mirroring v2.

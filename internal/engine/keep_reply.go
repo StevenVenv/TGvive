@@ -200,6 +200,27 @@ func storeMsgMappingsInOrder(task model.Task, srcMsgs []*tg.Message, sentIDs []i
 		return
 	}
 
+	// Albums (grouped media): map all items to the first target message ID.
+	// Telegram replies to an album may point to any item; mapping to the first item keeps UI consistent.
+	groupedID := int64(0)
+	for _, m := range srcMsgs {
+		if m == nil || m.ID <= 0 {
+			continue
+		}
+		if m.GroupedID == 0 {
+			groupedID = 0
+			break
+		}
+		if groupedID == 0 {
+			groupedID = m.GroupedID
+			continue
+		}
+		if groupedID != m.GroupedID {
+			groupedID = 0
+			break
+		}
+	}
+
 	srcIDs := make([]int, 0, len(srcMsgs))
 	for _, m := range srcMsgs {
 		if m == nil || m.ID <= 0 {
@@ -213,6 +234,20 @@ func storeMsgMappingsInOrder(task model.Task, srcMsgs []*tg.Message, sentIDs []i
 
 	sort.Ints(srcIDs)
 	sort.Ints(sentIDs)
+
+	if groupedID != 0 {
+		root := minPositiveInt(sentIDs)
+		if root <= 0 {
+			return
+		}
+		for _, srcID := range srcIDs {
+			if srcID > 0 {
+				storeMsgMapping(task, srcID, root)
+			}
+		}
+		return
+	}
+
 	if len(srcIDs) != len(sentIDs) {
 		if global.Logger != nil {
 			global.Logger.Debug(

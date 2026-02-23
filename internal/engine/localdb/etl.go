@@ -12,6 +12,10 @@ type LightPayload struct {
 	SenderType string `json:"sender_type"` // user|channel|unknown
 	SenderID   int64  `json:"sender_id"`
 
+	// ReplyToMsgID is the source msg id that this message replies to (within the same linked chat).
+	// It is best-effort and may be 0 when the reply target cannot be resolved locally.
+	ReplyToMsgID int `json:"reply_to_msg_id,omitempty"`
+
 	MediaType string `json:"media_type"` // text|image|video|audio|file|other
 	Text      string `json:"text,omitempty"`
 

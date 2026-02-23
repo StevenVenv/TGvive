@@ -215,12 +215,25 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 				continue
 			}
 		}
-		if hitBlockKeywords(msg.Message, blockLower) {
-			skipped++
-			continue
+
+		msgToQueue := msg
+		if msg.GroupedID == 0 {
+			if cfg != nil && cfg.Keyword != nil {
+				out, skip := applyKeywordPolicyToMessage(msg, cfg.Keyword)
+				if skip {
+					skipped++
+					continue
+				}
+				msgToQueue = out
+			}
+
+			if hitBlockKeywords(msgToQueue.Message, blockLower) {
+				skipped++
+				continue
+			}
 		}
 
-		payload, err := localdb.WashMessage(msg, m.DetectContentType)
+		payload, err := localdb.WashMessage(msgToQueue, m.DetectContentType)
 		if err != nil {
 			if global.Logger != nil {
 				global.Logger.Warn("wash comment failed", zap.Uint("task_id", task.ID), zap.Int("msg_id", msg.ID), zap.Error(err))
@@ -232,6 +245,7 @@ func (m *TaskManager) ProduceHistoryCommentsForTrunk(
 			skipped++
 			continue
 		}
+		payload.ReplyToMsgID = extractCommentReplyToMsgIDInLinkedChat(msgToQueue, srcRoot, cfg)
 		b, err := json.Marshal(payload)
 		if err != nil {
 			skipped++

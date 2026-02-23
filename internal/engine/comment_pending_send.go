@@ -100,22 +100,29 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		allowedSet = normalizeTypeSet(typeList)
 	}
 	blockLower := lowerKeywordList(rule.BlockKeywords)
+	kw := (*keywordPolicy)(nil)
+	if cfg != nil {
+		kw = cfg.Keyword
+	}
 
-	payloadAllowed := func(p localdb.LightPayload) bool {
+	normalizePayloadMeta := func(p *localdb.LightPayload) bool {
+		if p == nil {
+			return false
+		}
 		filterMode := strings.ToLower(strings.TrimSpace(rule.FilterMode))
-		if filterMode == "all" {
-			return true
-		}
+		allowAllIdentity := filterMode == "all"
 		if filterMode == "whitelist" {
-			filterMode = "owner_only"
-		}
-		if filterMode != "owner_only" && filterMode != "owner_or_linked" {
 			filterMode = "owner_only"
 		}
 
 		allowAnonymous := rule.AllowAnonymous
-		if filterMode == "owner_or_linked" {
-			allowAnonymous = true
+		if !allowAllIdentity {
+			if filterMode != "owner_only" && filterMode != "owner_or_linked" {
+				filterMode = "owner_only"
+			}
+			if filterMode == "owner_or_linked" {
+				allowAnonymous = true
+			}
 		}
 
 		senderType := strings.ToLower(strings.TrimSpace(p.SenderType))
@@ -129,25 +136,27 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 			}
 		}
 
-		switch senderType {
-		case "channel":
-			if senderID != 0 && (senderID == cfg.SourceChannelID || senderID == cfg.SourceLinkedChatID) {
-				// Channel itself or linked discussion group identity.
-				break
-			}
-			return false
-		case "user":
-			if allowAnonymous && senderID == groupAnonymousBotID {
-				break
-			}
-			if trustedSet != nil {
-				if _, ok := trustedSet[senderID]; ok {
+		if !allowAllIdentity {
+			switch senderType {
+			case "channel":
+				if senderID != 0 && (senderID == cfg.SourceChannelID || senderID == cfg.SourceLinkedChatID) {
+					// Channel itself or linked discussion group identity.
 					break
 				}
+				return false
+			case "user":
+				if allowAnonymous && senderID == groupAnonymousBotID {
+					break
+				}
+				if trustedSet != nil {
+					if _, ok := trustedSet[senderID]; ok {
+						break
+					}
+				}
+				return false
+			default:
+				return false
 			}
-			return false
-		default:
-			return false
 		}
 
 		if allowedSet != nil {
@@ -159,10 +168,36 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				return false
 			}
 		}
+
+		return true
+	}
+
+	applyTextPolicy := func(p *localdb.LightPayload) bool {
+		if p == nil {
+			return false
+		}
+
+		// Keyword profile (block/allow/replace).
+		if kw != nil {
+			if kw.shouldSkip(p.Text) {
+				return false
+			}
+			if out, changed := kw.replaceText(p.Text); changed {
+				p.Text = out
+			}
+		}
+
 		if hitBlockKeywords(p.Text, blockLower) {
 			return false
 		}
 		return true
+	}
+
+	normalizePayload := func(p *localdb.LightPayload) bool {
+		if !normalizePayloadMeta(p) {
+			return false
+		}
+		return applyTextPolicy(p)
 	}
 
 	pendingBefore := int64(0)
@@ -249,9 +284,53 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 		return false
 	}
 
-	sendWatermarkedImage := func(sourceCommentMsgID int, payload localdb.LightPayload) (int, error) {
+	resolveReplyToTargetMsgID := func(payload localdb.LightPayload) int {
+		srcReplyID := payload.ReplyToMsgID
+		if srcReplyID <= 0 || srcReplyID == sourceRootID {
+			return targetRootID
+		}
+
+		var parent localdb.CommentQueue
+		if err := db.
+			Select("target_msg_id", "grouped_id").
+			Where(
+				"msg_id = ? AND reply_to_root_id = ? AND status = ?",
+				srcReplyID,
+				sourceRootID,
+				localdb.CommentStatusSuccess,
+			).
+			First(&parent).Error; err != nil {
+			return targetRootID
+		}
+
+		if parent.GroupedID != 0 {
+			var first localdb.CommentQueue
+			if err := db.
+				Select("target_msg_id").
+				Where(
+					"reply_to_root_id = ? AND grouped_id = ? AND status = ? AND target_msg_id > 0",
+					sourceRootID,
+					parent.GroupedID,
+					localdb.CommentStatusSuccess,
+				).
+				Order("msg_id ASC").
+				First(&first).Error; err == nil && first.TargetMsgID > 0 {
+				return first.TargetMsgID
+			}
+		}
+
+		if parent.TargetMsgID > 0 {
+			return parent.TargetMsgID
+		}
+		return targetRootID
+	}
+
+	sendWatermarkedImage := func(sourceCommentMsgID int, payload localdb.LightPayload, replyToMsgID int) (int, error) {
 		if sourceCommentMsgID <= 0 {
 			return 0, errors.New("source_comment_msg_id is required")
+		}
+		if replyToMsgID <= 0 {
+			return 0, errors.New("reply_to_msg_id is required")
 		}
 		srcBytes, fullMsg, err := downloadMessageMediaBytes(ctx, api, cfg.SourceLinkedPeer, sourceCommentMsgID)
 		if err != nil {
@@ -276,7 +355,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 			return 0, err
 		}
 
-		replyTo := &tg.InputReplyToMessage{ReplyToMsgID: targetRootID}
+		replyTo := &tg.InputReplyToMessage{ReplyToMsgID: replyToMsgID}
 		caption := payload.Text
 		if out, truncated := sanitizeMediaCaptionText(caption); truncated {
 			caption = out
@@ -296,11 +375,13 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 	}
 
 	sendOne := func(item localdb.CommentQueue, payload localdb.LightPayload) (int, error) {
-		// Bot publisher: send comment to target linked chat using Bot API, reply to discussion root.
+		replyToMsgID := resolveReplyToTargetMsgID(payload)
+
+		// Bot publisher: send comment to target linked chat using Bot API.
 		if useBot && botPub != nil {
 			// Fast path: text-only (or caption-only when media unsupported).
 			if len(payload.MediaBytes) == 0 && (payload.MediaType == "" || strings.EqualFold(payload.MediaType, "text")) {
-				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, targetRootID)
+				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, replyToMsgID)
 			}
 
 			fullMsg, rerr := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, item.MsgID)
@@ -308,31 +389,38 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				return 0, rerr
 			}
 			if fullMsg == nil {
-				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, targetRootID)
+				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, replyToMsgID)
 			}
 			if fullMsg.Media == nil {
-				return botSendText(ctx, botPub.Bot, botChatID, fullMsg.Message, targetRootID)
+				return botSendText(ctx, botPub.Bot, botChatID, payload.Text, replyToMsgID)
 			}
 
 			pubCopy := *botPub
 			pubCopy.ChatID = botChatID
-			return m.botSendUploadedMediaFromTGMessageResult(ctx, api, cfg.SourceLinkedPeer, fullMsg, task, &pubCopy, targetRootID)
+			msgToSend := fullMsg
+			if payload.Text != fullMsg.Message {
+				cp := *fullMsg
+				cp.Message = payload.Text
+				cp.Entities = nil
+				msgToSend = &cp
+			}
+			return m.botSendUploadedMediaFromTGMessageResult(ctx, api, cfg.SourceLinkedPeer, msgToSend, task, &pubCopy, replyToMsgID)
 		}
 
 		// MTProto publisher.
 		if wmEnabled && strings.EqualFold(payload.MediaType, "image") {
-			if id, err := sendWatermarkedImage(item.MsgID, payload); err == nil {
+			if id, err := sendWatermarkedImage(item.MsgID, payload, replyToMsgID); err == nil {
 				return id, nil
 			} else if _, ok := tgerr.AsFloodWait(err); ok {
 				return 0, err
 			}
 		}
 
-		ids, sendErr := m.sendLightPayloadAsComment(ctx, api, cfg, payload, targetRootID)
+		ids, sendErr := m.sendLightPayloadAsComment(ctx, api, cfg, payload, replyToMsgID)
 		if sendErr != nil {
 			// Upload fallback: refetch original message and send with fallback.
 			if fullMsg, rerr := refreshMessageForDownload(ctx, api, cfg.SourceLinkedPeer, item.MsgID); rerr == nil && fullMsg != nil {
-				ids, sendErr = m.sendCommentWithFallback(ctx, api, cfg.SourceLinkedPeer, cfg.TargetLinkedPeer, fullMsg, targetRootID, task)
+				ids, sendErr = m.sendCommentWithFallback(ctx, api, cfg.SourceLinkedPeer, cfg.TargetLinkedPeer, fullMsg, replyToMsgID, task)
 			}
 		}
 		return minPositiveInt(ids), sendErr
@@ -434,7 +522,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 						}
 					}
 
-					if !payloadAllowed(p) {
+					if !normalizePayloadMeta(&p) {
 						filteredIDs = append(filteredIDs, it.MsgID)
 						continue
 					}
@@ -455,6 +543,41 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 					i = j
 					continue
 				}
+
+				// Apply keyword policies on the album caption only.
+				captionIdx := 0
+				for idx, it := range sendItems {
+					if strings.TrimSpace(it.payload.Text) != "" {
+						captionIdx = idx
+						break
+					}
+				}
+				if !applyTextPolicy(&sendItems[captionIdx].payload) {
+					toFail := make([]int, 0, len(sendItems))
+					for _, it := range sendItems {
+						toFail = append(toFail, it.rec.MsgID)
+					}
+					markFailed(toFail)
+					i = j
+					continue
+				}
+				captionText := sendItems[captionIdx].payload.Text
+				for idx := range sendItems {
+					if idx == 0 {
+						sendItems[0].payload.Text = captionText
+					} else {
+						sendItems[idx].payload.Text = ""
+					}
+				}
+
+				replyCarrier := sendItems[0].payload
+				for _, it := range sendItems {
+					if it.payload.ReplyToMsgID > 0 && it.payload.ReplyToMsgID != sourceRootID {
+						replyCarrier = it.payload
+						break
+					}
+				}
+				replyToMsgID := resolveReplyToTargetMsgID(replyCarrier)
 
 				attempted += len(sendItems)
 
@@ -486,14 +609,27 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 						if sendErr == nil && len(msgsToSend) == len(sendItems) {
 							pubCopy := *botPub
 							pubCopy.ChatID = botChatID
-							ids, err := m.botSendUploadedAlbumFromTGMessagesResult(ctx, api, cfg.SourceLinkedPeer, msgsToSend, task, &pubCopy, targetRootID)
+
+							// Use normalized caption (keyword replace) for albums.
+							toSend := msgsToSend
+							if len(toSend) > 0 && toSend[0] != nil && sendItems[0].payload.Text != toSend[0].Message {
+								cp := *toSend[0]
+								cp.Message = sendItems[0].payload.Text
+								cp.Entities = nil
+								copied := make([]*tg.Message, len(toSend))
+								copy(copied, toSend)
+								copied[0] = &cp
+								toSend = copied
+							}
+
+							ids, err := m.botSendUploadedAlbumFromTGMessagesResult(ctx, api, cfg.SourceLinkedPeer, toSend, task, &pubCopy, replyToMsgID)
 							if err == nil {
 								targetIDs = ids
 							}
 							sendErr = err
 						}
 					} else if needWM {
-						replyTo := &tg.InputReplyToMessage{ReplyToMsgID: targetRootID}
+						replyTo := &tg.InputReplyToMessage{ReplyToMsgID: replyToMsgID}
 						multi := make([]tg.InputSingleMedia, 0, len(sendItems))
 
 						for idx, it := range sendItems {
@@ -575,7 +711,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 						for _, it := range sendItems {
 							payloads = append(payloads, it.payload)
 						}
-						targetIDs, sendErr = m.sendLightPayloadAlbumAsComment(ctx, api, cfg, payloads, targetRootID)
+						targetIDs, sendErr = m.sendLightPayloadAlbumAsComment(ctx, api, cfg, payloads, replyToMsgID)
 					}
 
 					if sendErr == nil {
@@ -672,7 +808,7 @@ func (m *TaskManager) sendPendingCommentsForRoot(
 				}
 			}
 
-			if !payloadAllowed(payload) {
+			if !normalizePayload(&payload) {
 				markFailed([]int{item.MsgID})
 				i++
 				continue
