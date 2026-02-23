@@ -210,8 +210,11 @@ func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint6
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if m == nil || q == nil || taskID == 0 || need <= 0 {
+	if m == nil || q == nil || taskID == 0 {
 		return nil
+	}
+	if need < 0 {
+		need = 0
 	}
 
 	windowWarned := false
@@ -260,6 +263,12 @@ func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint6
 			m.markQuotaPaused(ctx, taskID, runID, q, "daily", fmt.Sprintf("今日配额已用完 (%d/%d)", q.todayCount, q.dailyLimit))
 			sleepWithContext(ctx, sleepFor)
 			continue
+		}
+
+		if need == 0 && q.pausedReason == "daily" && q.dailyLimit > 0 && q.todayCount >= q.dailyLimit {
+			// Special case: allow non-quota operations (need=0) to proceed even when daily quota is exhausted,
+			// but keep task status as paused to reflect that quota-consuming jobs are still blocked.
+			return nil
 		}
 
 		m.markQuotaRunning(ctx, taskID, runID, q)
@@ -388,6 +397,38 @@ func quotaSendableCount(m *TaskManager, msg *tg.Message, allowedTypes map[string
 			return 1
 		}
 		return 0
+	}
+	return 1
+}
+
+// quotaUnitsForSingle converts a sendable message count into quota "units":
+// - Non-sendable messages -> 0
+// - When task.KeepReply is enabled, reply messages do not consume quota -> 0
+// - Otherwise -> 1
+func quotaUnitsForSingle(task model.Task, msg *tg.Message, sendableCount int) int {
+	if sendableCount <= 0 || msg == nil {
+		return 0
+	}
+	if task.KeepReply && extractReplyToSourceMsgID(msg) > 0 {
+		return 0
+	}
+	return 1
+}
+
+// quotaUnitsForBatch converts a sendable album batch into quota "units":
+// - Empty/non-sendable batch -> 0
+// - When task.KeepReply is enabled, reply batches do not consume quota -> 0
+// - Otherwise -> 1 (album counts as one)
+func quotaUnitsForBatch(task model.Task, batch []*tg.Message, sendableCount int) int {
+	if sendableCount <= 0 {
+		return 0
+	}
+	if task.KeepReply {
+		for _, msg := range batch {
+			if extractReplyToSourceMsgID(msg) > 0 {
+				return 0
+			}
+		}
 	}
 	return 1
 }

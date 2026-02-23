@@ -10,7 +10,7 @@ server:
     allow_credentials: true
 
 mysql:
-  host: 192.168.0.108
+  host: 192.168.0.100
   port: 3306
   user: test111
   password: nL8i8kaLyjsArNZr

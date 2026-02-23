@@ -282,7 +282,7 @@ func (s *SchedulerEngine) refresh() {
 		Table("task").
 		Select("task.id as task_id, task.user_id, task.strategy_id, task.current_slot_key, task.current_slot_count, strategy.schedule_rules as schedule_rules").
 		Joins("LEFT JOIN strategy ON strategy.id = task.strategy_id AND strategy.user_id = task.user_id").
-		Where("task.status = ? AND task.strategy_id <> 0", model.TaskStatusRunning).
+		Where("task.status IN ? AND task.strategy_id <> 0", []int{model.TaskStatusRunning, model.TaskStatusPaused}).
 		Scan(&rows).Error; err != nil {
 		if global.Logger != nil {
 			global.Logger.Warn("scheduler refresh tasks failed", zap.Error(err))
@@ -737,6 +737,38 @@ func (s *SchedulerEngine) PeekPull(ctx context.Context, taskID uint) (allowed bo
 		_ = persistSlotReset(ctx, taskID, persistKey)
 	}
 	return true, remaining, time.Time{}
+}
+
+// PeekWindow reports whether the current time is within any active schedule slot (limit > 0),
+// ignoring used/reserved quota. It is used for "free" operations that should respect slot time
+// but should not consume slot quota.
+func (s *SchedulerEngine) PeekWindow(taskID uint) (allowed bool, next time.Time) {
+	if s == nil || taskID == 0 {
+		return true, time.Time{}
+	}
+
+	now := time.Now()
+
+	s.mu.Lock()
+	st := s.tasks[taskID]
+	if st == nil || len(st.rules) == 0 {
+		s.mu.Unlock()
+		return true, time.Time{}
+	}
+	rules := st.rules
+	s.mu.Unlock()
+
+	_, _, _, ok := pickActiveSlot(now, rules)
+	if ok {
+		return true, time.Time{}
+	}
+
+	t, has := nextSlotStart(now, rules)
+	if has {
+		return false, t
+	}
+	// No valid rules -> unlimited.
+	return true, time.Time{}
 }
 
 func persistSlotReset(ctx context.Context, taskID uint, slotKey string) error {

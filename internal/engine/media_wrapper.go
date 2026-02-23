@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"my-go-server/internal/global"
@@ -137,13 +138,23 @@ func (m *TaskManager) WrapUploadedMedia(ctx context.Context, api *tg.Client, inp
 }
 
 type ffprobeOut struct {
-	Streams []struct {
-		Width        int `json:"width"`
-		Height       int `json:"height"`
-		SideDataList []struct {
-			Rotation *float64 `json:"rotation,omitempty"`
-		} `json:"side_data_list"`
-	} `json:"streams"`
+	Streams []ffprobeStream `json:"streams"`
+}
+
+type ffprobeStream struct {
+	Width             int    `json:"width"`
+	Height            int    `json:"height"`
+	SampleAspectRatio string `json:"sample_aspect_ratio"`
+	Tags              ffprobeStreamTags `json:"tags"`
+	SideDataList      []ffprobeSideData `json:"side_data_list"`
+}
+
+type ffprobeStreamTags struct {
+	Rotate string `json:"rotate,omitempty"`
+}
+
+type ffprobeSideData struct {
+	Rotation *float64 `json:"rotation,omitempty"`
 }
 
 func ffprobePath() (string, error) {
@@ -184,7 +195,7 @@ func probeVideoDisplaySize(ctx context.Context, path string) (w int, h int, err 
 	args := []string{
 		"-v", "error",
 		"-select_streams", "v:0",
-		"-show_entries", "stream=width,height:stream_side_data_list",
+		"-show_entries", "stream=width,height,sample_aspect_ratio:stream_tags=rotate:stream_side_data_list",
 		"-of", "json",
 		path,
 	}
@@ -198,12 +209,32 @@ func probeVideoDisplaySize(ctx context.Context, path string) (w int, h int, err 
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		return 0, 0, err
 	}
-	if len(parsed.Streams) == 0 {
+	return computeVideoDisplaySizeFromProbe(parsed)
+}
+
+func computeVideoDisplaySizeFromProbe(p ffprobeOut) (w int, h int, err error) {
+	if len(p.Streams) == 0 {
 		return 0, 0, errors.New("no video stream found")
 	}
-	s := parsed.Streams[0]
+	s := p.Streams[0]
 	if s.Width <= 0 || s.Height <= 0 {
 		return 0, 0, errors.New("invalid video dimensions")
+	}
+
+	displayW := s.Width
+	displayH := s.Height
+
+	if num, den, ok := parseFFprobeRatio(s.SampleAspectRatio); ok && num > 0 && den > 0 && (num != den) {
+		// Display width = coded width * SAR.
+		n := int64(s.Width) * num
+		d := den
+		if d <= 0 {
+			d = 1
+		}
+		rounded := (n + d/2) / d
+		if rounded > 0 && rounded <= int64(^uint(0)>>1) {
+			displayW = int(rounded)
+		}
 	}
 
 	rotation := 0
@@ -214,15 +245,38 @@ func probeVideoDisplaySize(ctx context.Context, path string) (w int, h int, err 
 		rotation = int(*sd.Rotation)
 		break
 	}
+	if rotation == 0 {
+		if v, err := strconv.Atoi(strings.TrimSpace(s.Tags.Rotate)); err == nil {
+			rotation = v
+		}
+	}
 
 	rot := rotation % 360
 	if rot < 0 {
 		rot += 360
 	}
 	if rot == 90 || rot == 270 {
-		return s.Height, s.Width, nil
+		return displayH, displayW, nil
 	}
-	return s.Width, s.Height, nil
+	return displayW, displayH, nil
+}
+
+func parseFFprobeRatio(raw string) (num int64, den int64, ok bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, 0, false
+	}
+	s = strings.ReplaceAll(s, "/", ":")
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	a, errA := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	b, errB := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+	if errA != nil || errB != nil || a <= 0 || b <= 0 {
+		return 0, 0, false
+	}
+	return a, b, true
 }
 
 func applyVideoSizeToAttrs(attrs []tg.DocumentAttributeClass, w, h int) {

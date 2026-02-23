@@ -365,6 +365,19 @@ func (m *TaskManager) isActiveRun(taskID uint, runID uint64) bool {
 	return ok
 }
 
+func (m *TaskManager) isPausedRun(taskID uint, runID uint64) bool {
+	if m == nil || taskID == 0 {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	st := m.states[taskID]
+	if st == nil || st.RunID != runID {
+		return false
+	}
+	return st.Status == model.TaskStatusPaused
+}
+
 // record updates counters and appends a log line.
 // totalDelta is used by realtime mode when new messages arrive.
 func (m *TaskManager) record(taskID uint, runID uint64, totalDelta int, processedDelta int, successDelta int, failDelta int, logLine string) {

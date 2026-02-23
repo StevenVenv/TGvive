@@ -393,9 +393,9 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			limit = defaultHistoryPageSize
 		}
 
-		// Gate by quota to avoid flood / daily limit violations (追更 is still "history clone").
+		// Gate by run_window to avoid sending outside allowed hours (追更 is still "history clone").
 		maybeRefreshHot()
-		if err := m.waitForQuota(ctx, task.ID, runID, quota, 1); err != nil {
+		if err := m.waitForQuota(ctx, task.ID, runID, quota, 0); err != nil {
 			return err
 		}
 
@@ -536,7 +536,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 					}
 
 					if plan.Need > 0 {
-						if err := m.waitForQuota(ctx, task.ID, runID, quota, plan.Need); err != nil {
+						quotaUnits := quotaUnitsForBatch(runtimeTask, group, plan.Need)
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, quotaUnits); err != nil {
 							return err
 						}
 						if err := processWithRetry(ctx, func() error {
@@ -583,8 +584,10 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 							return err
 						}
 						global.AddSuccess(uint64(plan.Need))
-						if err := m.quotaAdd(ctx, task.ID, quota, plan.Need); err != nil {
-							return err
+						if quotaUnits > 0 {
+							if err := m.quotaAdd(ctx, task.ID, quota, quotaUnits); err != nil {
+								return err
+							}
 						}
 
 						if commentEnabled && minInGroup > 0 {
@@ -664,10 +667,11 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
+			quotaUnits := quotaUnitsForSingle(runtimeTask, msgToSend, need)
 			commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 			sentIDs := []int(nil)
 			if need > 0 {
-				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, quotaUnits); err != nil {
 					return err
 				}
 			}
@@ -714,8 +718,8 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if need > 0 {
 				global.AddSuccess(uint64(need))
 			}
-			if need > 0 {
-				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+			if quotaUnits > 0 {
+				if err := m.quotaAdd(ctx, task.ID, quota, quotaUnits); err != nil {
 					return err
 				}
 			}
@@ -821,7 +825,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 		}
 
 		maybeRefreshHot()
-		if err := m.waitForQuota(ctx, task.ID, runID, quota, 1); err != nil {
+		// Gate by run_window to avoid sending outside allowed hours.
+		if err := m.waitForQuota(ctx, task.ID, runID, quota, 0); err != nil {
 			return err
 		}
 
@@ -979,7 +984,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						}
 					}
 					if plan.Need > 0 {
-						if err := m.waitForQuota(ctx, task.ID, runID, quota, plan.Need); err != nil {
+						quotaUnits := quotaUnitsForBatch(runtimeTask, group, plan.Need)
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, quotaUnits); err != nil {
 							return err
 						}
 						if err := processWithRetry(ctx, func() error {
@@ -1026,8 +1032,10 @@ func (m *TaskManager) cloneHistoryOldToNew(
 							return err
 						}
 						global.AddSuccess(uint64(plan.Need))
-						if err := m.quotaAdd(ctx, task.ID, quota, plan.Need); err != nil {
-							return err
+						if quotaUnits > 0 {
+							if err := m.quotaAdd(ctx, task.ID, quota, quotaUnits); err != nil {
+								return err
+							}
 						}
 
 						if commentEnabled && minInGroup > 0 {
@@ -1108,10 +1116,11 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
+			quotaUnits := quotaUnitsForSingle(runtimeTask, msgToSend, need)
 			commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 			sentIDs := []int(nil)
 			if need > 0 {
-				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, quotaUnits); err != nil {
 					return err
 				}
 			}
@@ -1158,8 +1167,8 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if need > 0 {
 				global.AddSuccess(uint64(need))
 			}
-			if need > 0 {
-				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+			if quotaUnits > 0 {
+				if err := m.quotaAdd(ctx, task.ID, quota, quotaUnits); err != nil {
 					return err
 				}
 			}
@@ -1260,7 +1269,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 		}
 
 		maybeRefreshHot()
-		if err := m.waitForQuota(ctx, task.ID, runID, quota, 1); err != nil {
+		// Gate by run_window to avoid sending outside allowed hours.
+		if err := m.waitForQuota(ctx, task.ID, runID, quota, 0); err != nil {
 			return err
 		}
 
@@ -1413,7 +1423,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						}
 					}
 					if plan.Need > 0 {
-						if err := m.waitForQuota(ctx, task.ID, runID, quota, plan.Need); err != nil {
+						quotaUnits := quotaUnitsForBatch(runtimeTask, group, plan.Need)
+						if err := m.waitForQuota(ctx, task.ID, runID, quota, quotaUnits); err != nil {
 							return err
 						}
 						if err := processWithRetry(ctx, func() error {
@@ -1460,8 +1471,10 @@ func (m *TaskManager) cloneHistoryNewToOld(
 							return err
 						}
 						global.AddSuccess(uint64(plan.Need))
-						if err := m.quotaAdd(ctx, task.ID, quota, plan.Need); err != nil {
-							return err
+						if quotaUnits > 0 {
+							if err := m.quotaAdd(ctx, task.ID, quota, quotaUnits); err != nil {
+								return err
+							}
 						}
 
 						if commentEnabled {
@@ -1540,10 +1553,11 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			}
 
 			need := quotaSendableCount(m, msgToSend, curAllowedTypes)
+			quotaUnits := quotaUnitsForSingle(runtimeTask, msgToSend, need)
 			commentEnabled := commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil
 			sentIDs := []int(nil)
 			if need > 0 {
-				if err := m.waitForQuota(ctx, task.ID, runID, quota, need); err != nil {
+				if err := m.waitForQuota(ctx, task.ID, runID, quota, quotaUnits); err != nil {
 					return err
 				}
 			}
@@ -1590,8 +1604,8 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if need > 0 {
 				global.AddSuccess(uint64(need))
 			}
-			if need > 0 {
-				if err := m.quotaAdd(ctx, task.ID, quota, need); err != nil {
+			if quotaUnits > 0 {
+				if err := m.quotaAdd(ctx, task.ID, quota, quotaUnits); err != nil {
 					return err
 				}
 			}

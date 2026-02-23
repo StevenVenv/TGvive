@@ -128,13 +128,14 @@ type runtimeTask struct {
 
 	comment *commentPipelineConfig
 
+	quota *taskQuota
+
 	queue    chan realtimeJob
 	done     chan struct{}
 	stopOnce sync.Once
 
 	mu                sync.Mutex
 	albumWait         map[int64]chan []*tg.Message
-	albumPullReserved map[int64]int
 }
 
 func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
@@ -155,11 +156,11 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		delayMax:          defaultMsgDelayMax,
 		keyword:           cfg.Keyword,
 		comment:           cfg.Comment,
+		quota:             newTaskQuota(cfg.Task),
 
 		queue:             make(chan realtimeJob, 512),
 		done:              make(chan struct{}),
 		albumWait:         make(map[int64]chan []*tg.Message),
-		albumPullReserved: make(map[int64]int),
 	}
 
 	t.delayMin, t.delayMax = normalizeDelayRange(cfg.Task.DelayMinMs, cfg.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
@@ -282,76 +283,6 @@ func (t *runtimeTask) deliverAlbum(groupedID int64, batch []*tg.Message) {
 	close(ch)
 }
 
-func (t *runtimeTask) addAlbumPullReserved(groupedID int64, delta int) {
-	if t == nil || groupedID == 0 || delta <= 0 {
-		return
-	}
-	t.mu.Lock()
-	if t.albumPullReserved == nil {
-		t.albumPullReserved = make(map[int64]int)
-	}
-	t.albumPullReserved[groupedID] += delta
-	if t.albumPullReserved[groupedID] < 0 {
-		t.albumPullReserved[groupedID] = 0
-	}
-	t.mu.Unlock()
-}
-
-func (t *runtimeTask) takeAlbumPullReserved(groupedID int64) int {
-	if t == nil || groupedID == 0 {
-		return 0
-	}
-	t.mu.Lock()
-	n := t.albumPullReserved[groupedID]
-	delete(t.albumPullReserved, groupedID)
-	t.mu.Unlock()
-	if n < 0 {
-		n = 0
-	}
-	return n
-}
-
-func (t *runtimeTask) releasePullReservationForJob(job realtimeJob) {
-	if t == nil || t.Task.ID == 0 {
-		return
-	}
-	switch job.kind {
-	case realtimeJobSingle:
-		if job.fromPull {
-			Scheduler.ReleasePull(t.Task.ID, 1)
-		}
-	case realtimeJobAlbum:
-		if job.groupedID == 0 {
-			return
-		}
-		if n := t.takeAlbumPullReserved(job.groupedID); n > 0 {
-			Scheduler.ReleasePull(t.Task.ID, n)
-		}
-	}
-}
-
-func (t *runtimeTask) releaseAllAlbumPullReserved() {
-	if t == nil || t.Task.ID == 0 {
-		return
-	}
-
-	sum := 0
-	t.mu.Lock()
-	for gid, n := range t.albumPullReserved {
-		if n <= 0 {
-			delete(t.albumPullReserved, gid)
-			continue
-		}
-		sum += n
-		delete(t.albumPullReserved, gid)
-	}
-	t.mu.Unlock()
-
-	if sum > 0 {
-		Scheduler.ReleasePull(t.Task.ID, sum)
-	}
-}
-
 func (t *runtimeTask) drainQueueOnStop() {
 	if t == nil {
 		return
@@ -359,17 +290,14 @@ func (t *runtimeTask) drainQueueOnStop() {
 
 	for {
 		select {
-		case job, ok := <-t.queue:
+		case _, ok := <-t.queue:
 			if !ok {
-				t.releaseAllAlbumPullReserved()
 				return
 			}
 			if global.Stats != nil {
 				global.Stats.AddPending(-1)
 			}
-			t.releasePullReservationForJob(job)
 		default:
-			t.releaseAllAlbumPullReserved()
 			return
 		}
 	}
@@ -475,6 +403,9 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 	if !m.isActiveRun(t.Task.ID, t.RunID) {
 		return
 	}
+	if m.isPausedRun(t.Task.ID, t.RunID) {
+		return
+	}
 
 	allowed, remaining, _ := Scheduler.PeekPull(t.Ctx, t.Task.ID)
 	if !allowed {
@@ -499,20 +430,21 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 		return
 	}
 
-	maxCatchUpMessages := 500
+	maxCatchUpUnits := 500
 	if remaining >= 0 {
 		if remaining <= 0 {
 			return
 		}
-		if remaining < maxCatchUpMessages {
-			maxCatchUpMessages = remaining
+		if remaining < maxCatchUpUnits {
+			maxCatchUpUnits = remaining
 		}
 	}
 
 	afterID := localLast
-	enqueued := 0
+	unitsEnqueued := 0
+	seenAlbums := make(map[int64]struct{}, 64)
 
-	for iter := 0; iter < 20 && afterID < remoteLatest && enqueued < maxCatchUpMessages; iter++ {
+	for iter := 0; iter < 20 && afterID < remoteLatest && unitsEnqueued < maxCatchUpUnits; iter++ {
 		limit := defaultHistoryPageSize
 		if limit <= 0 {
 			limit = 50
@@ -562,26 +494,36 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 				continue
 			}
 
-			if remaining >= 0 {
-				reserved, _, _ := Scheduler.ReservePull(t.Ctx, t.Task.ID, 1)
-				if reserved <= 0 {
-					return
+			isAlbum := msg.GroupedID != 0 && msg.Media != nil && m.grouper != nil
+			isReplyFree := t.Task.KeepReply && extractReplyToSourceMsgID(msg) > 0
+
+			unitCost := 1
+			if isAlbum {
+				if _, ok := seenAlbums[msg.GroupedID]; ok {
+					unitCost = 0
+				} else {
+					seenAlbums[msg.GroupedID] = struct{}{}
+					if isReplyFree {
+						unitCost = 0
+					}
 				}
+			} else if isReplyFree {
+				unitCost = 0
 			}
+
+			if remaining >= 0 && unitsEnqueued+unitCost > maxCatchUpUnits {
+				break
+			}
+
 			dispatched := m.dispatchMessageToRuntimeTask(t, msg, true)
-			if !dispatched && remaining >= 0 {
-				Scheduler.ReleasePull(t.Task.ID, 1)
+			if !dispatched {
 				continue
 			}
-			enqueued++
+			unitsEnqueued += unitCost
 			advanced = true
 
 			if msg.ID > pageMax {
 				pageMax = msg.ID
-			}
-
-			if enqueued >= maxCatchUpMessages {
-				break
 			}
 		}
 
@@ -600,6 +542,79 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 		return
 	}
 
+	taskID := t.Task.ID
+	runID := t.RunID
+	if taskID == 0 {
+		return
+	}
+	if t.quota == nil {
+		t.quota = newTaskQuota(t.Task)
+	}
+
+	waitQuota := func(need int) error {
+		for {
+			if err := t.Ctx.Err(); err != nil {
+				return err
+			}
+			if err := m.waitForQuota(t.Ctx, taskID, runID, t.quota, need); err == nil {
+				return nil
+			} else {
+				if global.Logger != nil {
+					global.Logger.Warn("quota gate failed, retrying", zap.Uint("task_id", taskID), zap.Error(err))
+				}
+				sleepWithContext(t.Ctx, 10*time.Second)
+			}
+		}
+	}
+
+	waitScheduleWindow := func() error {
+		for {
+			if err := t.Ctx.Err(); err != nil {
+				return err
+			}
+			allowed, next := Scheduler.PeekWindow(taskID)
+			if allowed {
+				return nil
+			}
+			sleepFor := quotaPollInterval
+			if !next.IsZero() {
+				sleepFor = next.Sub(time.Now())
+			}
+			if sleepFor < 0 {
+				sleepFor = quotaPollInterval
+			}
+			sleepFor = minDuration(sleepFor, quotaPollInterval)
+			sleepWithContext(t.Ctx, sleepFor)
+		}
+	}
+
+	reserveSchedule := func(need int) (int, error) {
+		if need <= 0 {
+			return 0, nil
+		}
+		for {
+			if err := t.Ctx.Err(); err != nil {
+				return 0, err
+			}
+			reserved, next, err := Scheduler.ReservePull(t.Ctx, taskID, need)
+			if err != nil {
+				return 0, err
+			}
+			if reserved > 0 {
+				return reserved, nil
+			}
+			sleepFor := quotaPollInterval
+			if !next.IsZero() {
+				sleepFor = next.Sub(time.Now())
+			}
+			if sleepFor < 0 {
+				sleepFor = quotaPollInterval
+			}
+			sleepFor = minDuration(sleepFor, quotaPollInterval)
+			sleepWithContext(t.Ctx, sleepFor)
+		}
+	}
+
 	for {
 		select {
 		case <-t.done:
@@ -610,7 +625,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 			return
 		case job, ok := <-t.queue:
 			if !ok {
-				t.releaseAllAlbumPullReserved()
 				return
 			}
 			if global.Stats != nil {
@@ -618,13 +632,11 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 			}
 
 			if err := t.Ctx.Err(); err != nil {
-				t.releasePullReservationForJob(job)
 				t.drainQueueOnStop()
 				return
 			}
 			select {
 			case <-t.done:
-				t.releasePullReservationForJob(job)
 				t.drainQueueOnStop()
 				return
 			default:
@@ -635,21 +647,16 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				var batch []*tg.Message
 				select {
 				case <-t.done:
-					t.releasePullReservationForJob(job)
 					t.drainQueueOnStop()
 					return
 				case <-t.Ctx.Done():
-					t.releasePullReservationForJob(job)
 					t.drainQueueOnStop()
 					return
 				case batch = <-job.albumCh:
 				}
 				if len(batch) == 0 {
-					t.releasePullReservationForJob(job)
 					continue
 				}
-
-				pullReserved := t.takeAlbumPullReserved(job.groupedID)
 
 				hotTask := t.refreshStrategySnapshot()
 				plan := PlanMediaGroup(m, batch, t.allowedTypes, t.allowFileSuffixes, t.blockFileSuffixes)
@@ -684,9 +691,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							global.AddFiltered(uint64(plan.Need))
 							rootDelta, replyDelta := classifyRootReplyBatch(batch)
 							recordTaskCounters(m, t.Task.ID, t.RunID, plan.Need+plan.Skipped, 0, 0, rootDelta, replyDelta)
-							if pullReserved > 0 {
-								Scheduler.ReleasePull(t.Task.ID, pullReserved)
-							}
 							if maxID > 0 {
 								t.advanceCursor(maxID)
 							}
@@ -706,7 +710,32 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				var err error
+				quotaUnits := 0
+				reservedSchedule := 0
 				if plan.Need > 0 {
+					quotaUnits = quotaUnitsForBatch(hotTask, batch, plan.Need)
+					if t.quota != nil {
+						t.quota.UpdateConfig(hotTask.DailyLimit, hotTask.RunWindow)
+					}
+					if qerr := waitQuota(quotaUnits); qerr != nil {
+						t.drainQueueOnStop()
+						return
+					}
+
+					if quotaUnits > 0 {
+						r, rerr := reserveSchedule(quotaUnits)
+						if rerr != nil {
+							t.drainQueueOnStop()
+							return
+						}
+						reservedSchedule = r
+					} else {
+						if werr := waitScheduleWindow(); werr != nil {
+							t.drainQueueOnStop()
+							return
+						}
+					}
+
 					err = processWithRetry(t.Ctx, func() error {
 						if plan.Text != nil {
 							if commentEnabled {
@@ -729,6 +758,20 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 						}
 						return m.processAlbumBatch(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, plan.Media, nil)
 					})
+
+					if reservedSchedule > 0 {
+						if err == nil {
+							Scheduler.CommitPull(t.Ctx, taskID, quotaUnits)
+						} else {
+							Scheduler.ReleasePull(taskID, reservedSchedule)
+						}
+					}
+
+					if err == nil && quotaUnits > 0 {
+						if qerr := m.quotaAdd(t.Ctx, taskID, t.quota, quotaUnits); qerr != nil && global.Logger != nil {
+							global.Logger.Warn("persist quota increment failed", zap.Uint("task_id", taskID), zap.Error(qerr))
+						}
+					}
 				}
 				if err != nil {
 					if plan.Need > 0 {
@@ -749,9 +792,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							zap.Int64("grouped_id", job.groupedID),
 							zap.Error(err),
 						)
-					}
-					if pullReserved > 0 {
-						Scheduler.ReleasePull(t.Task.ID, pullReserved)
 					}
 				} else {
 					if plan.Need > 0 {
@@ -777,23 +817,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 							}
 						}
 					}
-
-					if pullReserved > 0 {
-						if plan.Need > 0 {
-							commit := plan.Need
-							if commit > pullReserved {
-								commit = pullReserved
-							}
-							if commit > 0 {
-								Scheduler.CommitPull(t.Ctx, t.Task.ID, commit)
-							}
-							if extra := pullReserved - commit; extra > 0 {
-								Scheduler.ReleasePull(t.Task.ID, extra)
-							}
-						} else {
-							Scheduler.ReleasePull(t.Task.ID, pullReserved)
-						}
-					}
 				}
 				if maxID > 0 {
 					t.advanceCursor(maxID)
@@ -803,13 +826,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 			case realtimeJobSingle:
 				msg := job.msg
 				if msg == nil || msg.ID <= 0 {
-					t.releasePullReservationForJob(job)
 					continue
-				}
-
-				reservedTotal := 0
-				if job.fromPull {
-					reservedTotal = 1
 				}
 
 				hotTask := t.refreshStrategySnapshot()
@@ -820,9 +837,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 						global.IncFiltered()
 						rootDelta, replyDelta := classifyRootReply(msg)
 						recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0, rootDelta, replyDelta)
-						if job.fromPull && reservedTotal > 0 {
-							Scheduler.ReleasePull(t.Task.ID, reservedTotal)
-						}
 						t.advanceCursor(msg.ID)
 						continue
 					}
@@ -831,9 +845,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					global.IncFiltered()
 					rootDelta, replyDelta := classifyRootReply(msg)
 					recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0, rootDelta, replyDelta)
-					if job.fromPull && reservedTotal > 0 {
-						Scheduler.ReleasePull(t.Task.ID, reservedTotal)
-					}
 					t.advanceCursor(msg.ID)
 					continue
 				}
@@ -846,9 +857,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 						}
 						rootDelta, replyDelta := classifyRootReply(msg)
 						recordTaskCounters(m, t.Task.ID, t.RunID, 1, 0, 0, rootDelta, replyDelta)
-						if job.fromPull && reservedTotal > 0 {
-							Scheduler.ReleasePull(t.Task.ID, reservedTotal)
-						}
 						t.advanceCursor(msg.ID)
 						continue
 					} else if out != nil {
@@ -857,8 +865,34 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 				}
 
 				need := quotaSendableCount(m, msgToSend, nil)
+				quotaUnits := quotaUnitsForSingle(hotTask, msgToSend, need)
 				commentEnabled := t.comment != nil && t.comment.Enabled && t.comment.LocalDB != nil
 				sentIDs := []int(nil)
+
+				reservedSchedule := 0
+				if need > 0 {
+					if t.quota != nil {
+						t.quota.UpdateConfig(hotTask.DailyLimit, hotTask.RunWindow)
+					}
+					if qerr := waitQuota(quotaUnits); qerr != nil {
+						t.drainQueueOnStop()
+						return
+					}
+
+					if quotaUnits > 0 {
+						r, rerr := reserveSchedule(quotaUnits)
+						if rerr != nil {
+							t.drainQueueOnStop()
+							return
+						}
+						reservedSchedule = r
+					} else {
+						if werr := waitScheduleWindow(); werr != nil {
+							t.drainQueueOnStop()
+							return
+						}
+					}
+				}
 
 				err := processWithRetry(t.Ctx, func() error {
 					if commentEnabled {
@@ -871,6 +905,20 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 					}
 					return m.processSingleMessage(t.Ctx, api, t.SourcePeer, t.TargetPeer, hotTask, msgToSend)
 				})
+
+				if reservedSchedule > 0 {
+					if err == nil {
+						Scheduler.CommitPull(t.Ctx, taskID, quotaUnits)
+					} else {
+						Scheduler.ReleasePull(taskID, reservedSchedule)
+					}
+				}
+				if err == nil && quotaUnits > 0 {
+					if qerr := m.quotaAdd(t.Ctx, taskID, t.quota, quotaUnits); qerr != nil && global.Logger != nil {
+						global.Logger.Warn("persist quota increment failed", zap.Uint("task_id", taskID), zap.Error(qerr))
+					}
+				}
+
 				if err != nil {
 					if need > 0 {
 						global.AddFail(uint64(need))
@@ -913,17 +961,6 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 								m.sendPendingCommentsForRoot(t.Ctx, api, t.Task, t.comment, srcRoot, dstRoot)
 							}
 						}
-					}
-				}
-
-				if job.fromPull && reservedTotal > 0 {
-					if err == nil && need > 0 {
-						Scheduler.CommitPull(t.Ctx, t.Task.ID, need)
-						if extra := reservedTotal - need; extra > 0 {
-							Scheduler.ReleasePull(t.Task.ID, extra)
-						}
-					} else {
-						Scheduler.ReleasePull(t.Task.ID, reservedTotal)
 					}
 				}
 
@@ -1535,9 +1572,6 @@ func (m *TaskManager) dispatchMessageToRuntimeTask(rt *runtimeTask, msg *tg.Mess
 				m.dedup.Forget(rt.Task.ID, msg.ID)
 			}
 			return false
-		}
-		if fromPull {
-			rt.addAlbumPullReserved(groupedID, 1)
 		}
 		m.grouper.Add(rt.Task.ID, groupedID, msg, func(batch []*tg.Message) {
 			rt.deliverAlbum(groupedID, batch)
