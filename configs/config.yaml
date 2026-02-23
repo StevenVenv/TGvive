@@ -22,3 +22,8 @@ jwt:
 
 telegram:
   session_path: ./sessions/
+
+processor:
+  video:
+    enabled: true
+    ffmpeg_path: ffmpeg
