@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -63,7 +64,7 @@ func (c *StrategyCache) Get(id int64) *model.Strategy {
 	}
 
 	var s model.Strategy
-	if err := global.DB.First(&s, id).Error; err != nil {
+	if err := global.DB.WithContext(context.Background()).First(&s, id).Error; err != nil {
 		return nil
 	}
 	c.Set(&s)

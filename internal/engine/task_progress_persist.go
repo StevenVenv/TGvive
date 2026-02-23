@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 
 	"my-go-server/internal/global"
@@ -43,7 +44,7 @@ func persistTaskProgressSnapshot(taskID uint, snap taskProgressSnapshot) error {
 		snap.ReplyCnt = 0
 	}
 
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	return global.DB.WithContext(context.Background()).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"progress_total_msg":     snap.TotalMsg,
 			"progress_processed_cnt": snap.ProcessedCnt,

@@ -577,7 +577,7 @@ func (a *StrategyApi) CreateStrategy(c *gin.Context) {
 		return
 	}
 
-	if err := service.CreateStrategy(&s); err != nil {
+	if err := service.CreateStrategy(c.Request.Context(), &s); err != nil {
 		app.FailWithMsg("策略保存失败: "+err.Error(), c)
 		return
 	}
@@ -595,7 +595,7 @@ func (a *StrategyApi) GetStrategyList(c *gin.Context) {
 		return
 	}
 
-	list, err := service.GetStrategyList(userID)
+	list, err := service.GetStrategyList(c.Request.Context(), userID)
 	if err != nil {
 		app.FailWithMsg("获取策略列表失败: "+err.Error(), c)
 		return
@@ -624,7 +624,7 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 		return
 	}
 
-	existing, err := service.GetStrategyByID(userID, uint(idU64))
+	existing, err := service.GetStrategyByID(c.Request.Context(), userID, uint(idU64))
 	if err != nil {
 		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
 		return
@@ -681,7 +681,7 @@ func (a *StrategyApi) UpdateStrategy(c *gin.Context) {
 		return
 	}
 
-	updated, err := service.UpdateStrategy(userID, uint(idU64), &payload)
+	updated, err := service.UpdateStrategy(c.Request.Context(), userID, uint(idU64), &payload)
 	if err != nil {
 		app.FailWithMsg("策略更新失败: "+err.Error(), c)
 		return
@@ -707,7 +707,7 @@ func (a *StrategyApi) DeleteStrategy(c *gin.Context) {
 		return
 	}
 
-	if err := service.DeleteStrategy(userID, uint(idU64)); err != nil {
+	if err := service.DeleteStrategy(c.Request.Context(), userID, uint(idU64)); err != nil {
 		app.FailWithMsg("策略删除失败: "+err.Error(), c)
 		return
 	}

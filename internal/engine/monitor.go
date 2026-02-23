@@ -416,15 +416,15 @@ func (t *runtimeTask) advanceCursor(cursor int) {
 
 	if order != model.HistoryOrderNewToOld {
 		if needCursorPersist {
-			_ = persistHistoryCursorAndMax(taskID, newCursor)
+			_ = persistHistoryCursorAndMax(t.Ctx, taskID, newCursor)
 		} else if needMaxPersist {
-			_ = persistHistoryMaxID(taskID, cursor)
+			_ = persistHistoryMaxID(t.Ctx, taskID, cursor)
 		}
 		return
 	}
 
 	if needMaxPersist {
-		_ = persistHistoryMaxID(taskID, cursor)
+		_ = persistHistoryMaxID(t.Ctx, taskID, cursor)
 	}
 }
 
@@ -476,7 +476,7 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 		return
 	}
 
-	allowed, remaining, _ := Scheduler.PeekPull(t.Task.ID)
+	allowed, remaining, _ := Scheduler.PeekPull(t.Ctx, t.Task.ID)
 	if !allowed {
 		return
 	}
@@ -563,7 +563,7 @@ func (t *runtimeTask) pollOnce(m *TaskManager, api *tg.Client) {
 			}
 
 			if remaining >= 0 {
-				reserved, _, _ := Scheduler.ReservePull(t.Task.ID, 1)
+				reserved, _, _ := Scheduler.ReservePull(t.Ctx, t.Task.ID, 1)
 				if reserved <= 0 {
 					return
 				}
@@ -785,7 +785,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 								commit = pullReserved
 							}
 							if commit > 0 {
-								Scheduler.CommitPull(t.Task.ID, commit)
+								Scheduler.CommitPull(t.Ctx, t.Task.ID, commit)
 							}
 							if extra := pullReserved - commit; extra > 0 {
 								Scheduler.ReleasePull(t.Task.ID, extra)
@@ -918,7 +918,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 
 				if job.fromPull && reservedTotal > 0 {
 					if err == nil && need > 0 {
-						Scheduler.CommitPull(t.Task.ID, need)
+						Scheduler.CommitPull(t.Ctx, t.Task.ID, need)
 						if extra := reservedTotal - need; extra > 0 {
 							Scheduler.ReleasePull(t.Task.ID, extra)
 						}

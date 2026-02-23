@@ -116,7 +116,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		return
 	}
 
-	strategy, err := service.GetStrategyByID(userID, req.StrategyID)
+	strategy, err := service.GetStrategyByID(c.Request.Context(), userID, req.StrategyID)
 	if err != nil {
 		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
 		return
@@ -129,7 +129,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 	allowExts := strategy.AllowFileExts
 
 	if req.KeywordProfileID != 0 {
-		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
+		if _, err := service.GetKeywordProfileByID(c.Request.Context(), userID, req.KeywordProfileID); err != nil {
 			app.FailWithMsg("关键词策略不存在或无权操作: "+err.Error(), c)
 			return
 		}
@@ -197,7 +197,7 @@ func (a *TaskApi) CreateTask(c *gin.Context) {
 		task.DailyLimit = 0
 	}
 
-	if err := service.CreateTask(&task); err != nil {
+	if err := service.CreateTask(c.Request.Context(), &task); err != nil {
 		app.FailWithMsg("任务保存失败: "+err.Error(), c)
 		return
 	}
@@ -213,7 +213,7 @@ func (a *TaskApi) GetTaskList(c *gin.Context) {
 		return
 	}
 
-	list, err := service.GetTaskList(userID)
+	list, err := service.GetTaskList(c.Request.Context(), userID)
 	if err != nil {
 		app.FailWithMsg("获取任务列表失败: "+err.Error(), c)
 		return
@@ -235,7 +235,7 @@ func (a *TaskApi) UpdateTaskStatus(c *gin.Context) {
 		return
 	}
 
-	task, err := service.ApplyTaskAction(userID, req.ID, req.Action)
+	task, err := service.ApplyTaskAction(c.Request.Context(), userID, req.ID, req.Action)
 	if err != nil {
 		app.FailWithMsg("状态更新失败: "+err.Error(), c)
 		return
@@ -272,7 +272,7 @@ func (a *TaskApi) GetTaskProgress(c *gin.Context) {
 		return
 	}
 
-	task, err := service.GetTaskByID(userID, uint(idU64))
+	task, err := service.GetTaskByID(c.Request.Context(), userID, uint(idU64))
 	if err != nil {
 		app.FailWithMsg("任务不存在或无权操作: "+err.Error(), c)
 		return
@@ -328,7 +328,7 @@ func (a *TaskApi) GetTaskProgressBatch(c *gin.Context) {
 	}
 
 	var tasks []model.Task
-	if err := global.DB.Where("user_id = ? AND id IN ?", userID, ids).Find(&tasks).Error; err != nil {
+	if err := global.DB.WithContext(c.Request.Context()).Where("user_id = ? AND id IN ?", userID, ids).Find(&tasks).Error; err != nil {
 		app.FailWithMsg("查询任务失败: "+err.Error(), c)
 		return
 	}
@@ -413,7 +413,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 		return
 	}
 
-	strategy, err := service.GetStrategyByID(userID, req.StrategyID)
+	strategy, err := service.GetStrategyByID(c.Request.Context(), userID, req.StrategyID)
 	if err != nil {
 		app.FailWithMsg("策略不存在或无权操作: "+err.Error(), c)
 		return
@@ -426,7 +426,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	allowExts := strategy.AllowFileExts
 
 	if req.KeywordProfileID != 0 {
-		if _, err := service.GetKeywordProfileByID(userID, req.KeywordProfileID); err != nil {
+		if _, err := service.GetKeywordProfileByID(c.Request.Context(), userID, req.KeywordProfileID); err != nil {
 			app.FailWithMsg("关键词策略不存在或无权操作: "+err.Error(), c)
 			return
 		}
@@ -495,7 +495,7 @@ func (a *TaskApi) UpdateTask(c *gin.Context) {
 	// Ensure the worker is stopped before applying changes.
 	engine.Manager.StopTask(uint(idU64))
 
-	updated, err := service.UpdateTask(userID, uint(idU64), &payload)
+	updated, err := service.UpdateTask(c.Request.Context(), userID, uint(idU64), &payload)
 	if err != nil {
 		app.FailWithMsg("任务更新失败: "+err.Error(), c)
 		return
@@ -524,7 +524,7 @@ func (a *TaskApi) DeleteTask(c *gin.Context) {
 		global.Logger.Warn("destroy task localdb failed: " + err.Error())
 	}
 
-	if err := service.DeleteTask(userID, uint(idU64)); err != nil {
+	if err := service.DeleteTask(c.Request.Context(), userID, uint(idU64)); err != nil {
 		app.FailWithMsg("任务删除失败: "+err.Error(), c)
 		return
 	}

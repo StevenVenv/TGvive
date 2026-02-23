@@ -40,11 +40,11 @@ func (a *AuthApi) DevToken(c *gin.Context) {
 	}
 
 	var u model.User
-	err := global.DB.Where("username = ?", username).First(&u).Error
+	err := global.DB.WithContext(c.Request.Context()).Where("username = ?", username).First(&u).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			u.Username = username
-			if err := global.DB.Create(&u).Error; err != nil {
+			if err := global.DB.WithContext(c.Request.Context()).Create(&u).Error; err != nil {
 				app.FailWithMsg("创建用户失败: "+err.Error(), c)
 				return
 			}

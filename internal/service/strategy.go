@@ -1,28 +1,42 @@
 package service
 
 import (
+	"context"
+
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
 )
 
-func CreateStrategy(strategy *model.Strategy) error {
-	return global.DB.Create(strategy).Error
+func CreateStrategy(ctx context.Context, strategy *model.Strategy) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Create(strategy).Error
 }
 
-func GetStrategyList(userID uint) ([]model.Strategy, error) {
+func GetStrategyList(ctx context.Context, userID uint) ([]model.Strategy, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var list []model.Strategy
-	err := global.DB.Where("user_id = ?", userID).Order("id desc").Find(&list).Error
+	err := global.DB.WithContext(ctx).Where("user_id = ?", userID).Order("id desc").Find(&list).Error
 	return list, err
 }
 
-func GetStrategyByID(userID uint, strategyID uint) (model.Strategy, error) {
+func GetStrategyByID(ctx context.Context, userID uint, strategyID uint) (model.Strategy, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var s model.Strategy
-	err := global.DB.Where("id = ? AND user_id = ?", strategyID, userID).First(&s).Error
+	err := global.DB.WithContext(ctx).Where("id = ? AND user_id = ?", strategyID, userID).First(&s).Error
 	return s, err
 }
 
-func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (model.Strategy, error) {
-	s, err := GetStrategyByID(userID, strategyID)
+func UpdateStrategy(ctx context.Context, userID uint, strategyID uint, payload *model.Strategy) (model.Strategy, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s, err := GetStrategyByID(ctx, userID, strategyID)
 	if err != nil {
 		return s, err
 	}
@@ -61,12 +75,15 @@ func UpdateStrategy(userID uint, strategyID uint, payload *model.Strategy) (mode
 	s.DailyLimit = payload.DailyLimit
 	s.RunWindow = payload.RunWindow
 
-	if err := global.DB.Save(&s).Error; err != nil {
+	if err := global.DB.WithContext(ctx).Save(&s).Error; err != nil {
 		return s, err
 	}
 	return s, nil
 }
 
-func DeleteStrategy(userID uint, strategyID uint) error {
-	return global.DB.Where("id = ? AND user_id = ?", strategyID, userID).Delete(&model.Strategy{}).Error
+func DeleteStrategy(ctx context.Context, userID uint, strategyID uint) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Where("id = ? AND user_id = ?", strategyID, userID).Delete(&model.Strategy{}).Error
 }

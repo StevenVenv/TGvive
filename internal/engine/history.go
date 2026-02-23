@@ -512,7 +512,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 							if out, skip := applyKeywordPolicyToMessage(carrier, kw); skip {
 								global.AddFiltered(uint64(plan.Need))
 								cursor = maxInGroup
-								if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+								if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 									return err
 								}
 								rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -569,7 +569,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 									global.BroadcastLog(fmt.Sprintf("[Error] 追更 Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
 								}
 								cursor = maxInGroup
-								if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+								if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 									return err
 								}
 								rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -598,7 +598,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						}
 					}
 					cursor = maxInGroup
-					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+					if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -617,7 +617,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 				if _, ok := curAllowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
-					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+					if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReply(msg)
@@ -631,7 +631,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			if ct == "file" && !fileSuffixAllowed(msg, curAllowFileSuffixes, curBlockFileSuffixes) {
 				global.IncFiltered()
 				cursor = msg.ID
-				if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+				if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 					return err
 				}
 				rootDelta, replyDelta := classifyRootReply(msg)
@@ -649,7 +649,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						global.IncFiltered()
 					}
 					cursor = msg.ID
-					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+					if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReply(msg)
@@ -694,7 +694,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 						global.BroadcastLog(fmt.Sprintf("[Error] 追更 MsgID %d download failed: %v (skipping)", msg.ID, err))
 					}
 					cursor = msg.ID
-					if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+					if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					failDelta := need
@@ -731,7 +731,7 @@ func (m *TaskManager) catchUpNewMessagesNewToOld(
 			}
 
 			cursor = msg.ID
-			if err := persistHistoryMaxID(task.ID, cursor); err != nil {
+			if err := persistHistoryMaxID(ctx, task.ID, cursor); err != nil {
 				return err
 			}
 			rootDelta, replyDelta := classifyRootReply(msg)
@@ -956,7 +956,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 							if out, skip := applyKeywordPolicyToMessage(carrier, kw); skip {
 								global.AddFiltered(uint64(plan.Need))
 								cursor = maxInGroup
-								if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+								if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 									return err
 								}
 								rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -1012,7 +1012,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 									global.BroadcastLog(fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
 								}
 								cursor = maxInGroup
-								if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+								if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 									return err
 								}
 								rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -1042,7 +1042,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 					}
 
 					cursor = maxInGroup
-					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -1061,7 +1061,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 				if _, ok := curAllowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
-					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReply(msg)
@@ -1075,7 +1075,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			if ct == "file" && !fileSuffixAllowed(msg, curAllowFileSuffixes, curBlockFileSuffixes) {
 				global.IncFiltered()
 				cursor = msg.ID
-				if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+				if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 					return err
 				}
 				rootDelta, replyDelta := classifyRootReply(msg)
@@ -1093,7 +1093,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						global.IncFiltered()
 					}
 					cursor = msg.ID
-					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReply(msg)
@@ -1138,7 +1138,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 						global.BroadcastLog(fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
 					}
 					cursor = msg.ID
-					if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+					if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					failDelta := need
@@ -1175,7 +1175,7 @@ func (m *TaskManager) cloneHistoryOldToNew(
 			}
 
 			cursor = msg.ID
-			if err := persistHistoryCursorAndMax(task.ID, cursor); err != nil {
+			if err := persistHistoryCursorAndMax(ctx, task.ID, cursor); err != nil {
 				return err
 			}
 			rootDelta, replyDelta := classifyRootReply(msg)
@@ -1308,7 +1308,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			maxSeen = pageMax
 		}
 		if maxSeen > persistedMaxSeen {
-			if err := persistHistoryMaxID(task.ID, maxSeen); err != nil {
+			if err := persistHistoryMaxID(ctx, task.ID, maxSeen); err != nil {
 				return err
 			}
 			persistedMaxSeen = maxSeen
@@ -1390,7 +1390,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 							if out, skip := applyKeywordPolicyToMessage(carrier, kw); skip {
 								global.AddFiltered(uint64(plan.Need))
 								cursor = minInGroup
-								if err := persistHistoryCursor(task.ID, cursor); err != nil {
+								if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 									return err
 								}
 								rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -1446,7 +1446,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 									global.BroadcastLog(fmt.Sprintf("[Error] Album(GroupedID=%d) download failed: %v (skipping)", gid, err))
 								}
 								cursor = minInGroup
-								if err := persistHistoryCursor(task.ID, cursor); err != nil {
+								if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 									return err
 								}
 								rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -1475,7 +1475,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						}
 					}
 					cursor = minInGroup
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReplyBatch(group)
@@ -1493,7 +1493,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 				if _, ok := curAllowedTypes[ct]; !ok {
 					global.IncFiltered()
 					cursor = msg.ID
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReply(msg)
@@ -1507,7 +1507,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			if ct == "file" && !fileSuffixAllowed(msg, curAllowFileSuffixes, curBlockFileSuffixes) {
 				global.IncFiltered()
 				cursor = msg.ID
-				if err := persistHistoryCursor(task.ID, cursor); err != nil {
+				if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 					return err
 				}
 				rootDelta, replyDelta := classifyRootReply(msg)
@@ -1525,7 +1525,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						global.IncFiltered()
 					}
 					cursor = msg.ID
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					rootDelta, replyDelta := classifyRootReply(msg)
@@ -1570,7 +1570,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 						global.BroadcastLog(fmt.Sprintf("[Error] MsgID %d download failed: %v (skipping)", msg.ID, err))
 					}
 					cursor = msg.ID
-					if err := persistHistoryCursor(task.ID, cursor); err != nil {
+					if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 						return err
 					}
 					failDelta := need
@@ -1607,7 +1607,7 @@ func (m *TaskManager) cloneHistoryNewToOld(
 			}
 
 			cursor = msg.ID
-			if err := persistHistoryCursor(task.ID, cursor); err != nil {
+			if err := persistHistoryCursor(ctx, task.ID, cursor); err != nil {
 				return err
 			}
 			rootDelta, replyDelta := classifyRootReply(msg)
@@ -1798,37 +1798,46 @@ func resolveInputPeer(ctx context.Context, api *tg.Client, raw string) (tg.Input
 	return nil, last
 }
 
-func persistHistoryMaxID(taskID uint, maxID int) error {
+func persistHistoryMaxID(ctx context.Context, taskID uint, maxID int) error {
 	if taskID == 0 {
 		return errors.New("task id is required")
 	}
 	if maxID <= 0 || global.DB == nil {
 		return nil
 	}
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Update("history_max_id", gorm.Expr("GREATEST(history_max_id, ?)", maxID)).Error
 }
 
-func persistHistoryCursorAndMax(taskID uint, cursor int) error {
+func persistHistoryCursorAndMax(ctx context.Context, taskID uint, cursor int) error {
 	if taskID == 0 {
 		return errors.New("task id is required")
 	}
 	if global.DB == nil {
 		return nil
 	}
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"history_cursor": cursor,
 			"history_max_id": gorm.Expr("GREATEST(history_max_id, ?)", cursor),
 		}).Error
 }
 
-func persistHistoryCursor(taskID uint, cursor int) error {
+func persistHistoryCursor(ctx context.Context, taskID uint, cursor int) error {
 	if taskID == 0 {
 		return errors.New("task id is required")
 	}
 	if global.DB == nil {
 		return nil
 	}
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).Update("history_cursor", cursor).Error
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).Update("history_cursor", cursor).Error
 }

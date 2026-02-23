@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -8,25 +9,37 @@ import (
 	"my-go-server/internal/model"
 )
 
-func CreateTask(task *model.Task) error {
-	return global.DB.Create(task).Error
+func CreateTask(ctx context.Context, task *model.Task) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Create(task).Error
 }
 
-func GetTaskList(userID uint) ([]model.Task, error) {
+func GetTaskList(ctx context.Context, userID uint) ([]model.Task, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var list []model.Task
-	err := global.DB.Where("user_id = ?", userID).Order("id desc").Find(&list).Error
+	err := global.DB.WithContext(ctx).Where("user_id = ?", userID).Order("id desc").Find(&list).Error
 	return list, err
 }
 
-func GetTaskByID(userID uint, taskID uint) (model.Task, error) {
+func GetTaskByID(ctx context.Context, userID uint, taskID uint) (model.Task, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var task model.Task
-	err := global.DB.Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error
+	err := global.DB.WithContext(ctx).Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error
 	return task, err
 }
 
-func UpdateTaskStatus(userID uint, taskID uint, status int) (model.Task, error) {
+func UpdateTaskStatus(ctx context.Context, userID uint, taskID uint, status int) (model.Task, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var task model.Task
-	if err := global.DB.Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error; err != nil {
+	if err := global.DB.WithContext(ctx).Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error; err != nil {
 		return task, err
 	}
 	updates := map[string]any{
@@ -36,7 +49,7 @@ func UpdateTaskStatus(userID uint, taskID uint, status int) (model.Task, error) 
 	if status == model.TaskStatusRunning {
 		updates["last_error"] = ""
 	}
-	if err := global.DB.Model(&task).Updates(updates).Error; err != nil {
+	if err := global.DB.WithContext(ctx).Model(&task).Updates(updates).Error; err != nil {
 		return task, err
 	}
 	task.Status = status
@@ -46,7 +59,7 @@ func UpdateTaskStatus(userID uint, taskID uint, status int) (model.Task, error) 
 	return task, nil
 }
 
-func ApplyTaskAction(userID uint, taskID uint, action string) (model.Task, error) {
+func ApplyTaskAction(ctx context.Context, userID uint, taskID uint, action string) (model.Task, error) {
 	var status int
 	switch action {
 	case "start":
@@ -61,7 +74,7 @@ func ApplyTaskAction(userID uint, taskID uint, action string) (model.Task, error
 		return model.Task{}, errors.New("invalid action")
 	}
 
-	task, err := UpdateTaskStatus(userID, taskID, status)
+	task, err := UpdateTaskStatus(ctx, userID, taskID, status)
 	if err != nil {
 		return task, err
 	}
@@ -69,12 +82,15 @@ func ApplyTaskAction(userID uint, taskID uint, action string) (model.Task, error
 	return task, nil
 }
 
-func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, error) {
+func UpdateTask(ctx context.Context, userID uint, taskID uint, payload *model.Task) (model.Task, error) {
 	if payload == nil {
 		return model.Task{}, errors.New("payload is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	task, err := GetTaskByID(userID, taskID)
+	task, err := GetTaskByID(ctx, userID, taskID)
 	if err != nil {
 		return task, err
 	}
@@ -154,16 +170,19 @@ func UpdateTask(userID uint, taskID uint, payload *model.Task) (model.Task, erro
 	// Always reset to stopped after edit.
 	task.Status = model.TaskStatusStopped
 
-	if err := global.DB.Save(&task).Error; err != nil {
+	if err := global.DB.WithContext(ctx).Save(&task).Error; err != nil {
 		return task, err
 	}
 	return task, nil
 }
 
-func DeleteTask(userID uint, taskID uint) error {
-	task, err := GetTaskByID(userID, taskID)
+func DeleteTask(ctx context.Context, userID uint, taskID uint) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	task, err := GetTaskByID(ctx, userID, taskID)
 	if err != nil {
 		return err
 	}
-	return global.DB.Delete(&task).Error
+	return global.DB.WithContext(ctx).Delete(&task).Error
 }

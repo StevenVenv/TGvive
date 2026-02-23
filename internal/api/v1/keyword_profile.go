@@ -157,7 +157,7 @@ func (a *KeywordProfileApi) CreateKeywordProfile(c *gin.Context) {
 		return
 	}
 
-	if err := service.CreateKeywordProfile(&p); err != nil {
+	if err := service.CreateKeywordProfile(c.Request.Context(), &p); err != nil {
 		app.FailWithMsg("关键词策略保存失败: "+err.Error(), c)
 		return
 	}
@@ -173,7 +173,7 @@ func (a *KeywordProfileApi) GetKeywordProfileList(c *gin.Context) {
 		return
 	}
 
-	list, err := service.GetKeywordProfileList(userID)
+	list, err := service.GetKeywordProfileList(c.Request.Context(), userID)
 	if err != nil {
 		app.FailWithMsg("获取关键词策略列表失败: "+err.Error(), c)
 		return
@@ -240,7 +240,7 @@ func (a *KeywordProfileApi) UpdateKeywordProfile(c *gin.Context) {
 		return
 	}
 
-	updated, err := service.UpdateKeywordProfile(userID, uint(idU64), &out)
+	updated, err := service.UpdateKeywordProfile(c.Request.Context(), userID, uint(idU64), &out)
 	if err != nil {
 		app.FailWithMsg("关键词策略更新失败: "+err.Error(), c)
 		return
@@ -264,7 +264,7 @@ func (a *KeywordProfileApi) DeleteKeywordProfile(c *gin.Context) {
 		return
 	}
 
-	if err := service.DeleteKeywordProfile(userID, uint(idU64)); err != nil {
+	if err := service.DeleteKeywordProfile(c.Request.Context(), userID, uint(idU64)); err != nil {
 		app.FailWithMsg("关键词策略删除失败: "+err.Error(), c)
 		return
 	}

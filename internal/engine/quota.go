@@ -225,7 +225,7 @@ func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint6
 		if strings.TrimSpace(q.todayDate) != today {
 			q.todayDate = today
 			q.todayCount = 0
-			if err := persistQuotaReset(taskID, today); err != nil {
+			if err := persistQuotaReset(ctx, taskID, today); err != nil {
 				return err
 			}
 		}
@@ -245,7 +245,7 @@ func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint6
 			}
 			sleepFor = minDuration(sleepFor, quotaPollInterval)
 
-			m.markQuotaPaused(taskID, runID, q, "window", fmt.Sprintf("当前不在运行时间段(%s)", q.windowRaw))
+			m.markQuotaPaused(ctx, taskID, runID, q, "window", fmt.Sprintf("当前不在运行时间段(%s)", q.windowRaw))
 			sleepWithContext(ctx, sleepFor)
 			continue
 		}
@@ -257,12 +257,12 @@ func (m *TaskManager) waitForQuota(ctx context.Context, taskID uint, runID uint6
 			}
 			sleepFor = minDuration(sleepFor, quotaPollInterval)
 
-			m.markQuotaPaused(taskID, runID, q, "daily", fmt.Sprintf("今日配额已用完 (%d/%d)", q.todayCount, q.dailyLimit))
+			m.markQuotaPaused(ctx, taskID, runID, q, "daily", fmt.Sprintf("今日配额已用完 (%d/%d)", q.todayCount, q.dailyLimit))
 			sleepWithContext(ctx, sleepFor)
 			continue
 		}
 
-		m.markQuotaRunning(taskID, runID, q)
+		m.markQuotaRunning(ctx, taskID, runID, q)
 		return nil
 	}
 }
@@ -280,19 +280,19 @@ func (m *TaskManager) quotaAdd(ctx context.Context, taskID uint, q *taskQuota, d
 	if strings.TrimSpace(q.todayDate) != today {
 		q.todayDate = today
 		q.todayCount = 0
-		if err := persistQuotaReset(taskID, today); err != nil {
+		if err := persistQuotaReset(ctx, taskID, today); err != nil {
 			return err
 		}
 	}
 
-	if err := persistQuotaIncrement(taskID, today, delta); err != nil {
+	if err := persistQuotaIncrement(ctx, taskID, today, delta); err != nil {
 		return err
 	}
 	q.todayCount += delta
 	return nil
 }
 
-func (m *TaskManager) markQuotaPaused(taskID uint, runID uint64, q *taskQuota, reason string, msg string) {
+func (m *TaskManager) markQuotaPaused(ctx context.Context, taskID uint, runID uint64, q *taskQuota, reason string, msg string) {
 	if m == nil || q == nil || taskID == 0 {
 		return
 	}
@@ -305,10 +305,10 @@ func (m *TaskManager) markQuotaPaused(taskID uint, runID uint64, q *taskQuota, r
 		m.record(taskID, runID, 0, 0, 0, 0, "[暂停] "+msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusPaused)
 	}
-	_ = updateTaskStatus(taskID, model.TaskStatusPaused)
+	_ = updateTaskStatus(ctx, taskID, model.TaskStatusPaused)
 }
 
-func (m *TaskManager) markQuotaRunning(taskID uint, runID uint64, q *taskQuota) {
+func (m *TaskManager) markQuotaRunning(ctx context.Context, taskID uint, runID uint64, q *taskQuota) {
 	if m == nil || q == nil || taskID == 0 {
 		return
 	}
@@ -322,10 +322,10 @@ func (m *TaskManager) markQuotaRunning(taskID uint, runID uint64, q *taskQuota) 
 		m.record(taskID, runID, 0, 0, 0, 0, "[继续] 恢复运行("+prev+")")
 		m.setStateStatus(taskID, runID, model.TaskStatusRunning)
 	}
-	_ = updateTaskStatus(taskID, model.TaskStatusRunning)
+	_ = updateTaskStatus(ctx, taskID, model.TaskStatusRunning)
 }
 
-func persistQuotaReset(taskID uint, today string) error {
+func persistQuotaReset(ctx context.Context, taskID uint, today string) error {
 	if taskID == 0 {
 		return errors.New("task id is required")
 	}
@@ -333,14 +333,17 @@ func persistQuotaReset(taskID uint, today string) error {
 		return nil
 	}
 	today = strings.TrimSpace(today)
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"today_date":  today,
 			"today_count": 0,
 		}).Error
 }
 
-func persistQuotaIncrement(taskID uint, today string, delta int) error {
+func persistQuotaIncrement(ctx context.Context, taskID uint, today string, delta int) error {
 	if taskID == 0 {
 		return errors.New("task id is required")
 	}
@@ -352,7 +355,10 @@ func persistQuotaIncrement(taskID uint, today string, delta int) error {
 	}
 	today = strings.TrimSpace(today)
 
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"today_date":  today,
 			"today_count": gorm.Expr("today_count + ?", delta),

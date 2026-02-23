@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -264,6 +265,9 @@ func (s *SchedulerEngine) refresh() {
 		return
 	}
 
+	ctx := context.Background()
+	db := global.DB.WithContext(ctx)
+
 	type row struct {
 		TaskID        uint   `gorm:"column:task_id"`
 		UserID        uint   `gorm:"column:user_id"`
@@ -274,7 +278,7 @@ func (s *SchedulerEngine) refresh() {
 	}
 
 	var rows []row
-	if err := global.DB.
+	if err := db.
 		Table("task").
 		Select("task.id as task_id, task.user_id, task.strategy_id, task.current_slot_key, task.current_slot_count, strategy.schedule_rules as schedule_rules").
 		Joins("LEFT JOIN strategy ON strategy.id = task.strategy_id AND strategy.user_id = task.user_id").
@@ -351,7 +355,7 @@ func (s *SchedulerEngine) refresh() {
 			updates["current_slot_key"] = slotReset.SlotKey
 			updates["current_slot_count"] = 0
 		}
-		if err := global.DB.Model(&model.Task{}).Where("id = ?", r.TaskID).Updates(updates).Error; err != nil && global.Logger != nil {
+		if err := db.Model(&model.Task{}).Where("id = ?", r.TaskID).Updates(updates).Error; err != nil && global.Logger != nil {
 			global.Logger.Warn("scheduler refresh update task failed", zap.Uint("task_id", r.TaskID), zap.Error(err))
 		}
 	}
@@ -477,7 +481,7 @@ func (s *SchedulerEngine) syncPersistedState(taskID uint, slotKey string, slotCo
 
 // ReservePull checks current time slot and reserves up to `need` pull tokens for this task.
 // It returns reserved count (0 means not allowed right now) and next run time hint.
-func (s *SchedulerEngine) ReservePull(taskID uint, need int) (int, time.Time, error) {
+func (s *SchedulerEngine) ReservePull(ctx context.Context, taskID uint, need int) (int, time.Time, error) {
 	if need <= 0 {
 		return 0, time.Time{}, nil
 	}
@@ -546,7 +550,7 @@ func (s *SchedulerEngine) ReservePull(taskID uint, need int) (int, time.Time, er
 		st.nextRun = next
 		s.mu.Unlock()
 		if needPersistReset {
-			_ = persistSlotReset(taskID, persistKey)
+			_ = persistSlotReset(ctx, taskID, persistKey)
 		}
 		return 0, next, nil
 	}
@@ -559,7 +563,7 @@ func (s *SchedulerEngine) ReservePull(taskID uint, need int) (int, time.Time, er
 
 	s.mu.Unlock()
 	if needPersistReset {
-		_ = persistSlotReset(taskID, persistKey)
+		_ = persistSlotReset(ctx, taskID, persistKey)
 	}
 	return reserved, time.Time{}, nil
 }
@@ -625,7 +629,7 @@ func (s *SchedulerEngine) computeNextRun(taskID uint, now time.Time) (time.Time,
 	return time.Time{}, reset
 }
 
-func (s *SchedulerEngine) RegisterTask(task model.Task) error {
+func (s *SchedulerEngine) RegisterTask(ctx context.Context, task model.Task) error {
 	if s == nil {
 		return nil
 	}
@@ -635,9 +639,13 @@ func (s *SchedulerEngine) RegisterTask(task model.Task) error {
 	if global.DB == nil {
 		return errors.New("db is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	db := global.DB.WithContext(ctx)
 
 	var st model.Strategy
-	if err := global.DB.Select("schedule_rules").Where("id = ? AND user_id = ?", task.StrategyID, task.UserID).First(&st).Error; err != nil {
+	if err := db.Select("schedule_rules").Where("id = ? AND user_id = ?", task.StrategyID, task.UserID).First(&st).Error; err != nil {
 		return err
 	}
 	s.setRules(task.ID, task.UserID, task.StrategyID, st.ScheduleRules)
@@ -647,7 +655,7 @@ func (s *SchedulerEngine) RegisterTask(task model.Task) error {
 	slotCount := task.CurrentSlotCount
 	if slotKey == "" && global.DB != nil {
 		var latest model.Task
-		if err := global.DB.Select("current_slot_key", "current_slot_count").Where("id = ? AND user_id = ?", task.ID, task.UserID).First(&latest).Error; err == nil {
+		if err := db.Select("current_slot_key", "current_slot_count").Where("id = ? AND user_id = ?", task.ID, task.UserID).First(&latest).Error; err == nil {
 			slotKey = strings.TrimSpace(latest.CurrentSlotKey)
 			slotCount = latest.CurrentSlotCount
 		}
@@ -658,7 +666,7 @@ func (s *SchedulerEngine) RegisterTask(task model.Task) error {
 
 // PeekPull reports whether pull operations are allowed right now, and the remaining quota in current slot.
 // remaining < 0 means unlimited (no schedule rules).
-func (s *SchedulerEngine) PeekPull(taskID uint) (allowed bool, remaining int, next time.Time) {
+func (s *SchedulerEngine) PeekPull(ctx context.Context, taskID uint) (allowed bool, remaining int, next time.Time) {
 	if s == nil || taskID == 0 {
 		return true, -1, time.Time{}
 	}
@@ -720,30 +728,33 @@ func (s *SchedulerEngine) PeekPull(taskID uint) (allowed bool, remaining int, ne
 		st.nextRun = next
 		s.mu.Unlock()
 		if needPersistReset {
-			_ = persistSlotReset(taskID, persistKey)
+			_ = persistSlotReset(ctx, taskID, persistKey)
 		}
 		return false, 0, next
 	}
 	s.mu.Unlock()
 	if needPersistReset {
-		_ = persistSlotReset(taskID, persistKey)
+		_ = persistSlotReset(ctx, taskID, persistKey)
 	}
 	return true, remaining, time.Time{}
 }
 
-func persistSlotReset(taskID uint, slotKey string) error {
+func persistSlotReset(ctx context.Context, taskID uint, slotKey string) error {
 	if taskID == 0 || global.DB == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	slotKey = strings.TrimSpace(slotKey)
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"current_slot_key":   slotKey,
 			"current_slot_count": 0,
 		}).Error
 }
 
-func (s *SchedulerEngine) CommitPull(taskID uint, usedDelta int) {
+func (s *SchedulerEngine) CommitPull(ctx context.Context, taskID uint, usedDelta int) {
 	if usedDelta <= 0 || s == nil || taskID == 0 {
 		return
 	}
@@ -777,7 +788,10 @@ func (s *SchedulerEngine) CommitPull(taskID uint, usedDelta int) {
 	s.mu.Unlock()
 
 	if global.DB != nil {
-		if err := global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 			Updates(map[string]any{
 				"current_slot_key":   slotKey,
 				"current_slot_count": used,

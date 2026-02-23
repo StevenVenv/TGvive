@@ -51,7 +51,7 @@ func (m *TaskManager) SetupTaskPeers(ctx context.Context, sourceAPI *tg.Client, 
 	if task.SourceChannelID != chID {
 		task.SourceChannelID = chID
 		if global.DB != nil {
-			if err := global.DB.Model(&model.Task{}).
+			if err := global.DB.WithContext(ctx).Model(&model.Task{}).
 				Where("id = ?", task.ID).
 				Update("source_channel_id", chID).Error; err != nil {
 				return nil, nil, 0, fmt.Errorf("persist source_channel_id: %w", err)

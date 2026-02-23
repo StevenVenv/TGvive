@@ -39,7 +39,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		msg := "初始化 Telegram 失败: " + err.Error()
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+		_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 		return
 	}
 	api := tgRT.api
@@ -47,7 +47,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		msg := "初始化 Telegram 失败: tg api is nil"
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+		_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 		return
 	}
 
@@ -67,7 +67,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			msg := "发布账号不能为空 (publish_session_key is empty)"
 			m.record(taskID, runID, 0, 0, 0, 1, msg)
 			m.setStateStatus(taskID, runID, model.TaskStatusError)
-			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
 		pubRT, err := m.ensureTelegramForTask(ctx, model.Task{ExecuteBy: pubKey})
@@ -78,14 +78,14 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			msg := "初始化发布账号失败: " + err.Error()
 			m.record(taskID, runID, 0, 0, 0, 1, msg)
 			m.setStateStatus(taskID, runID, model.TaskStatusError)
-			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
 		if pubRT == nil || pubRT.api == nil {
 			msg := "初始化发布账号失败: tg api is nil"
 			m.record(taskID, runID, 0, 0, 0, 1, msg)
 			m.setStateStatus(taskID, runID, model.TaskStatusError)
-			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
 		publishAPI = pubRT.api
@@ -96,14 +96,14 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			msg := "发布 Bot 不存在"
 			m.record(taskID, runID, 0, 0, 0, 1, msg)
 			m.setStateStatus(taskID, runID, model.TaskStatusError)
-			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
 		if bot.Disabled {
 			msg := "发布 Bot 已禁用"
 			m.record(taskID, runID, 0, 0, 0, 1, msg)
 			m.setStateStatus(taskID, runID, model.TaskStatusError)
-			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
 		chatID, err := resolveBotChatID(task.TargetURL)
@@ -111,7 +111,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			msg := "解析 Bot 目标失败: " + err.Error()
 			m.record(taskID, runID, 0, 0, 0, 1, msg)
 			m.setStateStatus(taskID, runID, model.TaskStatusError)
-			_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
 		pubRuntime = &taskPublisherRuntime{
@@ -123,7 +123,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		msg := "发布类型不支持: " + publishType
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+		_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		msg := "解析频道/群组失败: " + err.Error()
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+		_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 		return
 	}
 	// Publisher runtime for MTProto needs resolved target peer (publisher access-hash).
@@ -282,7 +282,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		msg := "历史克隆失败: " + err.Error()
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
 		m.setStateStatus(taskID, runID, model.TaskStatusError)
-		_ = updateTaskStatusWithError(taskID, model.TaskStatusError, msg)
+		_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 		return
 	}
 
@@ -294,7 +294,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	enablePush := task.Realtime
 	if global.DB != nil && task.StrategyID != 0 && task.UserID != 0 {
 		var s model.Strategy
-		if err := global.DB.Select("poll_interval", "enable_realtime", "realtime").Where("id = ? AND user_id = ?", task.StrategyID, task.UserID).First(&s).Error; err == nil {
+		if err := global.DB.WithContext(ctx).Select("poll_interval", "enable_realtime", "realtime").Where("id = ? AND user_id = ?", task.StrategyID, task.UserID).First(&s).Error; err == nil {
 			pollIntervalSec = s.PollInterval
 			enablePush = s.EnableRealtime || s.Realtime
 		}
@@ -309,7 +309,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	if keepAlive {
 		if global.DB != nil {
 			var latest model.Task
-			if err := global.DB.Select("history_cursor", "history_order", "history_max_id").Where("id = ?", taskID).First(&latest).Error; err == nil {
+			if err := global.DB.WithContext(ctx).Select("history_cursor", "history_order", "history_max_id").Where("id = ?", taskID).First(&latest).Error; err == nil {
 				task.HistoryCursor = latest.HistoryCursor
 				task.HistoryOrder = latest.HistoryOrder
 				task.HistoryMaxID = latest.HistoryMaxID
@@ -317,7 +317,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		}
 
 		task.Realtime = enablePush
-		_ = Scheduler.RegisterTask(task)
+		_ = Scheduler.RegisterTask(ctx, task)
 
 		if commentCfg != nil && commentCfg.Enabled && commentCfg.LocalDB != nil {
 			if err := m.registerCommentProducerTask(tgRT, commentProducerTaskConfig{
@@ -350,7 +350,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 
 	m.record(taskID, runID, 0, 0, 0, 0, "转发完成")
 	m.markCompleted(taskID, runID, true)
-	_ = updateTaskStatus(taskID, model.TaskStatusStopped)
+	_ = updateTaskStatus(ctx, taskID, model.TaskStatusStopped)
 }
 
 func (m *TaskManager) isActiveRun(taskID uint, runID uint64) bool {
@@ -510,14 +510,17 @@ func (m *TaskManager) setStateStatus(taskID uint, runID uint64, status int) {
 	}
 }
 
-func updateTaskStatus(taskID uint, status int) error {
+func updateTaskStatus(ctx context.Context, taskID uint, status int) error {
 	if taskID == 0 || global.DB == nil {
 		return nil
 	}
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).Update("status", status).Error
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).Update("status", status).Error
 }
 
-func updateTaskStatusWithError(taskID uint, status int, lastError string) error {
+func updateTaskStatusWithError(ctx context.Context, taskID uint, status int, lastError string) error {
 	if taskID == 0 || global.DB == nil {
 		return nil
 	}
@@ -531,7 +534,10 @@ func updateTaskStatusWithError(taskID uint, status int, lastError string) error 
 	if lastError != "" && global.Logger != nil {
 		global.Logger.Error("task fatal error", zap.Uint("task_id", taskID), zap.String("msg", lastError))
 	}
-	return global.DB.Model(&model.Task{}).Where("id = ?", taskID).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"status":     status,
 			"last_error": lastError,
