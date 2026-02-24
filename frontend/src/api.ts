@@ -13,6 +13,8 @@ import type {
   TGBotTestResult,
 } from './types/domain'
 
+import { resolveAPIURL } from './runtime/backend'
+
 export type ApiResponse<T> = {
   code: number
   msg: string
@@ -40,7 +42,8 @@ export type {
 } from './types/domain'
 
 async function apiUpload<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, {
+  const url = resolveAPIURL(path)
+  const res = await fetch(url, {
     method: 'POST',
     body: form,
     credentials: 'include',
@@ -54,13 +57,14 @@ async function apiUpload<T>(path: string, form: FormData): Promise<T> {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const url = resolveAPIURL(path)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init?.headers ? (init.headers as Record<string, string>) : {}),
   }
   const credentials = init?.credentials ?? 'include'
 
-  const res = await fetch(path, {
+  const res = await fetch(url, {
     ...init,
     headers,
     credentials,
@@ -74,12 +78,13 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 }
 
 export async function apiFetchBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const url = resolveAPIURL(path)
   const headers: Record<string, string> = {
     ...(init?.headers ? (init.headers as Record<string, string>) : {}),
   }
   const credentials = init?.credentials ?? 'include'
 
-  const res = await fetch(path, {
+  const res = await fetch(url, {
     ...init,
     headers,
     credentials,

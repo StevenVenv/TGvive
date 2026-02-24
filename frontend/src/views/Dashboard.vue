@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiFetch } from '../api'
+import { resolveWSURL } from '../runtime/backend'
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR'
 type LogItem = { id: number; level: LogLevel; text: string; ts: number }
@@ -343,8 +344,7 @@ function applyLog(ev: LogEvent) {
 }
 
 function wsURL(): string {
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${window.location.host}/api/v1/ws/dashboard`
+  return resolveWSURL('/api/v1/ws/dashboard')
 }
 
 let ws: WebSocket | null = null

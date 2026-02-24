@@ -12,6 +12,7 @@ import {
   type VideoWatermarkRule,
   type WatermarkRule,
 } from '../../api'
+import { resolveAPIURL } from '../../runtime/backend'
 
 export type ScheduleRule = {
   start: string
@@ -581,7 +582,7 @@ function normalizeUploadedWatermarkPath(p: string): string {
 const watermarkImagePreviewURL = computed<string>(() => {
   const name = pathBasename(watermarkImagePath.value)
   if (!name) return ''
-  return `/api/v1/watermarks/files/${encodeURIComponent(name)}`
+  return resolveAPIURL(`/api/v1/watermarks/files/${encodeURIComponent(name)}`)
 })
 
 const watermarkImagePreviewSrc = ref('')
@@ -666,7 +667,7 @@ watch(
 const watermarkFontPreviewURL = computed<string>(() => {
   const name = pathBasename(watermarkFontPath.value)
   if (!name) return ''
-  return `/api/v1/watermarks/fonts/${encodeURIComponent(name)}`
+  return resolveAPIURL(`/api/v1/watermarks/fonts/${encodeURIComponent(name)}`)
 })
 
 const watermarkFontPreviewSrc = ref('')
@@ -1114,7 +1115,7 @@ async function uploadVideoWmFontRequest(opts: UploadRequestOptions) {
 const videoWmImagePreviewURL = computed<string>(() => {
   const name = pathBasename(videoWmImagePath.value)
   if (!name) return ''
-  return `/api/v1/watermarks/files/${encodeURIComponent(name)}`
+  return resolveAPIURL(`/api/v1/watermarks/files/${encodeURIComponent(name)}`)
 })
 
 const videoWmImagePreviewSrc = ref('')
@@ -1169,7 +1170,7 @@ watch(
 const videoWmFontPreviewURL = computed<string>(() => {
   const name = pathBasename(videoWmFontPath.value)
   if (!name) return ''
-  return `/api/v1/watermarks/fonts/${encodeURIComponent(name)}`
+  return resolveAPIURL(`/api/v1/watermarks/fonts/${encodeURIComponent(name)}`)
 })
 
 const videoWmFontPreviewSrc = ref('')

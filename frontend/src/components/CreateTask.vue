@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { UserFilled } from '@element-plus/icons-vue'
+import { resolveAPIURL } from '../runtime/backend'
 
 type ApiResponse<T> = {
   code: number
@@ -135,7 +136,7 @@ function resetForm() {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await axios.get<ApiResponse<T>>(path, {
+  const res = await axios.get<ApiResponse<T>>(resolveAPIURL(path), {
     withCredentials: true,
   })
   if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')
@@ -143,7 +144,7 @@ async function apiGet<T>(path: string): Promise<T> {
 }
 
 async function apiPost<T>(path: string, body: any): Promise<T> {
-  const res = await axios.post<ApiResponse<T>>(path, body, {
+  const res = await axios.post<ApiResponse<T>>(resolveAPIURL(path), body, {
     withCredentials: true,
   })
   if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')

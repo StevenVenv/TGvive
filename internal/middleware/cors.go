@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -39,9 +41,17 @@ func Cors() gin.HandlerFunc {
 
 		if methods := joinCSV(cors.AllowMethods); methods != "" {
 			c.Header("Access-Control-Allow-Methods", methods)
+		} else {
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}
 		if headers := joinCSV(cors.AllowHeaders); headers != "" {
 			c.Header("Access-Control-Allow-Headers", headers)
+		} else if reqHeaders := strings.TrimSpace(c.GetHeader("Access-Control-Request-Headers")); reqHeaders != "" {
+			// Best-effort: if user didn't configure allow_headers, echo the requested headers
+			// so local dev UIs (vite/python server) can work out of the box.
+			c.Header("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		}
 		if expose := joinCSV(cors.ExposeHeaders); expose != "" {
 			c.Header("Access-Control-Expose-Headers", expose)
@@ -63,6 +73,9 @@ func IsOriginAllowed(origin string) bool {
 	if origin == "" {
 		return false
 	}
+	if isDebugLoopbackOrigin(origin) {
+		return true
+	}
 	allowed := global.Config.Server.CORS.AllowOrigins
 	if len(allowed) == 0 {
 		return false
@@ -80,6 +93,35 @@ func IsOriginAllowed(origin string) bool {
 		}
 	}
 	return false
+}
+
+func isDebugLoopbackOrigin(origin string) bool {
+	if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) != "debug" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u == nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.TrimSpace(u.Host)
+	if host == "" {
+		return false
+	}
+	h := host
+	if strings.Contains(host, ":") {
+		if hh, _, err := net.SplitHostPort(host); err == nil {
+			h = hh
+		}
+	}
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 func hasWildcard(in []string) bool {
