@@ -134,8 +134,8 @@ type runtimeTask struct {
 	done     chan struct{}
 	stopOnce sync.Once
 
-	mu                sync.Mutex
-	albumWait         map[int64]chan []*tg.Message
+	mu        sync.Mutex
+	albumWait map[int64]chan []*tg.Message
 }
 
 func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
@@ -158,9 +158,9 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		comment:           cfg.Comment,
 		quota:             newTaskQuota(cfg.Task),
 
-		queue:             make(chan realtimeJob, 512),
-		done:              make(chan struct{}),
-		albumWait:         make(map[int64]chan []*tg.Message),
+		queue:     make(chan realtimeJob, 512),
+		done:      make(chan struct{}),
+		albumWait: make(map[int64]chan []*tg.Message),
 	}
 
 	t.delayMin, t.delayMax = normalizeDelayRange(cfg.Task.DelayMinMs, cfg.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
@@ -578,7 +578,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 			}
 			sleepFor := quotaPollInterval
 			if !next.IsZero() {
-				sleepFor = next.Sub(time.Now())
+				sleepFor = time.Until(next)
 			}
 			if sleepFor < 0 {
 				sleepFor = quotaPollInterval
@@ -605,7 +605,7 @@ func (t *runtimeTask) run(m *TaskManager, api *tg.Client) {
 			}
 			sleepFor := quotaPollInterval
 			if !next.IsZero() {
-				sleepFor = next.Sub(time.Now())
+				sleepFor = time.Until(next)
 			}
 			if sleepFor < 0 {
 				sleepFor = quotaPollInterval
