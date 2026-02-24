@@ -16,6 +16,7 @@ import (
 	"my-go-server/internal/model"
 	"my-go-server/pkg/retry"
 
+	"github.com/gotd/td/pool"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -1259,6 +1260,14 @@ func (rt *telegramRuntime) runWithReconnect(runCtx context.Context, client *tele
 						zap.Error(err),
 					)
 				}
+				if attempt == 1 || attempt%5 == 0 {
+					global.BroadcastLog(fmt.Sprintf(
+						"[WARN] Telegram 连接失败，将在 %s 后重试 (session=%s): %v",
+						wait.Round(time.Second),
+						filepath.Base(sessionPath),
+						err,
+					))
+				}
 				_ = retry.Sleep(runCtx, wait)
 				continue
 			}
@@ -1284,6 +1293,14 @@ func (rt *telegramRuntime) runWithReconnect(runCtx context.Context, client *tele
 					zap.Error(err),
 				)
 			}
+			if attempt == 1 || attempt%10 == 0 {
+				global.BroadcastLog(fmt.Sprintf(
+					"[WARN] Telegram 连接中断，将在 %s 后重连 (session=%s): %v",
+					wait.Round(time.Second),
+					filepath.Base(sessionPath),
+					err,
+				))
+			}
 			_ = retry.Sleep(runCtx, wait)
 			continue
 		}
@@ -1298,6 +1315,9 @@ func (rt *telegramRuntime) runWithReconnect(runCtx context.Context, client *tele
 func isRetryableTelegramRuntimeErr(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, pool.ErrConnDead) {
+		return true
 	}
 	if retry.IsRetryableNetErr(err) {
 		return true
