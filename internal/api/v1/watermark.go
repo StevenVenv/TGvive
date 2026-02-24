@@ -41,7 +41,7 @@ func safeBasename(s string) string {
 }
 
 // UploadWatermarkPNG accepts a PNG file and stores it as a temp file on the server.
-// It returns an absolute file path which can be used as Strategy.watermark_rule.image_path.
+// It returns a safe filename (recommended) which can be used as Strategy.watermark_rule.image_path.
 func (a *WatermarkApi) UploadWatermarkPNG(c *gin.Context) {
 	fh, err := c.FormFile("file")
 	if err != nil || fh == nil {
@@ -112,19 +112,13 @@ func (a *WatermarkApi) UploadWatermarkPNG(c *gin.Context) {
 	}
 	_ = os.Chmod(dstName, 0o644)
 
-	abs, err := filepath.Abs(dstName)
-	if err != nil {
-		app.FailWithMsg("获取绝对路径失败: "+err.Error(), c)
-		return
-	}
-
 	writeOK = true
 	name := safeBasename(dstName)
 	url := ""
 	if name != "" {
 		url = "/api/v1/watermarks/files/" + name
 	}
-	app.OkWithData(gin.H{"path": abs, "name": name, "url": url}, c)
+	app.OkWithData(gin.H{"path": name, "name": name, "url": url}, c)
 }
 
 // UploadWatermarkFont accepts a font file (.ttf/.otf) and stores it as a temp file on the server.
@@ -206,19 +200,13 @@ func (a *WatermarkApi) UploadWatermarkFont(c *gin.Context) {
 	}
 	_ = os.Chmod(dstName, 0o644)
 
-	abs, err := filepath.Abs(dstName)
-	if err != nil {
-		app.FailWithMsg("获取绝对路径失败: "+err.Error(), c)
-		return
-	}
-
 	writeOK = true
 	name := safeBasename(dstName)
 	url := ""
 	if name != "" {
 		url = "/api/v1/watermarks/fonts/" + name
 	}
-	app.OkWithData(gin.H{"path": abs, "name": name, "url": url}, c)
+	app.OkWithData(gin.H{"path": name, "name": name, "url": url}, c)
 }
 
 // GetWatermarkFile serves uploaded PNG files by filename.

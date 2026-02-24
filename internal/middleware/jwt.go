@@ -19,16 +19,16 @@ type CustomClaims struct {
 	jwt.RegisteredClaims
 }
 
+const JWTCookieName = "tgvive_jwt_token"
+
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr, ok := parseBearerToken(c.GetHeader("Authorization"))
-		if !ok && isWebSocketUpgrade(c.Request) {
-			// Browser WebSocket can't set custom headers; allow token via query string for WS only.
-			tokenStr = strings.TrimSpace(c.Query("token"))
-			if tokenStr == "" {
-				tokenStr = strings.TrimSpace(c.Query("access_token"))
+		if !ok {
+			if v, err := c.Cookie(JWTCookieName); err == nil {
+				tokenStr = strings.TrimSpace(v)
+				ok = tokenStr != ""
 			}
-			ok = tokenStr != ""
 		}
 		if !ok {
 			if allowAnonymousDebug(c) {
@@ -139,15 +139,4 @@ func HasForwardedHeaders(r *http.Request) bool {
 		return true
 	}
 	return false
-}
-
-func isWebSocketUpgrade(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
-		return false
-	}
-	conn := strings.ToLower(r.Header.Get("Connection"))
-	return strings.Contains(conn, "upgrade")
 }

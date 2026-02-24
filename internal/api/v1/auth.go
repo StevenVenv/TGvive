@@ -2,6 +2,7 @@ package v1
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -77,6 +78,23 @@ func (a *AuthApi) DevToken(c *gin.Context) {
 		app.FailWithMsg("生成 Token 失败: "+err.Error(), c)
 		return
 	}
+
+	secure := c.Request != nil && c.Request.TLS != nil
+	if !secure && c.Request != nil {
+		if strings.EqualFold(strings.TrimSpace(c.Request.Header.Get("X-Forwarded-Proto")), "https") {
+			secure = true
+		}
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     middleware.JWTCookieName,
+		Value:    tokenStr,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		MaxAge:   int((30 * 24 * time.Hour).Seconds()),
+		Expires:  now.Add(30 * 24 * time.Hour),
+	})
 
 	app.OkWithData(gin.H{
 		"token": tokenStr,

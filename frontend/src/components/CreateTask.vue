@@ -134,29 +134,17 @@ function resetForm() {
   form.keyword_profile_id = 0
 }
 
-const tokenStorageKey = 'tgvive_jwt_token'
-
-function getStoredToken(): string {
-  try {
-    return (localStorage.getItem(tokenStorageKey) || '').trim()
-  } catch {
-    return ''
-  }
-}
-
 async function apiGet<T>(path: string): Promise<T> {
-  const token = getStoredToken()
   const res = await axios.get<ApiResponse<T>>(path, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    withCredentials: true,
   })
   if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')
   return res.data.data
 }
 
 async function apiPost<T>(path: string, body: any): Promise<T> {
-  const token = getStoredToken()
   const res = await axios.post<ApiResponse<T>>(path, body, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    withCredentials: true,
   })
   if (res.data.code !== 0) throw new Error(res.data.msg || '请求失败')
   return res.data.data

@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"my-go-server/internal/engine"
@@ -62,6 +64,13 @@ var wsUpgrader = websocket.Upgrader{
 		// Non-browser clients may omit Origin.
 		if origin == "" {
 			return true
+		}
+		if r != nil {
+			if u, err := url.Parse(origin); err == nil {
+				if strings.EqualFold(strings.TrimSpace(u.Host), strings.TrimSpace(r.Host)) {
+					return true
+				}
+			}
 		}
 		return middleware.IsOriginAllowed(origin)
 	},

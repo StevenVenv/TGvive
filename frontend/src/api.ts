@@ -39,27 +39,11 @@ export type {
   WatermarkRule,
 } from './types/domain'
 
-const tokenStorageKey = 'tgvive_jwt_token'
-
-function getStoredToken(): string {
-  try {
-    if (typeof localStorage === 'undefined') return ''
-    return (localStorage.getItem(tokenStorageKey) || '').trim()
-  } catch {
-    return ''
-  }
-}
-
 async function apiUpload<T>(path: string, form: FormData): Promise<T> {
-  const headers: Record<string, string> = {}
-
-  const cleanToken = getStoredToken().trim()
-  if (cleanToken) headers.Authorization = `Bearer ${cleanToken}`
-
   const res = await fetch(path, {
     method: 'POST',
-    headers,
     body: form,
+    credentials: 'include',
   })
 
   const json = (await res.json()) as ApiResponse<T>
@@ -74,13 +58,12 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     'Content-Type': 'application/json',
     ...(init?.headers ? (init.headers as Record<string, string>) : {}),
   }
-
-  const cleanToken = getStoredToken().trim()
-  if (cleanToken) headers.Authorization = `Bearer ${cleanToken}`
+  const credentials = init?.credentials ?? 'include'
 
   const res = await fetch(path, {
     ...init,
     headers,
+    credentials,
   })
 
   const json = (await res.json()) as ApiResponse<T>
@@ -94,13 +77,12 @@ export async function apiFetchBlob(path: string, init?: RequestInit): Promise<Bl
   const headers: Record<string, string> = {
     ...(init?.headers ? (init.headers as Record<string, string>) : {}),
   }
-
-  const cleanToken = getStoredToken().trim()
-  if (cleanToken) headers.Authorization = `Bearer ${cleanToken}`
+  const credentials = init?.credentials ?? 'include'
 
   const res = await fetch(path, {
     ...init,
     headers,
+    credentials,
   })
 
   const ct = String(res.headers.get('content-type') || '').toLowerCase()
