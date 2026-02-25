@@ -18,7 +18,7 @@ mysql:
   config: charset=utf8mb4&parseTime=True&loc=Local
 
 jwt:
-  secret: change_me
+  secret: BGA6mhwFnWp7zbdusN0zn8ifYzj0FZ1PELHZmNLMXH76
 
 telegram:
   session_path: ./sessions/
@@ -27,3 +27,7 @@ processor:
   video:
     enabled: true
     ffmpeg_path: ffmpeg
+
+auth:
+  admin_username: admin
+  admin_password: "123456"
