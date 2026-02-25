@@ -261,7 +261,9 @@ func buildImageOverlayFilter(rule model.VideoWatermarkRule, imagePath string) (f
 	xExpr, yExpr := ffmpegOverlayXYExpr(rule)
 	filter = strings.Join([]string{
 		"[1:v]format=rgba,colorchannelmixer=aa=" + formatFloat(opacity) + "[wm0]",
-		"[wm0][0:v]scale2ref=w=ref_w*" + formatFloat(scale) + ":h=-1[wm][base]",
+		// NOTE: In scale2ref, special -1/-2 height values preserve the *reference* AR, which would distort the watermark.
+		// Use explicit expression to preserve watermark (main) aspect ratio while scaling by reference width.
+		"[wm0][0:v]scale2ref=w=ref_w*" + formatFloat(scale) + ":h=main_h*ref_w*" + formatFloat(scale) + "/main_w[wm][base]",
 		"[base][wm]overlay=x='" + xExpr + "':y='" + yExpr + "':format=auto:shortest=1[outv]",
 	}, ";")
 	return filter, "[outv]", nil

@@ -30,6 +30,7 @@ func TestBuildImageOverlayFilter_Bounce(t *testing.T) {
 		"format=rgba",
 		"colorchannelmixer=aa=0.35",
 		"scale2ref=w=ref_w*0.15",
+		"h=main_h*ref_w*0.15/main_w",
 		"overlay=x='",
 		"shortest=1",
 		"sin(2*PI*t/12)",
@@ -159,7 +160,8 @@ func TestVideoWatermarkExprAndFilter_Clamp(t *testing.T) {
 
 	needles := []string{
 		"W*0.1",           // margin clamped to 0.1
-		"ref_w*0.5",       // scale clamped to 0.5
+		"ref_w*0.5",       // scale clamped to 0.5 (w + h)
+		"main_h*ref_w*0.5/main_w",
 		"aa=1",            // opacity clamped to 1
 		"sin(2*PI*t/120)", // period clamped to 120
 	}
