@@ -28,6 +28,11 @@ type TGPasswordSubmitReq struct {
 	Password  string `json:"password" binding:"required"`
 }
 
+type TGAccountCheckReq struct {
+	TimeoutMS   int  `json:"timeout_ms,omitempty"`
+	AutoUnblock bool `json:"auto_unblock,omitempty"`
+}
+
 func (a *TGAuthApi) ListAccounts(c *gin.Context) {
 	accounts, err := engine.ListTGAccounts()
 	if err != nil {
@@ -156,4 +161,54 @@ func (a *TGAuthApi) SubmitQRPassword(c *gin.Context) {
 	}
 
 	app.OkWithData(gin.H{"ok": true}, c)
+}
+
+func (a *TGAuthApi) CheckAccountSession(c *gin.Context) {
+	key := strings.TrimSpace(c.Param("key"))
+	if key == "" {
+		app.FailWithMsg("key 不能为空", c)
+		return
+	}
+
+	var req TGAccountCheckReq
+	_ = c.ShouldBindJSON(&req)
+
+	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+	if timeout > 45*time.Second {
+		timeout = 45 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	defer cancel()
+
+	res := engine.CheckTGAccountSession(ctx, key)
+	app.OkWithData(res, c)
+}
+
+func (a *TGAuthApi) CheckAccountSpamBot(c *gin.Context) {
+	key := strings.TrimSpace(c.Param("key"))
+	if key == "" {
+		app.FailWithMsg("key 不能为空", c)
+		return
+	}
+
+	var req TGAccountCheckReq
+	_ = c.ShouldBindJSON(&req)
+
+	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 12 * time.Second
+	}
+	if timeout > 60*time.Second {
+		timeout = 60 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	defer cancel()
+
+	res := engine.CheckTGAccountSpamBot(ctx, key, req.AutoUnblock)
+	app.OkWithData(res, c)
 }

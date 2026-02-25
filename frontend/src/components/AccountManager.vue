@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
+  checkTGAccountSession,
+  checkTGAccountSpamBot,
   deleteTGAccount,
   getAccountQRStatus,
   getCodeLoginStatus,
@@ -14,14 +16,16 @@ import {
   submitQRPassword,
   type CodeAuthState,
   type QRState,
+  type TGAccountSessionCheckResult,
+  type TGAccountSpamBotCheckResult,
   type TGAccount,
 } from '../api'
 
-type SpamCheckStatus = 'unchecked' | 'checking' | 'ok' | 'restricted'
+type SpamCheckStatus = 'unchecked' | 'checking' | 'ok' | 'restricted' | 'blocked' | 'unknown' | 'error'
 type KeepAliveStatus = 'idle' | 'checking' | 'valid' | 'invalid'
 
-type SpamCheckState = { status: SpamCheckStatus; checked_at?: number }
-type KeepAliveState = { status: KeepAliveStatus; checked_at?: number; detail?: Record<string, any> }
+type SpamCheckState = { status: SpamCheckStatus; checked_at?: number; text?: string; error?: string }
+type KeepAliveState = { status: KeepAliveStatus; checked_at?: number; detail?: Record<string, any>; error?: string }
 
 const accounts = ref<TGAccount[]>([])
 const loadingAccounts = ref(false)
@@ -33,22 +37,6 @@ const selectedAccount = computed(() => accounts.value.find((a) => a.key === sele
 
 const spamByKey = ref<Record<string, SpamCheckState>>({})
 const keepAliveByKey = ref<Record<string, KeepAliveState>>({})
-
-const spamTimers = new Map<string, number>()
-const keepAliveTimers = new Map<string, number>()
-
-function nowMs(): number {
-  return Date.now()
-}
-
-function hash01(seed: string): number {
-  let h = 2166136261
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return (h >>> 0) / 0xffffffff
-}
 
 function fmtTime(unixSeconds?: number): string {
   if (!unixSeconds) return '-'
@@ -130,55 +118,69 @@ function getKeepAliveState(key: string): KeepAliveState {
   return keepAliveByKey.value[key] || { status: 'idle' }
 }
 
-function isOnline(a: TGAccount): boolean {
-  const st = getKeepAliveState(a.key)
-  return st.status !== 'invalid'
+function normalizeSpamStatus(s: string): SpamCheckStatus {
+  const v = String(s || '')
+    .trim()
+    .toLowerCase()
+  if (v === 'ok') return 'ok'
+  if (v === 'restricted') return 'restricted'
+  if (v === 'blocked') return 'blocked'
+  if (v === 'error') return 'error'
+  if (v === 'unknown') return 'unknown'
+  return 'unknown'
 }
 
-function triggerSpamCheck(a: TGAccount) {
+function normalizeKeepAlive(res: TGAccountSessionCheckResult): KeepAliveStatus {
+  if (!res?.ok) return 'invalid'
+  return res.authorized ? 'valid' : 'invalid'
+}
+
+function buildKeepAliveDetailFromAPI(a: TGAccount, res: TGAccountSessionCheckResult) {
+  return {
+    key: a.key,
+    session_file: sessionFileName(a.key),
+    user_id: res.user_id ?? a.user_id ?? null,
+    username: res.username ? '@' + res.username : a.username ? '@' + a.username : null,
+    phone: res.phone ?? a.phone ?? null,
+    dc_id: res.this_dc ?? null,
+    nearest_dc: res.nearest_dc ?? null,
+    country: res.country ?? null,
+    restricted: Boolean(res.restricted ?? false) ? 'yes' : 'no',
+    session_updated_at: fmtTime(a.updated_at),
+    meta_updated_at: a.meta_updated_at ? fmtTime(a.meta_updated_at) : null,
+    error: res.error ?? null,
+  }
+}
+
+async function triggerSpamCheck(a: TGAccount, autoUnblock = false) {
   const key = a.key
   const cur = getSpamState(key)
   if (cur.status === 'checking') return
 
-  const next = { ...spamByKey.value, [key]: { status: 'checking' as const } }
-  spamByKey.value = next
-
-  const prevTimer = spamTimers.get(key)
-  if (prevTimer) window.clearTimeout(prevTimer)
-
-  const base = hash01('spambot:' + key)
-  const delay = 700 + Math.floor(base * 900)
-  const t = window.setTimeout(() => {
-    const restricted = hash01('spambot:result:' + key) < 0.18
+  spamByKey.value = { ...spamByKey.value, [key]: { status: 'checking' } }
+  try {
+    const r: TGAccountSpamBotCheckResult = await checkTGAccountSpamBot(key, { timeout_ms: 12_000, auto_unblock: autoUnblock })
+    const st = normalizeSpamStatus(r?.status || '')
     spamByKey.value = {
       ...spamByKey.value,
-      [key]: { status: restricted ? 'restricted' : 'ok', checked_at: Math.floor(nowMs() / 1000) },
+      [key]: {
+        status: st,
+        checked_at: Number(r?.checked_at || 0) || Math.floor(Date.now() / 1000),
+        text: String(r?.text || '').trim() || undefined,
+        error: String(r?.error || '').trim() || undefined,
+      },
     }
-  }, delay)
-  spamTimers.set(key, t)
-}
-
-function buildKeepAliveDetail(a: TGAccount) {
-  const base = Math.floor(nowMs() / 1000)
-  const userID = a.user_id || 0
-  const dc = ((userID || Math.floor(hash01('dc:' + a.key) * 1e9)) % 5) + 1
-  const regOffsetDays = 30 + Math.floor(hash01('reg:' + a.key) * 420)
-  const regAt = base - regOffsetDays * 86400
-
-  return {
-    key: a.key,
-    session_file: sessionFileName(a.key),
-    user_id: a.user_id ?? null,
-    username: a.username ? '@' + a.username : null,
-    phone: a.phone ?? null,
-    dc_id: dc,
-    registered_at: fmtTime(regAt),
-    session_updated_at: fmtTime(a.updated_at),
-    meta_updated_at: a.meta_updated_at ? fmtTime(a.meta_updated_at) : null,
+    if (r?.error) ElMessage.warning(r.error)
+  } catch (e: any) {
+    spamByKey.value = {
+      ...spamByKey.value,
+      [key]: { status: 'error', checked_at: Math.floor(Date.now() / 1000), error: e?.message || '检测失败' },
+    }
+    ElMessage.error(e?.message || '检测失败')
   }
 }
 
-function checkKeepAliveForSelected() {
+async function checkKeepAliveForSelected() {
   const a = selectedAccount.value
   if (!a) return
 
@@ -187,25 +189,39 @@ function checkKeepAliveForSelected() {
   if (cur.status === 'checking') return
 
   keepAliveByKey.value = { ...keepAliveByKey.value, [key]: { status: 'checking' } }
-
-  const prevTimer = keepAliveTimers.get(key)
-  if (prevTimer) window.clearTimeout(prevTimer)
-
-  const base = hash01('keepalive:' + key)
-  const delay = 800 + Math.floor(base * 850)
-  const t = window.setTimeout(() => {
-    const invalid = hash01('keepalive:result:' + key) < 0.1
-    const detail = buildKeepAliveDetail(a)
+  try {
+    const r: TGAccountSessionCheckResult = await checkTGAccountSession(key, { timeout_ms: 8_000 })
+    const st = normalizeKeepAlive(r)
+    const detail = buildKeepAliveDetailFromAPI(a, r)
     keepAliveByKey.value = {
       ...keepAliveByKey.value,
       [key]: {
-        status: invalid ? 'invalid' : 'valid',
-        checked_at: Math.floor(nowMs() / 1000),
+        status: st,
+        checked_at: Number(r?.checked_at || 0) || Math.floor(Date.now() / 1000),
         detail,
+        error: String(r?.error || '').trim() || undefined,
       },
     }
-  }, delay)
-  keepAliveTimers.set(key, t)
+    if (r?.error) ElMessage.warning(r.error)
+    else ElMessage.success('检测完成')
+  } catch (e: any) {
+    keepAliveByKey.value = {
+      ...keepAliveByKey.value,
+      [key]: {
+        status: 'invalid',
+        checked_at: Math.floor(Date.now() / 1000),
+        error: e?.message || '检测失败',
+        detail: {
+          key: a.key,
+          session_file: sessionFileName(a.key),
+          session_updated_at: fmtTime(a.updated_at),
+          meta_updated_at: a.meta_updated_at ? fmtTime(a.meta_updated_at) : null,
+          error: e?.message || '检测失败',
+        },
+      },
+    }
+    ElMessage.error(e?.message || '检测失败')
+  }
 }
 
 async function confirmAndRemove(a: TGAccount, title: string) {
@@ -515,8 +531,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopQRPoll()
   stopCodePoll()
-  for (const t of spamTimers.values()) window.clearTimeout(t)
-  for (const t of keepAliveTimers.values()) window.clearTimeout(t)
 })
 
 defineExpose({
@@ -612,12 +626,30 @@ defineExpose({
                 </span>
               </template>
 
-              <template v-else>
+              <template v-else-if="getSpamState(row.key).status === 'restricted'">
                 <i class="ri-spam-line bad" />
                 <span class="bad">受限</span>
                 <span v-if="getSpamState(row.key).checked_at" class="muted mono small">
                   · {{ fmtTime(getSpamState(row.key).checked_at) }}
                 </span>
+              </template>
+
+              <template v-else-if="getSpamState(row.key).status === 'blocked'">
+                <i class="ri-forbid-2-line bad" />
+                <span class="bad">被屏蔽</span>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row, true)">解除并检测</el-button>
+              </template>
+
+              <template v-else-if="getSpamState(row.key).status === 'error'">
+                <i class="ri-error-warning-line bad" />
+                <span class="bad">错误</span>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">重试</el-button>
+              </template>
+
+              <template v-else>
+                <i class="ri-question-line muted-icon" />
+                <span class="muted">未知</span>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">重试</el-button>
               </template>
             </div>
           </template>
@@ -625,10 +657,30 @@ defineExpose({
 
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <div class="state" :class="{ online: isOnline(row), offline: !isOnline(row) }">
-              <i :class="isOnline(row) ? 'ri-checkbox-circle-fill' : 'ri-close-circle-fill'" />
-              <span>{{ isOnline(row) ? '在线' : '离线' }}</span>
-            </div>
+            <template v-if="getKeepAliveState(row.key).status === 'valid'">
+              <div class="state online">
+                <i class="ri-checkbox-circle-fill" />
+                <span>在线</span>
+              </div>
+            </template>
+            <template v-else-if="getKeepAliveState(row.key).status === 'invalid'">
+              <div class="state offline">
+                <i class="ri-close-circle-fill" />
+                <span>离线</span>
+              </div>
+            </template>
+            <template v-else-if="getKeepAliveState(row.key).status === 'checking'">
+              <div class="state unknown">
+                <i class="ri-loader-4-line spinning" />
+                <span>检测中</span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="state unknown">
+                <i class="ri-question-fill" />
+                <span>未检测</span>
+              </div>
+            </template>
           </template>
         </el-table-column>
 
@@ -701,7 +753,7 @@ defineExpose({
             <i class="ri-loader-4-line spinning" />
             <div class="ka-text">
               <div class="ka-title">检测中...</div>
-              <div class="ka-sub">正在模拟请求，请稍候</div>
+              <div class="ka-sub">正在请求后端，请稍候</div>
             </div>
           </template>
           <template v-else-if="getKeepAliveState(selectedAccount.key).status === 'valid'">
@@ -719,6 +771,7 @@ defineExpose({
               <div class="ka-title">Session 失效</div>
               <div class="ka-sub">
                 最近检测：{{ fmtTime(getKeepAliveState(selectedAccount.key).checked_at) }}
+                <span v-if="getKeepAliveState(selectedAccount.key).error"> · {{ getKeepAliveState(selectedAccount.key).error }}</span>
               </div>
             </div>
           </template>
@@ -735,10 +788,18 @@ defineExpose({
             <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.user_id ?? '-' }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="DC" label-align="right">
-            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.dc_id ?? '-' }}</span>
+            <span class="mono">
+              {{ getKeepAliveState(selectedAccount.key).detail?.dc_id ?? '-' }}
+              <template v-if="getKeepAliveState(selectedAccount.key).detail?.nearest_dc">
+                / {{ getKeepAliveState(selectedAccount.key).detail?.nearest_dc }}
+              </template>
+              <template v-if="getKeepAliveState(selectedAccount.key).detail?.country">
+                ({{ getKeepAliveState(selectedAccount.key).detail?.country }})
+              </template>
+            </span>
           </el-descriptions-item>
-          <el-descriptions-item label="注册时间" label-align="right">
-            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.registered_at ?? '-' }}</span>
+          <el-descriptions-item label="限制" label-align="right">
+            <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.restricted ?? '-' }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="Session 更新时间" label-align="right">
             <span class="mono">{{ getKeepAliveState(selectedAccount.key).detail?.session_updated_at ?? '-' }}</span>
@@ -1103,6 +1164,9 @@ defineExpose({
   }
   &.offline {
     color: var(--am-bad);
+  }
+  &.unknown {
+    color: var(--el-text-color-secondary);
   }
 }
 

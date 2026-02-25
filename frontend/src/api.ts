@@ -213,6 +213,50 @@ export function deleteTGAccount(key: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/v1/tg/accounts/${safe}`, { method: 'DELETE' })
 }
 
+export type TGAccountSessionCheckResult = {
+  ok: boolean
+  checked_at: number
+  authorized: boolean
+  error?: string
+
+  user_id?: number
+  username?: string
+  phone?: string
+
+  restricted?: boolean
+  restriction_reasons?: string[]
+  country?: string
+  this_dc?: number
+  nearest_dc?: number
+}
+
+export function checkTGAccountSession(key: string, opts?: { timeout_ms?: number }): Promise<TGAccountSessionCheckResult> {
+  const safe = encodeURIComponent(key || '')
+  return apiFetch<TGAccountSessionCheckResult>(`/api/v1/tg/accounts/${safe}/check/session`, {
+    method: 'POST',
+    body: JSON.stringify(opts || {}),
+  })
+}
+
+export type TGAccountSpamBotCheckResult = {
+  ok: boolean
+  checked_at: number
+  status: 'ok' | 'restricted' | 'blocked' | 'unknown' | 'error' | string
+  error?: string
+  text?: string
+}
+
+export function checkTGAccountSpamBot(
+  key: string,
+  opts?: { timeout_ms?: number; auto_unblock?: boolean },
+): Promise<TGAccountSpamBotCheckResult> {
+  const safe = encodeURIComponent(key || '')
+  return apiFetch<TGAccountSpamBotCheckResult>(`/api/v1/tg/accounts/${safe}/check/spambot`, {
+    method: 'POST',
+    body: JSON.stringify(opts || {}),
+  })
+}
+
 export function listTGAccountDialogs(key: string, limit = 500): Promise<TGDialogItem[]> {
   const safe = encodeURIComponent(key || '')
   const q = new URLSearchParams({ limit: String(Math.max(1, Math.floor(Number(limit || 0) || 500))) })
