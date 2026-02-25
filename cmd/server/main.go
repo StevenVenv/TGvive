@@ -33,6 +33,10 @@ func main() {
 		global.Logger.Error("init db failed", zap.Error(err))
 		os.Exit(1)
 	}
+	if err := initialize.EnsureAdminUser(); err != nil {
+		global.Logger.Error("init admin user failed", zap.Error(err))
+		os.Exit(1)
+	}
 
 	// Start per-task scheduler (time-slot rules, polling quota).
 	engine.Scheduler.Start()

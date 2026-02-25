@@ -339,6 +339,25 @@ export function submitQRPassword(sessionId: string, password: string): Promise<{
   })
 }
 
+export type AuthUser = { id: number; username: string }
+
+export type AuthMeResult = { logged_in: boolean; user?: AuthUser }
+
+export function authMe(): Promise<AuthMeResult> {
+  return apiFetch<AuthMeResult>('/api/v1/auth/me', { method: 'GET' })
+}
+
+export function login(username: string, password: string): Promise<{ token?: string; user: AuthUser }> {
+  return apiFetch<{ token?: string; user: AuthUser }>('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username: String(username || '').trim(), password: String(password || '') }),
+  })
+}
+
+export function logout(): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/api/v1/auth/logout', { method: 'POST' })
+}
+
 export function getDevToken(username = 'admin'): Promise<{ token: string; user: { id: number; username: string } }> {
   const q = new URLSearchParams({ username })
   return apiFetch<{ token: string; user: { id: number; username: string } }>(`/api/v1/auth/dev/token?${q.toString()}`, {

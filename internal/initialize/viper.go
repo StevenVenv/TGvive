@@ -44,6 +44,10 @@ func InitConfig() error {
 	v.SetDefault("mysql.dbname", "")
 	v.SetDefault("mysql.config", "charset=utf8mb4&parseTime=True&loc=Local")
 	v.SetDefault("jwt.secret", "change_me")
+
+	v.SetDefault("auth.admin_username", "admin")
+	v.SetDefault("auth.admin_password", "")
+
 	v.SetDefault("telegram.api_id", 0)
 	v.SetDefault("telegram.api_hash", "")
 	v.SetDefault("telegram.session_path", "./sessions/")

@@ -39,6 +39,9 @@ func SetupRouter() *gin.Engine {
 
 		authV1 := apiV1.Group("/auth")
 		{
+			authV1.GET("/me", authApi.Me)
+			authV1.POST("/login", authApi.Login)
+			authV1.POST("/logout", authApi.Logout)
 			authV1.GET("/dev/token", authApi.DevToken)
 		}
 

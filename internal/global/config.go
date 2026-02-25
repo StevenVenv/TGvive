@@ -4,6 +4,7 @@ type AppConfig struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
+	Auth      AuthConfig      `mapstructure:"auth"`
 	Telegram  TelegramConfig  `mapstructure:"telegram"`
 	Proxy     ProxyConfig     `mapstructure:"proxy"`
 	Processor ProcessorConfig `mapstructure:"processor"`
@@ -45,6 +46,11 @@ type MySQLConfig struct {
 
 type JWTConfig struct {
 	Secret string `mapstructure:"secret"`
+}
+
+type AuthConfig struct {
+	AdminUsername string `mapstructure:"admin_username"`
+	AdminPassword string `mapstructure:"admin_password"`
 }
 
 type TelegramConfig struct {

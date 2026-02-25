@@ -10,7 +10,7 @@ import (
 	"my-go-server/internal/engine/localdb"
 	"my-go-server/internal/global"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
