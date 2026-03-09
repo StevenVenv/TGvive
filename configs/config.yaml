@@ -1,33 +1,22 @@
 server:
-  port: 8080
+  host: 0.0.0.0
+  port: 8081
   mode: debug # debug, release, test
   allow_anonymous_debug: false
   shutdown_timeout_sec: 10
   cors:
     allow_origins:
-      - http://localhost:5173
-      - http://127.0.0.1:5173
+      - http://localhost:5172
+      - http://127.0.0.1:5172
     allow_credentials: true
 
 mysql:
-  host: 192.168.0.100
+  host: 127.0.0.1
   port: 3306
-  user: test111
-  password: nL8i8kaLyjsArNZr
-  dbname: test111
+  user: change_me
+  password: change_me
+  dbname: change_me
   config: charset=utf8mb4&parseTime=True&loc=Local
 
 jwt:
-  secret: BGA6mhwFnWp7zbdusN0zn8ifYzj0FZ1PELHZmNLMXH76
-
-telegram:
-  session_path: ./sessions/
-
-processor:
-  video:
-    enabled: true
-    ffmpeg_path: ffmpeg
-
-auth:
-  admin_username: admin
-  admin_password: "123456"
+  secret: change_me_put_real_secret_in_configs_config_local_yaml

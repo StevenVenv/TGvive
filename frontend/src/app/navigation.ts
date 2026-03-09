@@ -16,7 +16,7 @@ export const mainNav: NavItem[] = [
   { key: 'accounts', label: '账号管理', icon: User },
 ]
 
-export const settingsNav: NavItem[] = [{ key: 'settings_proxy', label: '网络代理', icon: Connection }]
+export const settingsNav: NavItem[] = [{ key: 'settings_proxy', label: '账号与代理', icon: Connection }]
 
 export const settingsGroup = { key: 'settings', label: '系统设置', icon: Setting } as const
 
@@ -25,4 +25,3 @@ export function titleForView(v: ActiveView): string {
   const hit = all.find((x) => x.key === v)
   return hit?.label || 'TGvive'
 }
-

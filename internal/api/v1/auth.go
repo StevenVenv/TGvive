@@ -49,58 +49,20 @@ func (a *AuthApi) DevToken(c *gin.Context) {
 	var u model.User
 	err := global.DB.WithContext(c.Request.Context()).Where("username = ?", username).First(&u).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			u.Username = username
-			if err := global.DB.WithContext(c.Request.Context()).Create(&u).Error; err != nil {
-				app.FailWithMsg("创建用户失败: "+err.Error(), c)
-				return
-			}
-		} else {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			app.FailWithMsg("查询用户失败: "+err.Error(), c)
 			return
 		}
-	}
-
-	secret := strings.TrimSpace(global.Config.JWT.Secret)
-	if secret == "" {
-		app.FailWithMsg("服务端未配置 JWT Secret", c)
+		app.FailWithMsg("用户不存在", c)
 		return
 	}
 
-	now := time.Now()
-	claims := middleware.CustomClaims{
-		UserID: u.ID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(now),
-			NotBefore: jwt.NewNumericDate(now.Add(-10 * time.Second)),
-			ExpiresAt: jwt.NewNumericDate(now.Add(30 * 24 * time.Hour)),
-			Subject:   "dev",
-		},
-	}
-
-	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenStr, err := t.SignedString([]byte(secret))
+	tokenStr, exp, err := issueJWT(u.ID, u.AuthVersion, "dev")
 	if err != nil {
 		app.FailWithMsg("生成 Token 失败: "+err.Error(), c)
 		return
 	}
-
-	secure := c.Request != nil && c.Request.TLS != nil
-	if !secure && c.Request != nil {
-		if strings.EqualFold(strings.TrimSpace(c.Request.Header.Get("X-Forwarded-Proto")), "https") {
-			secure = true
-		}
-	}
-	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     middleware.JWTCookieName,
-		Value:    tokenStr,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   secure,
-		MaxAge:   int((30 * 24 * time.Hour).Seconds()),
-		Expires:  now.Add(30 * 24 * time.Hour),
-	})
+	setAuthCookie(c, tokenStr, exp)
 
 	app.OkWithData(gin.H{
 		"token": tokenStr,
@@ -141,7 +103,7 @@ func (a *AuthApi) Login(c *gin.Context) {
 		return
 	}
 
-	tokenStr, exp, err := issueJWT(u.ID, "login")
+	tokenStr, exp, err := issueJWT(u.ID, u.AuthVersion, "login")
 	if err != nil {
 		app.FailWithMsg("生成 Token 失败: "+err.Error(), c)
 		return
@@ -203,7 +165,12 @@ func (a *AuthApi) Me(c *gin.Context) {
 	}
 
 	var u model.User
-	if err := global.DB.WithContext(c.Request.Context()).Select("id", "username").Where("id = ?", claims.UserID).First(&u).Error; err != nil {
+	if err := global.DB.WithContext(c.Request.Context()).Select("id", "username", "auth_version").Where("id = ?", claims.UserID).First(&u).Error; err != nil {
+		app.OkWithData(gin.H{"logged_in": false}, c)
+		return
+	}
+	if middleware.NormalizeAuthVersion(u.AuthVersion) != middleware.NormalizeAuthVersion(claims.AuthVersion) {
+		clearAuthCookie(c)
 		app.OkWithData(gin.H{"logged_in": false}, c)
 		return
 	}
@@ -211,7 +178,7 @@ func (a *AuthApi) Me(c *gin.Context) {
 	app.OkWithData(gin.H{"logged_in": true, "user": u}, c)
 }
 
-func issueJWT(userID uint, subject string) (tokenStr string, exp time.Time, err error) {
+func issueJWT(userID uint, authVersion uint, subject string) (tokenStr string, exp time.Time, err error) {
 	secret := strings.TrimSpace(global.Config.JWT.Secret)
 	if secret == "" {
 		return "", time.Time{}, errors.New("服务端未配置 JWT Secret")
@@ -220,7 +187,8 @@ func issueJWT(userID uint, subject string) (tokenStr string, exp time.Time, err 
 	now := time.Now()
 	exp = now.Add(30 * 24 * time.Hour)
 	claims := middleware.CustomClaims{
-		UserID: userID,
+		UserID:      userID,
+		AuthVersion: middleware.NormalizeAuthVersion(authVersion),
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now.Add(-10 * time.Second)),

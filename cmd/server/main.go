@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -45,7 +47,11 @@ func main() {
 	global.StartMonitor()
 
 	r := router.SetupRouter()
-	addr := fmt.Sprintf(":%d", global.Config.Server.Port)
+	host := strings.TrimSpace(global.Config.Server.Host)
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(global.Config.Server.Port))
 
 	readTimeout := 15 * time.Second
 	writeTimeout := 60 * time.Second
@@ -59,7 +65,19 @@ func main() {
 		IdleTimeout:       idleTimeout,
 	}
 
-	global.Logger.Info("server starting", zap.String("addr", addr), zap.String("mode", strings.TrimSpace(global.Config.Server.Mode)))
+	configFile := ""
+	if global.Viper != nil {
+		configFile = strings.TrimSpace(global.Viper.ConfigFileUsed())
+	}
+	if configFile == "" {
+		configFile = "(defaults/search path)"
+	}
+	global.Logger.Info(
+		"server starting",
+		zap.String("addr", addr),
+		zap.String("mode", strings.TrimSpace(global.Config.Server.Mode)),
+		zap.String("config_file", configFile),
+	)
 
 	serverErr := make(chan error, 1)
 	go func() {

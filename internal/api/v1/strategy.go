@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"my-go-server/internal/engine"
-	"my-go-server/internal/global"
+	"my-go-server/internal/engine/processor"
 	"my-go-server/internal/model"
 	"my-go-server/internal/service"
 	"my-go-server/pkg/app"
@@ -631,14 +631,7 @@ func validateVideoWatermarkRule(r model.VideoWatermarkRule) error {
 		return nil
 	}
 
-	cfg := global.Config.Processor.Video
-	if !cfg.Enabled {
-		return errors.New("video_watermark_rule 需要先开启 processor.video.enabled")
-	}
-	ffmpegPath := strings.TrimSpace(cfg.FFmpegPath)
-	if ffmpegPath == "" {
-		ffmpegPath = "ffmpeg"
-	}
+	ffmpegPath := processor.DefaultFFmpegPath
 	if _, err := exec.LookPath(ffmpegPath); err != nil {
 		return fmt.Errorf("video_watermark_rule 未找到 FFmpeg: %s", ffmpegPath)
 	}

@@ -45,14 +45,12 @@ func (m *TaskManager) processors() processorSet {
 			if global.Logger != nil {
 				global.Logger.Warn("init video processor failed, disabled", zap.Error(err))
 			}
-			disabled := cfg.Video
-			disabled.Enabled = false
-			vid, _ = processor.NewVideoProcessor(disabled)
+			vid = processor.NewDisabledVideoProcessor(cfg.Video)
 		}
 		procs.Video = vid
 
 		// Cover image processing shares watermark settings but uses video-specific size/quality.
-		if cfg.Video.Enabled && cfg.Video.ExtractCover {
+		if cfg.Video.ExtractCover {
 			coverCfg := cfg.Image
 			coverCfg.Enabled = true
 			coverCfg.MaxWidth = cfg.Video.CoverMaxWidth
@@ -76,9 +74,7 @@ func (m *TaskManager) processors() processorSet {
 			procs.Image, _ = processor.NewImageProcessor(disabled)
 		}
 		if procs.Video == nil {
-			disabled := cfg.Video
-			disabled.Enabled = false
-			procs.Video, _ = processor.NewVideoProcessor(disabled)
+			procs.Video = processor.NewDisabledVideoProcessor(cfg.Video)
 		}
 		if procs.CoverImage == nil {
 			disabled := cfg.Image

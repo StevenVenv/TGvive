@@ -78,6 +78,10 @@ function onLoggedIn(user: AuthUser) {
   me.value = user
 }
 
+function onAccountUpdated(user: AuthUser) {
+  me.value = user
+}
+
 async function doLogout() {
   if (loggingOut.value) return
   loggingOut.value = true
@@ -161,7 +165,7 @@ onMounted(() => {
     <TaskList v-if="activeView === 'tasks'" ref="taskListRef" :active="true" />
     <StrategyManager v-if="activeView === 'strategies'" ref="strategyRef" />
     <Accounts v-if="activeView === 'accounts'" ref="accountRef" />
-    <Settings v-if="activeView === 'settings_proxy'" ref="settingsRef" />
+    <Settings v-if="activeView === 'settings_proxy'" ref="settingsRef" :user="me" @account-updated="onAccountUpdated" />
   </AdminLayout>
 </template>
 

@@ -36,7 +36,7 @@ function backendLabel(origin: string): string {
 }
 
 function openBackendDialog() {
-  backendInput.value = getBackendOrigin() || suggestLocalBackendOrigin(8080) || ''
+  backendInput.value = getBackendOrigin() || suggestLocalBackendOrigin(8081) || ''
   backendDialogOpen.value = true
 }
 
@@ -55,7 +55,7 @@ async function autoDetectBackend() {
 async function testAndSaveBackend() {
   const norm = normalizeBackendOrigin(backendInput.value)
   if (!norm) {
-    ElMessage.error('后端地址不合法（示例：http://localhost:8080）')
+    ElMessage.error('后端地址不合法（示例：http://localhost:8081）')
     return
   }
 
@@ -127,9 +127,9 @@ const pingTip = computed(() => {
           <span class="muted">当前：</span>
           <span class="mono">{{ backendLabel(getBackendOrigin()) }}</span>
         </div>
-        <el-input v-model="backendInput" placeholder="http://localhost:8080" clearable />
+        <el-input v-model="backendInput" placeholder="http://localhost:8081" clearable />
         <div class="backend-hint muted">
-          用于“前端与后端不同端口”场景（例如：后端 `:8080`，前端用 `python -m http.server` 在 `:8000`）。
+          用于“前端与后端不同端口”场景（例如：后端 `:8081`，前端开发服务在 `:5172`）。
         </div>
       </div>
       <template #footer>

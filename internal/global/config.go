@@ -4,13 +4,13 @@ type AppConfig struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
-	Auth      AuthConfig      `mapstructure:"auth"`
 	Telegram  TelegramConfig  `mapstructure:"telegram"`
 	Proxy     ProxyConfig     `mapstructure:"proxy"`
 	Processor ProcessorConfig `mapstructure:"processor"`
 }
 
 type ServerConfig struct {
+	Host string `mapstructure:"host"`
 	Port int    `mapstructure:"port"`
 	Mode string `mapstructure:"mode"`
 
@@ -48,15 +48,9 @@ type JWTConfig struct {
 	Secret string `mapstructure:"secret"`
 }
 
-type AuthConfig struct {
-	AdminUsername string `mapstructure:"admin_username"`
-	AdminPassword string `mapstructure:"admin_password"`
-}
-
 type TelegramConfig struct {
-	APIID       int    `mapstructure:"api_id"`
-	APIHash     string `mapstructure:"api_hash"`
-	SessionPath string `mapstructure:"session_path"`
+	APIID   int    `mapstructure:"api_id"`
+	APIHash string `mapstructure:"api_hash"`
 }
 
 type ProxyConfig struct {
@@ -109,8 +103,6 @@ type WatermarkConfig struct {
 }
 
 type VideoProcessorConfig struct {
-	Enabled            bool    `mapstructure:"enabled"`
-	FFmpegPath         string  `mapstructure:"ffmpeg_path"`
 	ExtractCover       bool    `mapstructure:"extract_cover"`
 	CoverTimestampSec  float64 `mapstructure:"cover_timestamp_sec"`
 	CoverMaxWidth      int     `mapstructure:"cover_max_width"`

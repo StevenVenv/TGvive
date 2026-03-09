@@ -6,9 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"my-go-server/internal/global"
 )
+
+const DefaultSessionDir = "./sessions"
+
+func SessionBasePath() string {
+	return DefaultSessionDir
+}
 
 func pendingSessionPath(finalSessionPath string) string {
 	finalSessionPath = strings.TrimSpace(finalSessionPath)
@@ -124,10 +128,7 @@ func (f *FileSessionStorage) StoreSession(ctx context.Context, data []byte) erro
 }
 
 func GetSessionPath(phone string) string {
-	basePath := strings.TrimSpace(global.Config.Telegram.SessionPath)
-	if basePath == "" {
-		basePath = "./sessions/"
-	}
+	basePath := SessionBasePath()
 
 	safe := sanitizePhone(phone)
 	if safe == "" {
@@ -138,10 +139,7 @@ func GetSessionPath(phone string) string {
 }
 
 func GetSessionPathForKey(key string) string {
-	basePath := strings.TrimSpace(global.Config.Telegram.SessionPath)
-	if basePath == "" {
-		basePath = "./sessions/"
-	}
+	basePath := SessionBasePath()
 
 	safe := sanitizeSessionKey(key)
 	if safe == "" {

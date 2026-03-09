@@ -68,7 +68,7 @@ export function resolveWSURL(path: string): string {
   return p.startsWith('/') ? base + p : base + '/' + p
 }
 
-export function suggestLocalBackendOrigin(port = 8080): string {
+export function suggestLocalBackendOrigin(port = 8081): string {
   const proto = window.location.protocol === 'https:' ? 'https:' : 'http:'
   const host = String(window.location.hostname || '').trim()
   if (!host) return ''
@@ -109,7 +109,7 @@ export async function ensureBackendOrigin(): Promise<void> {
 
   if (await probeBackendOrigin('')) return
 
-  const cand = suggestLocalBackendOrigin(8080)
+  const cand = suggestLocalBackendOrigin(8081)
   if (cand && (await probeBackendOrigin(cand))) {
     setBackendOrigin(cand)
   }

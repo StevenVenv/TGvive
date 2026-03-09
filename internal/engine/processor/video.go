@@ -19,6 +19,8 @@ import (
 
 var ErrFFmpegNotFound = errors.New("ffmpeg not found")
 
+const DefaultFFmpegPath = "ffmpeg"
+
 type VideoProcessor struct {
 	enabled           bool
 	ffmpegPath        string
@@ -27,26 +29,26 @@ type VideoProcessor struct {
 }
 
 func NewVideoProcessor(cfg global.VideoProcessorConfig) (*VideoProcessor, error) {
-	p := &VideoProcessor{
-		enabled:           cfg.Enabled,
-		ffmpegPath:        strings.TrimSpace(cfg.FFmpegPath),
-		extractCover:      cfg.ExtractCover,
-		coverTimestampSec: cfg.CoverTimestampSec,
-	}
-
-	if p.ffmpegPath == "" {
-		p.ffmpegPath = "ffmpeg"
-	}
-
-	if !p.enabled {
-		return p, nil
-	}
+	p := newVideoProcessor(cfg, true)
 
 	if _, err := exec.LookPath(p.ffmpegPath); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrFFmpegNotFound, p.ffmpegPath)
 	}
 
 	return p, nil
+}
+
+func NewDisabledVideoProcessor(cfg global.VideoProcessorConfig) *VideoProcessor {
+	return newVideoProcessor(cfg, false)
+}
+
+func newVideoProcessor(cfg global.VideoProcessorConfig, enabled bool) *VideoProcessor {
+	return &VideoProcessor{
+		enabled:           enabled,
+		ffmpegPath:        DefaultFFmpegPath,
+		extractCover:      cfg.ExtractCover,
+		coverTimestampSec: cfg.CoverTimestampSec,
+	}
 }
 
 func (p *VideoProcessor) Enabled() bool {

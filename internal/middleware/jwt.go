@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"my-go-server/internal/global"
+	"my-go-server/internal/model"
 	"my-go-server/pkg/app"
 	"my-go-server/pkg/e"
 
@@ -15,7 +16,8 @@ import (
 )
 
 type CustomClaims struct {
-	UserID uint `json:"user_id"`
+	UserID      uint `json:"user_id"`
+	AuthVersion uint `json:"auth_version"`
 	jwt.RegisteredClaims
 }
 
@@ -70,10 +72,34 @@ func JWTAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if global.DB == nil {
+			app.FailWithMsg("数据库未初始化", c)
+			c.Abort()
+			return
+		}
+
+		var u model.User
+		if err := global.DB.WithContext(c.Request.Context()).Select("id", "auth_version").Where("id = ?", claims.UserID).First(&u).Error; err != nil {
+			app.Fail(c, e.CodeUnauthorized, "Token 无效")
+			c.Abort()
+			return
+		}
+		if NormalizeAuthVersion(u.AuthVersion) != NormalizeAuthVersion(claims.AuthVersion) {
+			app.Fail(c, e.CodeUnauthorized, "登录状态已失效，请重新登录")
+			c.Abort()
+			return
+		}
 
 		c.Set("user_id", claims.UserID)
 		c.Next()
 	}
+}
+
+func NormalizeAuthVersion(v uint) uint {
+	if v == 0 {
+		return 1
+	}
+	return v
 }
 
 func parseBearerToken(authHeader string) (string, bool) {

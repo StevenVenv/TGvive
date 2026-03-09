@@ -44,7 +44,7 @@ const backendBadge = computed(() => {
 })
 
 function initBackendInput() {
-  backendInput.value = getBackendOrigin() || suggestLocalBackendOrigin(8080) || ''
+  backendInput.value = getBackendOrigin() || suggestLocalBackendOrigin(8081) || ''
 }
 
 async function autoDetectBackend() {
@@ -63,7 +63,7 @@ async function autoDetectBackend() {
 async function testAndSaveBackend() {
   const norm = normalizeBackendOrigin(backendInput.value)
   if (!norm) {
-    ElMessage.error('后端地址不合法（示例：http://localhost:8080）')
+    ElMessage.error('后端地址不合法（示例：http://localhost:8081）')
     return
   }
 
@@ -152,7 +152,7 @@ onMounted(() => {
           <div class="backend-cur muted">当前：{{ backendLabel }}</div>
         </div>
 
-        <el-input v-model="backendInput" placeholder="http://localhost:8080" clearable />
+        <el-input v-model="backendInput" placeholder="http://localhost:8081" clearable />
         <div class="backend-actions">
           <el-button size="small" @click="clearBackendOverride">清除</el-button>
           <el-button size="small" :loading="backendTesting" @click="autoDetectBackend">自动检测</el-button>
@@ -339,4 +339,3 @@ html.dark .backend,
   color: var(--el-text-color-secondary);
 }
 </style>
-

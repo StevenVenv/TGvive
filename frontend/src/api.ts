@@ -369,6 +369,17 @@ export function testProxyConfig(payload: {
   })
 }
 
+export function updateAccountSettings(payload: {
+  username: string
+  current_password: string
+  new_password?: string
+}): Promise<AuthUser> {
+  return apiFetch<AuthUser>('/api/v1/settings/account', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function submitPassword(sessionId: string, password: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/api/v1/tg/accounts/code/password', {
     method: 'POST',

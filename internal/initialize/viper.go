@@ -19,6 +19,7 @@ func InitConfig() error {
 	v.AddConfigPath("./configs")
 	v.AddConfigPath(".")
 
+	v.SetDefault("server.host", "0.0.0.0")
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.mode", "release")
 	v.SetDefault("server.allow_anonymous_debug", false)
@@ -26,6 +27,8 @@ func InitConfig() error {
 	v.SetDefault("server.shutdown_timeout_sec", 10)
 
 	v.SetDefault("server.cors.allow_origins", []string{
+		"http://localhost:5172",
+		"http://127.0.0.1:5172",
 		"http://localhost:5173",
 		"http://127.0.0.1:5173",
 		"http://localhost:4173",
@@ -45,12 +48,8 @@ func InitConfig() error {
 	v.SetDefault("mysql.config", "charset=utf8mb4&parseTime=True&loc=Local")
 	v.SetDefault("jwt.secret", "change_me")
 
-	v.SetDefault("auth.admin_username", "admin")
-	v.SetDefault("auth.admin_password", "")
-
 	v.SetDefault("telegram.api_id", 0)
 	v.SetDefault("telegram.api_hash", "")
-	v.SetDefault("telegram.session_path", "./sessions/")
 
 	// Proxy defaults (disabled by default).
 	v.SetDefault("proxy.enabled", false)
@@ -81,8 +80,6 @@ func InitConfig() error {
 	v.SetDefault("processor.image.watermark.margin", 16)
 	v.SetDefault("processor.image.watermark.scale", 0.2)
 
-	v.SetDefault("processor.video.enabled", false)
-	v.SetDefault("processor.video.ffmpeg_path", "ffmpeg")
 	v.SetDefault("processor.video.extract_cover", true)
 	v.SetDefault("processor.video.cover_timestamp_sec", 0.0)
 	v.SetDefault("processor.video.cover_max_width", 720)

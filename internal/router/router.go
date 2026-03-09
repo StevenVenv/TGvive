@@ -33,6 +33,7 @@ func SetupRouter() *gin.Engine {
 	watermarkApi := v1.WatermarkApi{}
 	systemApi := v1.SystemApi{}
 	proxyApi := v1.ProxyApi{}
+	accountApi := v1.AccountApi{}
 	apiV1 := r.Group("/api/v1")
 	{
 		apiV1.GET("/ping", v1.Ping)
@@ -80,6 +81,7 @@ func SetupRouter() *gin.Engine {
 
 			settingsV1 := protected.Group("/settings")
 			{
+				settingsV1.PUT("/account", accountApi.Update)
 				settingsV1.GET("/proxy", proxyApi.Get)
 				settingsV1.PUT("/proxy", proxyApi.Update)
 				settingsV1.POST("/proxy/test", proxyApi.Test)

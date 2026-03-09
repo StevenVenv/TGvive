@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"my-go-server/internal/global"
 )
 
 type TGAccount struct {
@@ -26,11 +24,7 @@ type TGAccount struct {
 }
 
 func ListTGAccounts() ([]TGAccount, error) {
-	base := strings.TrimSpace(global.Config.Telegram.SessionPath)
-	if base == "" {
-		base = "./sessions/"
-	}
-
+	base := SessionBasePath()
 	pattern := filepath.Join(base, "session_*.json")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {

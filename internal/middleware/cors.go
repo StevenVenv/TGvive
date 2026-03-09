@@ -73,7 +73,7 @@ func IsOriginAllowed(origin string) bool {
 	if origin == "" {
 		return false
 	}
-	if isDebugLoopbackOrigin(origin) {
+	if isDebugDevOrigin(origin) {
 		return true
 	}
 	allowed := global.Config.Server.CORS.AllowOrigins
@@ -95,7 +95,7 @@ func IsOriginAllowed(origin string) bool {
 	return false
 }
 
-func isDebugLoopbackOrigin(origin string) bool {
+func isDebugDevOrigin(origin string) bool {
 	if strings.ToLower(strings.TrimSpace(global.Config.Server.Mode)) != "debug" {
 		return false
 	}
@@ -121,7 +121,10 @@ func isDebugLoopbackOrigin(origin string) bool {
 		return true
 	}
 	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 func hasWildcard(in []string) bool {

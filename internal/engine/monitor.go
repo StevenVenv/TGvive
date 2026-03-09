@@ -1351,10 +1351,7 @@ func (rt *telegramRuntime) finishStart(err error, ready chan struct{}) {
 
 func pickSessionPath() (string, error) {
 	// Auto-detect session_*.json under session_path.
-	base := strings.TrimSpace(global.Config.Telegram.SessionPath)
-	if base == "" {
-		base = "./sessions/"
-	}
+	base := SessionBasePath()
 	pattern := filepath.Join(base, "session_*.json")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {

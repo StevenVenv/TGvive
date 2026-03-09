@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"my-go-server/internal/global"
+	"my-go-server/internal/engine/processor"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -158,11 +158,7 @@ type ffprobeSideData struct {
 }
 
 func ffprobePath() (string, error) {
-	ffmpegPath := strings.TrimSpace(global.Config.Processor.Video.FFmpegPath)
-	if ffmpegPath == "" {
-		ffmpegPath = "ffmpeg"
-	}
-
+	ffmpegPath := processor.DefaultFFmpegPath
 	ext := filepath.Ext(ffmpegPath)
 	base := strings.TrimSuffix(filepath.Base(ffmpegPath), ext)
 	if base == "ffmpeg" && strings.ContainsAny(ffmpegPath, `/\`) {
