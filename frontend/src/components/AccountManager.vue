@@ -637,19 +637,28 @@ defineExpose({
               <template v-else-if="getSpamState(row.key).status === 'blocked'">
                 <i class="ri-forbid-2-line bad" />
                 <span class="bad">被屏蔽</span>
-                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row, true)">解除并检测</el-button>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row, true)">
+                  <i class="ri-shield-check-line" />
+                  <span>解除并检测</span>
+                </el-button>
               </template>
 
               <template v-else-if="getSpamState(row.key).status === 'error'">
                 <i class="ri-error-warning-line bad" />
                 <span class="bad">错误</span>
-                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">重试</el-button>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">
+                  <i class="ri-refresh-line" />
+                  <span>重试</span>
+                </el-button>
               </template>
 
               <template v-else>
                 <i class="ri-question-line muted-icon" />
                 <span class="muted">未知</span>
-                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">重试</el-button>
+                <el-button link size="small" class="spam-btn" @click.stop="triggerSpamCheck(row)">
+                  <i class="ri-refresh-line" />
+                  <span>重试</span>
+                </el-button>
               </template>
             </div>
           </template>
@@ -814,7 +823,7 @@ defineExpose({
       </div>
     </div>
 
-    <el-dialog v-model="addDialogOpen" title="添加账号" width="720px" :close-on-click-modal="false">
+    <el-dialog v-model="addDialogOpen" title="添加账号" width="720px" class="bt-dialog" :close-on-click-modal="false">
       <el-tabs v-model="addTab">
         <el-tab-pane label="扫码登录" name="qr">
           <div class="add-box">
@@ -917,6 +926,7 @@ defineExpose({
       v-model="passwordDialogOpen"
       :title="passwordTarget === 'qr' ? '扫码登录二级密码' : '二级密码'"
       width="420px"
+      class="bt-dialog"
       :close-on-click-modal="false"
     >
       <el-input v-model="passwordInput" type="password" show-password placeholder="请输入 Telegram 2FA 密码" />
@@ -935,56 +945,56 @@ defineExpose({
 
 <style scoped lang="scss">
 :global(:root) {
-  --am-bg: #f5f7fa;
-  --am-panel: #ffffff;
-  --am-panel2: rgba(0, 0, 0, 0.02);
-  --am-border: rgba(0, 0, 0, 0.08);
-  --am-text: rgba(0, 0, 0, 0.88);
-  --am-muted: rgba(0, 0, 0, 0.6);
-  --am-muted2: rgba(0, 0, 0, 0.42);
-  --am-ok: #67c23a;
-  --am-bad: #ff4d4f;
-  --am-input-bg: rgba(0, 0, 0, 0.03);
-  --am-mask: rgba(255, 255, 255, 0.55);
-  --am-hover: rgba(0, 0, 0, 0.04);
-  --am-selected: rgba(64, 158, 255, 0.1);
-  --am-shadow: rgba(0, 0, 0, 0.18);
-  --am-chip-bg: rgba(0, 0, 0, 0.03);
-  --am-chip-border: rgba(0, 0, 0, 0.08);
-  --am-chip-text: rgba(0, 0, 0, 0.72);
-  --am-qr-bg: rgba(0, 0, 0, 0.04);
-  --am-qr-border: rgba(0, 0, 0, 0.1);
-  --am-danger-hover-bg: rgba(255, 77, 79, 0.08);
+  --am-bg: transparent;
+  --am-panel: var(--tgv-panel-bg);
+  --am-panel2: var(--tgv-panel-soft-bg);
+  --am-border: var(--tgv-border);
+  --am-text: var(--el-text-color-primary);
+  --am-muted: var(--el-text-color-secondary);
+  --am-muted2: var(--tgv-text-soft);
+  --am-ok: var(--el-color-success);
+  --am-bad: var(--el-color-danger);
+  --am-input-bg: var(--tgv-panel-soft-bg);
+  --am-mask: rgba(255, 255, 255, 0.68);
+  --am-hover: color-mix(in srgb, var(--el-color-primary) 8%, transparent);
+  --am-selected: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
+  --am-shadow: rgba(0, 21, 41, 0.08);
+  --am-chip-bg: var(--tgv-panel-muted-bg);
+  --am-chip-border: var(--tgv-border-soft);
+  --am-chip-text: var(--el-text-color-regular);
+  --am-qr-bg: var(--tgv-panel-soft-bg);
+  --am-qr-border: var(--tgv-border);
+  --am-danger-hover-bg: color-mix(in srgb, var(--el-color-danger) 10%, transparent);
 }
 
 :global(html.dark) {
-  --am-bg: #1e1e1e;
-  --am-panel: #242424;
-  --am-panel2: rgba(255, 255, 255, 0.03);
-  --am-border: rgba(255, 255, 255, 0.08);
-  --am-text: rgba(255, 255, 255, 0.92);
-  --am-muted: rgba(255, 255, 255, 0.58);
-  --am-muted2: rgba(255, 255, 255, 0.45);
-  --am-ok: #67c23a;
-  --am-bad: #ff4d4f;
-  --am-input-bg: rgba(255, 255, 255, 0.04);
+  --am-bg: transparent;
+  --am-panel: var(--tgv-panel-bg);
+  --am-panel2: var(--tgv-panel-soft-bg);
+  --am-border: var(--tgv-border);
+  --am-text: var(--el-text-color-primary);
+  --am-muted: var(--el-text-color-secondary);
+  --am-muted2: var(--tgv-text-soft);
+  --am-ok: var(--el-color-success);
+  --am-bad: var(--el-color-danger);
+  --am-input-bg: var(--tgv-panel-soft-bg);
   --am-mask: rgba(0, 0, 0, 0.35);
-  --am-hover: rgba(255, 255, 255, 0.06);
-  --am-selected: rgba(64, 158, 255, 0.12);
+  --am-hover: color-mix(in srgb, var(--el-color-primary) 10%, transparent);
+  --am-selected: color-mix(in srgb, var(--el-color-primary) 14%, transparent);
   --am-shadow: rgba(0, 0, 0, 0.35);
-  --am-chip-bg: rgba(255, 255, 255, 0.04);
-  --am-chip-border: rgba(255, 255, 255, 0.1);
-  --am-chip-text: rgba(255, 255, 255, 0.72);
-  --am-qr-bg: rgba(0, 0, 0, 0.18);
-  --am-qr-border: rgba(255, 255, 255, 0.1);
-  --am-danger-hover-bg: rgba(255, 77, 79, 0.12);
+  --am-chip-bg: var(--tgv-panel-muted-bg);
+  --am-chip-border: var(--tgv-border-soft);
+  --am-chip-text: var(--el-text-color-regular);
+  --am-qr-bg: var(--tgv-panel-soft-bg);
+  --am-qr-border: var(--tgv-border);
+  --am-danger-hover-bg: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
 }
 
 .account-page {
   background: var(--am-bg);
-  border: 1px solid var(--am-border);
-  border-radius: 14px;
-  padding: 14px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
   color: var(--am-text);
 }
 
@@ -1066,7 +1076,7 @@ defineExpose({
 .table-card {
   background: var(--am-panel);
   border: 1px solid var(--am-border);
-  border-radius: 14px;
+  border-radius: var(--tgv-card-radius);
   overflow: hidden;
   transition: box-shadow 0.35s ease, border-color 0.35s ease;
 
@@ -1200,7 +1210,7 @@ defineExpose({
   margin-top: 12px;
   background: var(--am-panel);
   border: 1px solid var(--am-border);
-  border-radius: 14px;
+  border-radius: var(--tgv-card-radius);
   padding: 14px;
 }
 
@@ -1260,7 +1270,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 10px;
-  border-radius: 12px;
+  border-radius: var(--tgv-card-radius);
   padding: 12px 12px;
   border: 1px solid var(--am-border);
   background: var(--am-panel2);
@@ -1327,7 +1337,7 @@ defineExpose({
   color: var(--am-muted);
   background: var(--am-panel2);
   border: 1px solid var(--am-border);
-  border-radius: 12px;
+  border-radius: var(--tgv-card-radius);
   padding: 10px 12px;
 
   i {
@@ -1346,7 +1356,7 @@ defineExpose({
 .qr-box {
   width: 260px;
   height: 260px;
-  border-radius: 14px;
+  border-radius: var(--tgv-card-radius);
   border: 1px solid var(--am-qr-border);
   background: var(--am-qr-bg);
   display: flex;

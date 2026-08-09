@@ -4,9 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	sqliteDriver "github.com/glebarez/sqlite"
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
@@ -20,14 +23,30 @@ import (
 const mysqlErrUnknownDatabase uint16 = 1049
 
 func InitDB() error {
-	c := global.Config.MySQL
-	if strings.TrimSpace(c.Host) == "" || c.Port <= 0 || strings.TrimSpace(c.User) == "" || strings.TrimSpace(c.DBName) == "" {
-		return errors.New("mysql config is incomplete (host/port/user/dbname required)")
-	}
-
 	logMode := logger.Warn
 	if global.Config.Server.Mode == "debug" {
 		logMode = logger.Info
+	}
+
+	driver := strings.ToLower(strings.TrimSpace(global.Config.Database.Driver))
+	if driver == "" {
+		driver = "mysql"
+	}
+
+	switch driver {
+	case "sqlite", "sqlite3", "local":
+		return initSQLite(logMode)
+	case "mysql":
+		return initMySQL(logMode)
+	default:
+		return fmt.Errorf("unsupported database.driver %q (use mysql or sqlite)", global.Config.Database.Driver)
+	}
+}
+
+func initMySQL(logMode logger.LogLevel) error {
+	c := global.Config.MySQL
+	if strings.TrimSpace(c.Host) == "" || c.Port <= 0 || strings.TrimSpace(c.User) == "" || strings.TrimSpace(c.DBName) == "" {
+		return errors.New("mysql config is incomplete (host/port/user/dbname required)")
 	}
 
 	db, err := openMySQL(c, logMode)
@@ -42,17 +61,62 @@ func InitDB() error {
 	}
 
 	global.DB = db
-
-	if err := global.DB.AutoMigrate(&model.User{}, &model.Task{}, &model.Strategy{}, &model.KeywordProfile{}, &model.MessageMapping{}); err != nil {
-		return fmt.Errorf("auto migrate failed: %w", err)
-	}
-	if err := ensureCoreTables(global.DB); err != nil {
+	if err := migrateCoreTables(global.DB); err != nil {
 		return err
 	}
 
 	sqlDB, err := global.DB.DB()
 	if err == nil && sqlDB != nil {
 		tuneMySQLPool(sqlDB)
+	}
+	return nil
+}
+
+func initSQLite(logMode logger.LogLevel) error {
+	path := strings.TrimSpace(global.Config.Database.SQLitePath)
+	if path == "" {
+		path = "./data/tgvive.sqlite"
+	}
+
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create sqlite directory failed: %w", err)
+		}
+	}
+
+	db, err := gorm.Open(sqliteDriver.Open(path), &gorm.Config{
+		Logger: logger.Default.LogMode(logMode),
+		NamingStrategy: schema.NamingStrategy{
+			SingularTable: true,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("sqlite open failed: %w", err)
+	}
+
+	_ = db.Exec("PRAGMA journal_mode=WAL;").Error
+	_ = db.Exec("PRAGMA synchronous=NORMAL;").Error
+	_ = db.Exec("PRAGMA busy_timeout=5000;").Error
+	_ = db.Exec("PRAGMA foreign_keys=ON;").Error
+
+	global.DB = db
+	if err := migrateCoreTables(global.DB); err != nil {
+		return err
+	}
+
+	if sqlDB, err := global.DB.DB(); err == nil && sqlDB != nil {
+		tuneSQLitePool(sqlDB)
+	}
+	return nil
+}
+
+func migrateCoreTables(db *gorm.DB) error {
+	if err := db.AutoMigrate(&model.User{}, &model.Task{}, &model.Strategy{}, &model.KeywordProfile{}, &model.MessageMapping{}); err != nil {
+		return fmt.Errorf("auto migrate failed: %w", err)
+	}
+	if err := ensureCoreTables(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -165,4 +229,16 @@ func tuneMySQLPool(db *sql.DB) {
 	db.SetMaxIdleConns(10)
 	db.SetConnMaxLifetime(2 * time.Hour)
 	db.SetConnMaxIdleTime(15 * time.Minute)
+}
+
+func tuneSQLitePool(db *sql.DB) {
+	if db == nil {
+		return
+	}
+
+	// SQLite is file-backed, so keep writes serialized to avoid lock churn.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	db.SetConnMaxIdleTime(0)
 }

@@ -156,13 +156,13 @@ async function copyToClipboard(text: string) {
 <style scoped lang="scss">
 .regex-cheat {
   :deep(.el-dialog) {
-    border: 1px solid #363637;
-    background: #252525;
-    border-radius: 4px;
+    border: 1px solid var(--tgv-border);
+    background: var(--tgv-panel-bg);
+    border-radius: var(--tgv-card-radius);
   }
 
   :deep(.el-dialog__header) {
-    border-bottom: 1px solid #363637;
+    border-bottom: 1px solid var(--tgv-border-soft);
     margin-right: 0;
   }
 
@@ -171,7 +171,7 @@ async function copyToClipboard(text: string) {
   }
 
   :deep(.el-dialog__footer) {
-    border-top: 1px solid #363637;
+    border-top: 1px solid var(--tgv-border-soft);
   }
 }
 
@@ -184,7 +184,7 @@ async function copyToClipboard(text: string) {
 }
 
 .tbl :deep(.el-table__inner-wrapper) {
-  border-radius: 4px;
+  border-radius: var(--tgv-card-radius);
 }
 
 .expr {
@@ -194,10 +194,10 @@ async function copyToClipboard(text: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 6px 10px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.22);
-  color: rgba(255, 255, 255, 0.92);
+  border-radius: 5px;
+  border: 1px solid var(--tgv-border-soft);
+  background: var(--tgv-panel-soft-bg);
+  color: var(--el-text-color-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   font-size: 12px;
 }

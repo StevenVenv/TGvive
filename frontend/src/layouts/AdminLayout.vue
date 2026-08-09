@@ -49,8 +49,8 @@ function onMenuSelect(idx: string) {
           :default-active="activeView"
           :collapse="collapsed"
           :collapse-transition="false"
-          background-color="#304156"
-          text-color="#bfcbd9"
+          background-color="transparent"
+          text-color="#c0c8d2"
           active-text-color="#409eff"
           @select="onMenuSelect"
         >
@@ -65,8 +65,8 @@ function onMenuSelect(idx: string) {
           :default-active="activeView"
           :collapse="collapsed"
           :collapse-transition="false"
-          background-color="#304156"
-          text-color="#bfcbd9"
+          background-color="transparent"
+          text-color="#c0c8d2"
           active-text-color="#409eff"
           :default-openeds="activeView === 'settings_proxy' ? [settingsGroup.key] : []"
           @select="onMenuSelect"
@@ -122,6 +122,8 @@ function onMenuSelect(idx: string) {
 <style scoped>
 .tgv-layout {
   height: 100vh;
+  min-width: 0;
+  background: var(--tgv-main-bg);
 }
 
 .tgv-aside {
@@ -130,6 +132,8 @@ function onMenuSelect(idx: string) {
   display: flex;
   flex-direction: column;
   border-right: 1px solid rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  transition: width 0.18s ease;
 }
 
 html.dark .tgv-aside {
@@ -137,12 +141,13 @@ html.dark .tgv-aside {
 }
 
 .tgv-brand {
-  height: 56px;
-  padding: 0 14px;
+  height: 58px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex: none;
 }
 
 .tgv-brand.collapsed {
@@ -153,8 +158,8 @@ html.dark .tgv-aside {
 .tgv-logo {
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #409eff, #67c23a);
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-success));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -175,10 +180,28 @@ html.dark .tgv-aside {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  min-height: 0;
 }
 
 .tgv-menu {
   border-right: none;
+  --el-menu-item-height: 52px;
+  --el-menu-sub-item-height: 46px;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.06);
+  --el-menu-active-color: var(--el-color-primary);
+  --el-menu-text-color: var(--tgv-aside-text);
+  --el-menu-bg-color: transparent;
+}
+
+.tgv-menu :deep(.el-menu-item),
+.tgv-menu :deep(.el-sub-menu__title) {
+  margin: 2px 8px;
+  border-radius: 8px;
+}
+
+.tgv-menu :deep(.el-menu-item.is-active) {
+  background: rgba(64, 158, 255, 0.12);
+  font-weight: 700;
 }
 
 .tgv-menu-bottom {
@@ -187,6 +210,9 @@ html.dark .tgv-aside {
 
 .tgv-body {
   min-width: 0;
+  height: 100vh;
+  background: var(--tgv-main-bg);
+  overflow: auto;
 }
 
 .tgv-header {
@@ -201,11 +227,11 @@ html.dark .tgv-aside {
   width: 100%;
   max-width: var(--tgv-content-max-width);
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
 
 .tgv-header-left {
@@ -217,6 +243,12 @@ html.dark .tgv-aside {
 
 .tgv-icon-btn :deep(.el-icon) {
   font-size: 18px;
+}
+
+.tgv-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
 }
 
 .tgv-title {
@@ -248,20 +280,72 @@ html.dark .tgv-aside {
 .tgv-header-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  min-width: 0;
 }
 
 .tgv-main {
-  background: var(--tgv-main-bg);
-  padding: 16px;
-  overflow: auto;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: var(--tgv-content-max-width);
+  margin: 0 auto;
+  background: transparent;
+  padding: 8px;
+  overflow: visible;
 }
 
 .tgv-main-inner {
-  max-width: var(--tgv-content-max-width);
-  margin: 0 auto;
-  min-height: 100%;
+  width: 100%;
+  margin: 0;
+  min-height: 0;
+}
+
+@media (max-width: 768px) {
+  .tgv-aside {
+    width: 64px !important;
+    flex: 0 0 64px !important;
+  }
+
+  .tgv-brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .tgv-name,
+  .tgv-menu :deep(.el-menu-item span),
+  .tgv-menu :deep(.el-sub-menu__title span),
+  .tgv-menu :deep(.el-sub-menu__icon-arrow) {
+    display: none;
+  }
+
+  .tgv-menu :deep(.el-menu-item),
+  .tgv-menu :deep(.el-sub-menu__title) {
+    justify-content: center;
+    padding: 0 !important;
+  }
+
+  .tgv-header {
+    height: auto !important;
+    min-height: 60px;
+  }
+
+  .tgv-header-inner {
+    min-height: 60px;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    flex-wrap: wrap;
+  }
+
+  .tgv-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .tgv-main {
+    padding: 6px;
+  }
 }
 </style>

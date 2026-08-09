@@ -121,7 +121,7 @@ const pingTip = computed(() => {
       </el-button>
     </el-tooltip>
 
-    <el-dialog v-model="backendDialogOpen" title="连接后端" width="460px" class="backend-dialog">
+    <el-dialog v-model="backendDialogOpen" title="连接后端" width="460px" class="bt-dialog backend-dialog">
       <div class="backend-body">
         <div class="backend-row">
           <span class="muted">当前：</span>
@@ -133,9 +133,18 @@ const pingTip = computed(() => {
         </div>
       </div>
       <template #footer>
-        <el-button @click="clearBackendOverride">清除</el-button>
-        <el-button :loading="backendTesting" @click="autoDetectBackend">自动检测</el-button>
-        <el-button type="primary" :loading="backendTesting" @click="testAndSaveBackend">测试并保存</el-button>
+        <el-button @click="clearBackendOverride">
+          <i class="ri-delete-bin-6-line" />
+          <span>清除</span>
+        </el-button>
+        <el-button :loading="backendTesting" @click="autoDetectBackend">
+          <i class="ri-radar-line" />
+          <span>自动检测</span>
+        </el-button>
+        <el-button type="primary" :loading="backendTesting" @click="testAndSaveBackend">
+          <i class="ri-save-3-line" />
+          <span>测试并保存</span>
+        </el-button>
       </template>
     </el-dialog>
   </div>

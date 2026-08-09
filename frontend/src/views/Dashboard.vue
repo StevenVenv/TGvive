@@ -525,7 +525,7 @@ onBeforeUnmount(() => {
       </el-space>
     </div>
 
-    <el-row :gutter="12" class="dash-row">
+    <el-row :gutter="8" class="dash-row">
       <el-col :xs="24" :md="12" :lg="8">
         <el-card class="bt-card" shadow="never">
           <template #header>
@@ -815,8 +815,14 @@ onBeforeUnmount(() => {
             </div>
             <div class="log-right">
               <el-checkbox v-model="stickToBottom" size="small">自动滚动</el-checkbox>
-              <el-button size="small" @click="clearLogs">清空</el-button>
-              <el-button size="small" @click="copyVisibleLogs">复制</el-button>
+              <el-button size="small" @click="clearLogs">
+                <i class="ri-delete-bin-6-line" />
+                <span>清空</span>
+              </el-button>
+              <el-button size="small" @click="copyVisibleLogs">
+                <i class="ri-file-copy-line" />
+                <span>复制</span>
+              </el-button>
             </div>
           </div>
 
@@ -837,14 +843,21 @@ onBeforeUnmount(() => {
 .dashboard {
   width: 100%;
   --dash-box-radius: 12px;
-  --dash-box-border: var(--el-border-color-lighter);
-  --dash-box-bg: var(--el-fill-color-extra-light, var(--el-fill-color-lighter));
-  --dash-box-bg-soft: var(--el-fill-color-light);
+  --dash-box-border: var(--tgv-border-soft);
+  --dash-box-bg: var(--tgv-panel-soft-bg);
+  --dash-box-bg-soft: var(--tgv-panel-muted-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .dash-row > :deep(.el-col) {
   display: flex;
   min-height: 0;
+}
+
+.dash-row {
+  row-gap: 8px;
 }
 
 .dash-row > :deep(.el-col) > .bt-card {
@@ -855,7 +868,7 @@ onBeforeUnmount(() => {
 .dash-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .dash-stack .split-line {
@@ -865,7 +878,7 @@ onBeforeUnmount(() => {
 .dash-box {
   border: 1px solid var(--dash-box-border);
   background: var(--dash-box-bg);
-  border-radius: var(--dash-box-radius);
+  border-radius: var(--tgv-card-radius);
   padding: 10px 10px;
 }
 
@@ -879,7 +892,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 .dash-title {
@@ -986,7 +999,7 @@ onBeforeUnmount(() => {
 .overview-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .ov-card {
@@ -1032,7 +1045,7 @@ onBeforeUnmount(() => {
   font-size: 13px;
   line-height: 1.25;
   color: var(--el-text-color-primary);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .ov-sub {
@@ -1055,7 +1068,7 @@ onBeforeUnmount(() => {
 .net-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .net-item {
@@ -1197,10 +1210,11 @@ onBeforeUnmount(() => {
 .mini-kpis {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .kpi {
+  min-width: 0;
 }
 
 .kpi-k {
@@ -1278,7 +1292,7 @@ onBeforeUnmount(() => {
 .svc-kv {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .kv {

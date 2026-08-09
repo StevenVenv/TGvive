@@ -64,4 +64,12 @@ watch(activeTab, (v) => {
 .accounts-tabs :deep(.el-tabs__header) {
   margin-bottom: 12px;
 }
+
+.accounts-tabs :deep(.el-tabs__content) {
+  padding: 0;
+}
+
+.accounts-tabs :deep(.el-tabs__nav) {
+  border-color: var(--tgv-border-soft);
+}
 </style>

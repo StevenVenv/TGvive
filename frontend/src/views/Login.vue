@@ -154,9 +154,18 @@ onMounted(() => {
 
         <el-input v-model="backendInput" placeholder="http://localhost:8081" clearable />
         <div class="backend-actions">
-          <el-button size="small" @click="clearBackendOverride">清除</el-button>
-          <el-button size="small" :loading="backendTesting" @click="autoDetectBackend">自动检测</el-button>
-          <el-button size="small" type="primary" :loading="backendTesting" @click="testAndSaveBackend">测试并保存</el-button>
+          <el-button size="small" @click="clearBackendOverride">
+            <i class="ri-delete-bin-6-line" />
+            <span>清除</span>
+          </el-button>
+          <el-button size="small" :loading="backendTesting" @click="autoDetectBackend">
+            <i class="ri-radar-line" />
+            <span>自动检测</span>
+          </el-button>
+          <el-button size="small" type="primary" :loading="backendTesting" @click="testAndSaveBackend">
+            <i class="ri-save-3-line" />
+            <span>测试并保存</span>
+          </el-button>
         </div>
         <div class="hint muted">前后端不同端口时（例如 python 起前端），需要在这里设置后端地址。</div>
       </div>
@@ -170,8 +179,14 @@ onMounted(() => {
         </el-form-item>
 
         <div class="actions">
-          <el-button type="primary" :loading="submitting" @click="doLogin">登录</el-button>
-          <el-button :loading="submitting" @click="devLogin">Dev 登录</el-button>
+          <el-button type="primary" :loading="submitting" @click="doLogin">
+            <i class="ri-login-box-line" />
+            <span>登录</span>
+          </el-button>
+          <el-button :loading="submitting" @click="devLogin">
+            <i class="ri-code-box-line" />
+            <span>Dev 登录</span>
+          </el-button>
         </div>
       </el-form>
 
@@ -204,7 +219,7 @@ html.dark .login-page,
 .login-card {
   width: 100%;
   max-width: 460px;
-  border-radius: 16px;
+  border-radius: var(--tgv-card-radius, 8px);
   padding: 18px 18px 14px;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(0, 0, 0, 0.06);
@@ -229,8 +244,8 @@ html.dark .login-card,
 .logo {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #409eff, #67c23a);
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-success));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -259,8 +274,8 @@ html.dark .login-card,
 
 .backend {
   padding: 12px;
-  border-radius: 12px;
-  border: 1px dashed rgba(0, 0, 0, 0.12);
+  border-radius: var(--tgv-card-radius, 8px);
+  border: 1px dashed var(--tgv-border, rgba(0, 0, 0, 0.12));
   margin: 10px 0 14px;
 }
 

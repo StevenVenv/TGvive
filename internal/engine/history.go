@@ -1823,7 +1823,7 @@ func persistHistoryMaxID(ctx context.Context, taskID uint, maxID int) error {
 		ctx = context.Background()
 	}
 	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
-		Update("history_max_id", gorm.Expr("GREATEST(history_max_id, ?)", maxID)).Error
+		Update("history_max_id", gorm.Expr("CASE WHEN history_max_id < ? THEN ? ELSE history_max_id END", maxID, maxID)).Error
 }
 
 func persistHistoryCursorAndMax(ctx context.Context, taskID uint, cursor int) error {
@@ -1839,7 +1839,7 @@ func persistHistoryCursorAndMax(ctx context.Context, taskID uint, cursor int) er
 	return global.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ?", taskID).
 		Updates(map[string]any{
 			"history_cursor": cursor,
-			"history_max_id": gorm.Expr("GREATEST(history_max_id, ?)", cursor),
+			"history_max_id": gorm.Expr("CASE WHEN history_max_id < ? THEN ? ELSE history_max_id END", cursor, cursor),
 		}).Error
 }
 

@@ -730,7 +730,7 @@ defineExpose({
   <div class="task-list">
     <el-row :gutter="12">
       <el-col :xs="24" :lg="16">
-        <el-card class="bt-card pane-card" shadow="never">
+        <el-card class="bt-card pane-card" :class="{ 'is-empty-card': tasks.length === 0 }" shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -906,7 +906,7 @@ defineExpose({
       </el-col>
 
       <el-col :xs="24" :lg="8">
-        <el-card class="bt-card pane-card" shadow="never">
+        <el-card class="bt-card pane-card" :class="{ 'is-empty-card': !selectedTask }" shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -1159,7 +1159,10 @@ defineExpose({
       <template #footer>
         <el-space>
           <el-button :disabled="editSubmitting" @click="editVisible = false">取消</el-button>
-          <el-button type="primary" :loading="editSubmitting" @click="submitEdit">保存修改</el-button>
+          <el-button type="primary" :loading="editSubmitting" @click="submitEdit">
+            <i class="ri-save-3-line" />
+            <span>保存修改</span>
+          </el-button>
         </el-space>
       </template>
     </el-dialog>
@@ -1171,15 +1174,35 @@ defineExpose({
   width: 100%;
 }
 
+.task-list :deep(.el-row) {
+  row-gap: 12px;
+}
+
+.task-list :deep(.el-col) {
+  display: flex;
+  min-width: 0;
+}
+
 .pane-card {
-  height: calc(100vh - 120px);
+  height: clamp(520px, calc(100vh - 260px), 760px);
+  width: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.pane-card.is-empty-card {
+  height: auto;
+  min-height: 320px;
 }
 
 .pane-card :deep(.el-card__body) {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
+}
+
+.pane-card.is-empty-card :deep(.el-card__body) {
+  min-height: 260px;
 }
 
 .pane {
@@ -1194,18 +1217,31 @@ defineExpose({
   overflow: hidden;
 }
 
+.pane-card.is-empty-card .table-body {
+  min-height: 260px;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
 }
 
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.toolbar-right {
+  min-width: 0;
 }
 
 .progress-tip {
@@ -1225,6 +1261,7 @@ defineExpose({
 .peer {
   display: flex;
   gap: 6px;
+  min-width: 0;
 }
 
 .peer-body {
@@ -1244,6 +1281,8 @@ defineExpose({
   display: flex;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+  font-size: 12px;
 }
 
 .sub + .sub {
@@ -1312,8 +1351,8 @@ defineExpose({
 .log-console {
   flex: 1;
   overflow: auto;
-  border-radius: 10px;
-  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--tgv-card-radius);
+  border: 1px solid var(--tgv-border);
   background: #0b1020;
   padding: 12px;
 }
@@ -1416,5 +1455,16 @@ html.dark .log-console {
 
 :deep(.select-avatar img) {
   object-fit: cover;
+}
+
+@media (max-width: 992px) {
+  .pane-card {
+    height: auto;
+    min-height: 420px;
+  }
+
+  .table-body {
+    min-height: 420px;
+  }
 }
 </style>

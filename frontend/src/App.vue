@@ -150,14 +150,19 @@ onMounted(() => {
 
   <AdminLayout v-else v-model:activeView="activeView" v-model:collapsed="collapsed" v-model:theme="theme">
     <template #header-actions>
-      <CreateTask v-if="activeView === 'tasks'" @refresh="onRefreshTasks" />
-      <el-button class="refresh-btn" @click="refreshCurrent">
-        <el-icon><RefreshRight /></el-icon>
-        刷新
-      </el-button>
-      <div class="userbar">
-        <span class="user">{{ me?.username || '' }}</span>
-        <el-button size="small" :loading="loggingOut" @click="doLogout">退出</el-button>
+      <div class="app-header-actions">
+        <CreateTask v-if="activeView === 'tasks'" @refresh="onRefreshTasks" />
+        <el-button class="refresh-btn" @click="refreshCurrent">
+          <el-icon><RefreshRight /></el-icon>
+          <span>刷新</span>
+        </el-button>
+        <div class="userbar">
+          <span class="user">{{ me?.username || '' }}</span>
+          <el-button size="small" :loading="loggingOut" @click="doLogout">
+            <i class="ri-logout-box-r-line" />
+            <span>退出</span>
+          </el-button>
+        </div>
       </div>
     </template>
 
@@ -170,6 +175,14 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.app-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .refresh-btn :deep(.el-icon) {
   margin-right: 6px;
 }
@@ -178,13 +191,18 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-left: 6px;
+  min-height: 32px;
+  padding-left: 4px;
 }
 
 .user {
   font-size: 12px;
   font-weight: 700;
   color: var(--el-text-color-regular);
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .boot {
@@ -198,7 +216,7 @@ onMounted(() => {
 .boot-card {
   width: 100%;
   max-width: 420px;
-  border-radius: 16px;
+  border-radius: var(--tgv-card-radius, 8px);
   padding: 18px;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(0, 0, 0, 0.06);
@@ -216,9 +234,9 @@ html.dark .boot-card {
 .boot-logo {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: 10px;
   margin: 0 auto 10px;
-  background: linear-gradient(135deg, #409eff, #67c23a);
+  background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-success));
   display: flex;
   align-items: center;
   justify-content: center;

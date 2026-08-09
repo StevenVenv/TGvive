@@ -40,6 +40,9 @@ func InitConfig() error {
 	v.SetDefault("server.cors.allow_credentials", true)
 	v.SetDefault("server.cors.max_age_sec", 600)
 
+	v.SetDefault("database.driver", "mysql")
+	v.SetDefault("database.sqlite_path", "./data/tgvive.sqlite")
+
 	v.SetDefault("mysql.host", "127.0.0.1")
 	v.SetDefault("mysql.port", 3306)
 	v.SetDefault("mysql.user", "root")

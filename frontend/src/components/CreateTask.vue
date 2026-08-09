@@ -431,7 +431,10 @@ watch(
 </script>
 
 <template>
-  <el-button type="primary" @click="open = true">新建任务</el-button>
+  <el-button type="primary" class="create-task-btn" @click="open = true">
+    <i class="ri-add-line" />
+    <span>新建任务</span>
+  </el-button>
 
   <el-dialog v-model="open" title="新建转发任务" width="660px" class="bt-dialog">
     <div v-loading="loading" class="body">
@@ -601,7 +604,10 @@ watch(
     <template #footer>
       <el-space>
         <el-button @click="open = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submit">创建</el-button>
+        <el-button type="primary" :loading="submitting" @click="submit">
+          <i class="ri-add-line" />
+          <span>创建</span>
+        </el-button>
       </el-space>
     </template>
   </el-dialog>
@@ -610,6 +616,11 @@ watch(
 <style scoped lang="scss">
 .body {
   padding: 4px 2px 0;
+}
+
+.create-task-btn {
+  display: inline-flex;
+  align-items: center;
 }
 
 .form :deep(.el-form-item) {

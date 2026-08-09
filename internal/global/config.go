@@ -2,11 +2,17 @@ package global
 
 type AppConfig struct {
 	Server    ServerConfig    `mapstructure:"server"`
+	Database  DatabaseConfig  `mapstructure:"database"`
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	Telegram  TelegramConfig  `mapstructure:"telegram"`
 	Proxy     ProxyConfig     `mapstructure:"proxy"`
 	Processor ProcessorConfig `mapstructure:"processor"`
+}
+
+type DatabaseConfig struct {
+	Driver     string `mapstructure:"driver"`
+	SQLitePath string `mapstructure:"sqlite_path"`
 }
 
 type ServerConfig struct {

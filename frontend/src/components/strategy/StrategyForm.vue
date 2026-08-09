@@ -2971,7 +2971,10 @@ defineExpose<StrategyFormExpose>({
       <slot name="actions">
         <el-space>
           <el-button @click="cancel">{{ cancelText }}</el-button>
-          <el-button type="primary" @click="submit">{{ submitText }}</el-button>
+          <el-button type="primary" @click="submit">
+            <i class="ri-save-3-line" />
+            <span>{{ submitText }}</span>
+          </el-button>
         </el-space>
       </slot>
     </div>
@@ -3079,9 +3082,9 @@ defineExpose<StrategyFormExpose>({
 
 .wm-preview {
   margin-top: 10px;
-  border: 1px solid #363637;
-  border-radius: 6px;
-  background: #161616;
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
   overflow: hidden;
 }
 
@@ -3090,8 +3093,8 @@ defineExpose<StrategyFormExpose>({
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-bottom: 1px solid #2a2a2a;
-  background: #202020;
+  border-bottom: 1px solid var(--tgv-border-soft);
+  background: var(--tgv-panel-muted-bg);
   color: var(--el-text-color-primary);
 
   i {
@@ -3138,8 +3141,8 @@ defineExpose<StrategyFormExpose>({
 .wm-preview-img {
   max-width: 100%;
   object-fit: contain;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.2);
+  border-radius: 5px;
+  background: var(--tgv-panel-muted-bg);
 }
 
 @keyframes wm-bounce {
@@ -3169,15 +3172,15 @@ defineExpose<StrategyFormExpose>({
 }
 
 .panel-card {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--tgv-card-radius, 12px);
-  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-bg);
   margin-bottom: 12px;
 
   :deep(.el-card__header) {
     padding: 12px 14px;
-    border-bottom: 1px solid var(--el-border-color-lighter);
-    background: var(--el-fill-color-light);
+    border-bottom: 1px solid var(--tgv-border-soft);
+    background: var(--tgv-panel-muted-bg);
   }
 
   :deep(.el-card__body) {
@@ -3240,7 +3243,7 @@ defineExpose<StrategyFormExpose>({
 
 .ct-meta {
   font-size: 12px;
-  color: #a6a9ad;
+  color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
 
@@ -3257,15 +3260,15 @@ defineExpose<StrategyFormExpose>({
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #a6a9ad;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
 .ct-tags :deep(.el-check-tag) {
-  border-radius: 4px;
-  border: 1px solid #363637;
-  background: #252525;
-  color: #a6a9ad;
+  border-radius: 5px;
+  border: 1px solid var(--tgv-border-soft);
+  background: var(--tgv-panel-soft-bg);
+  color: var(--el-text-color-secondary);
   padding: 6px 10px;
   height: 30px;
   line-height: 18px;
@@ -3276,12 +3279,12 @@ defineExpose<StrategyFormExpose>({
 
 .ct-tags :deep(.el-check-tag.is-checked) {
   border-color: var(--el-color-primary);
-  background: color-mix(in srgb, var(--el-color-primary) 18%, #252525);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--el-color-primary) 16%, var(--tgv-panel-soft-bg));
+  color: var(--el-color-primary);
 }
 
 .ct-tags :deep(.el-check-tag:hover) {
-  border-color: color-mix(in srgb, #363637 60%, #ffffff);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .ct-tag {
@@ -3321,9 +3324,9 @@ defineExpose<StrategyFormExpose>({
 }
 
 .monitor-box {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--tgv-card-radius, 12px);
-  background: var(--el-fill-color-light);
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
   padding: 12px;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3389,12 +3392,12 @@ defineExpose<StrategyFormExpose>({
   width: 100%;
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
-  --el-table-header-bg-color: color-mix(in srgb, var(--el-fill-color-light) 70%, transparent);
-  border-radius: var(--tgv-card-radius, 12px);
+  --el-table-header-bg-color: var(--tgv-panel-muted-bg);
+  border-radius: var(--tgv-card-radius);
 }
 
 .schedule-table :deep(.el-table__inner-wrapper) {
-  border-radius: var(--tgv-card-radius, 12px);
+  border-radius: var(--tgv-card-radius);
   overflow: hidden;
 }
 

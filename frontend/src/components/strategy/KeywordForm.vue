@@ -196,10 +196,10 @@ defineExpose<KeywordFormExpose>({
                       />
                       <el-switch
                         v-model="r.is_regex"
+                        class="regex-switch"
                         inline-prompt
                         active-text="正则"
                         inactive-text="文本"
-                        style="--el-switch-on-color: #e6a23c"
                       />
                       <el-button link type="danger" class="rule-del" @click="removeBlockRule(idx)">
                         <i class="ri-delete-bin-line" />
@@ -254,10 +254,10 @@ defineExpose<KeywordFormExpose>({
                       />
                       <el-switch
                         v-model="r.is_regex"
+                        class="regex-switch"
                         inline-prompt
                         active-text="正则"
                         inactive-text="文本"
-                        style="--el-switch-on-color: #e6a23c"
                       />
                       <el-button link type="danger" class="rule-del" @click="removeAllowRule(idx)">
                         <i class="ri-delete-bin-line" />
@@ -328,7 +328,10 @@ defineExpose<KeywordFormExpose>({
       <slot name="actions">
         <el-space>
           <el-button @click="cancel">{{ cancelText }}</el-button>
-          <el-button type="primary" @click="submit">{{ submitText }}</el-button>
+          <el-button type="primary" @click="submit">
+            <i class="ri-save-3-line" />
+            <span>{{ submitText }}</span>
+          </el-button>
         </el-space>
       </slot>
     </div>
@@ -364,7 +367,7 @@ defineExpose<KeywordFormExpose>({
 .form :deep(.el-form-item__label) {
   padding: 0 0 6px;
   line-height: 1.15;
-  color: #a6a9ad;
+  color: var(--el-text-color-regular);
 }
 
 .hint {
@@ -417,10 +420,14 @@ defineExpose<KeywordFormExpose>({
 }
 
 .tab-pane {
-  border: 1px solid #363637;
-  border-radius: 4px;
-  background: #1e1e1e;
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
   padding: 12px;
+}
+
+.regex-switch {
+  --el-switch-on-color: var(--el-color-warning);
 }
 
 .rule-list {
@@ -471,12 +478,12 @@ defineExpose<KeywordFormExpose>({
 
 .tab-label i {
   font-size: 14px;
-  color: rgba(191, 203, 217, 0.85);
+  color: var(--el-text-color-secondary);
 }
 
 .tip-icon {
   font-size: 14px;
-  color: rgba(191, 203, 217, 0.75);
+  color: var(--el-text-color-secondary);
   cursor: help;
 }
 
@@ -517,7 +524,7 @@ defineExpose<KeywordFormExpose>({
 .rules-row--head {
   font-size: 12px;
   padding-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--tgv-border-soft);
 }
 
 .action {

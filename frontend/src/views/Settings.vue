@@ -233,7 +233,7 @@ watch(
 <template>
   <div class="settings">
     <el-row :gutter="12">
-      <el-col :xs="24" :xl="12">
+      <el-col :xs="24" :lg="12">
         <el-card class="bt-card" shadow="never">
           <template #header>
             <div class="card-header">
@@ -292,7 +292,7 @@ watch(
         </el-card>
       </el-col>
 
-      <el-col :xs="24" :xl="12">
+      <el-col :xs="24" :lg="12">
         <el-card class="bt-card" shadow="never">
           <template #header>
             <div class="card-header">
@@ -405,12 +405,28 @@ watch(
   width: 100%;
 }
 
+.settings :deep(.el-row) {
+  row-gap: 12px;
+}
+
+.settings :deep(.el-col) {
+  display: flex;
+}
+
+.settings :deep(.bt-card) {
+  width: 100%;
+}
+
 .status {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
 }
 
 .status-title {
@@ -448,9 +464,9 @@ watch(
 
 .note-item {
   padding: 12px;
-  border-radius: 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-light);
+  border-radius: var(--tgv-card-radius);
+  border: 1px solid var(--tgv-border-soft);
+  background: var(--tgv-panel-soft-bg);
 }
 
 .note-item .k {

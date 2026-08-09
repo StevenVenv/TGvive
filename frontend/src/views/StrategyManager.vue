@@ -708,7 +708,7 @@ onMounted(() => {
   <div class="strategy-manager">
     <el-tabs v-model="activeTab" class="bt-tabs">
       <el-tab-pane label="行为策略库" name="library">
-        <el-card class="bt-card pane-card" shadow="never">
+        <el-card class="bt-card pane-card pane-card-table" :class="{ 'is-empty-card': filteredStrategies.length === 0 }" shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -774,7 +774,7 @@ onMounted(() => {
 
       <el-tab-pane label="新建行为策略" name="create">
         <div class="create-wrap">
-          <el-card class="bt-card pane-card" shadow="never">
+          <el-card class="bt-card pane-card pane-card-form" shadow="never">
             <template #header>
               <div class="card-header">
                 <div class="card-title">
@@ -806,7 +806,7 @@ onMounted(() => {
       </el-tab-pane>
 
       <el-tab-pane label="关键词策略" name="keywords">
-        <el-card class="bt-card pane-card" shadow="never">
+        <el-card class="bt-card pane-card pane-card-table" :class="{ 'is-empty-card': filteredKwProfiles.length === 0 }" shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -921,14 +921,6 @@ onMounted(() => {
 <style scoped lang="scss">
 .strategy-manager {
   width: 100%;
-  --tgvive-green: #20a53a;
-  --el-color-primary: var(--tgvive-green);
-  --el-color-primary-dark-2: color-mix(in srgb, var(--tgvive-green) 80%, #000);
-  --el-color-primary-light-3: color-mix(in srgb, var(--tgvive-green) 70%, #fff);
-  --el-color-primary-light-5: color-mix(in srgb, var(--tgvive-green) 50%, #fff);
-  --el-color-primary-light-7: color-mix(in srgb, var(--tgvive-green) 30%, #fff);
-  --el-color-primary-light-8: color-mix(in srgb, var(--tgvive-green) 20%, #fff);
-  --el-color-primary-light-9: color-mix(in srgb, var(--tgvive-green) 10%, #fff);
 }
 
 .bt-tabs :deep(.el-tabs__header) {
@@ -936,6 +928,7 @@ onMounted(() => {
 }
 
 .pane-card {
+  width: 100%;
   display: flex;
   flex-direction: column;
 
@@ -949,13 +942,23 @@ onMounted(() => {
 }
 
 @media (min-width: 1200px) {
-  .pane-card {
-    height: calc(100vh - 160px);
+  .pane-card-table {
+    height: clamp(520px, calc(100vh - 260px), 740px);
   }
 
-  .pane-card-auto {
+  .pane-card-form,
+  .pane-card-auto,
+  .pane-card-table.is-empty-card {
     height: auto;
   }
+
+  .pane-card-table.is-empty-card {
+    min-height: 320px;
+  }
+}
+
+.pane-card-table.is-empty-card :deep(.el-card__body) {
+  min-height: 260px;
 }
 
 .pane {
@@ -980,17 +983,27 @@ onMounted(() => {
   overflow: hidden;
 }
 
+.pane-card-table.is-empty-card .table-body {
+  min-height: 260px;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
 }
 
 .toolbar-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .toolbar-right {
@@ -1001,6 +1014,7 @@ onMounted(() => {
 
 .search {
   width: 260px;
+  max-width: 100%;
 }
 
 .st-name {
@@ -1023,14 +1037,21 @@ onMounted(() => {
 .debug-tip {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--tgv-card-radius);
+  border: 1px solid var(--tgv-border-soft);
+  background: var(--tgv-panel-soft-bg);
 }
 
 .kw-dialog {
   :deep(.el-dialog) {
     max-width: 96vw;
+  }
+}
+
+@media (max-width: 768px) {
+  .toolbar-right,
+  .search {
+    width: 100%;
   }
 }
 </style>

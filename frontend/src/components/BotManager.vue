@@ -286,7 +286,7 @@ onMounted(async () => {
       </el-table>
     </div>
 
-    <el-dialog v-model="dialogOpen" :title="dialogMode === 'add' ? '添加 Bot' : '编辑 Bot'" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="dialogOpen" :title="dialogMode === 'add' ? '添加 Bot' : '编辑 Bot'" width="560px" class="bt-dialog" :close-on-click-modal="false">
       <el-form label-position="top">
         <el-form-item label="名称（可选）">
           <el-input v-model="formName" placeholder="例如：发布机器人 A" />
@@ -328,11 +328,11 @@ onMounted(async () => {
 
 <style scoped lang="scss">
 .bot-page {
-  background: var(--am-bg, #f5f7fa);
-  border: 1px solid var(--am-border, rgba(0, 0, 0, 0.08));
-  border-radius: 14px;
-  padding: 14px;
-  color: var(--am-text, rgba(0, 0, 0, 0.88));
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: var(--el-text-color-primary);
 }
 
 .header {
@@ -390,7 +390,7 @@ onMounted(async () => {
 }
 
 .muted {
-  color: var(--am-muted, rgba(0, 0, 0, 0.6));
+  color: var(--el-text-color-secondary);
 }
 
 .mono {
@@ -406,15 +406,15 @@ onMounted(async () => {
 }
 
 .table-card {
-  background: var(--am-panel, #ffffff);
-  border: 1px solid var(--am-border, rgba(0, 0, 0, 0.08));
-  border-radius: 14px;
+  background: var(--tgv-panel-bg);
+  border: 1px solid var(--tgv-border);
+  border-radius: var(--tgv-card-radius);
   overflow: hidden;
   transition: box-shadow 0.35s ease, border-color 0.35s ease;
 
   &.pulse {
-    border-color: rgba(64, 158, 255, 0.35);
-    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.12), 0 12px 32px rgba(0, 0, 0, 0.18);
+    border-color: var(--el-color-primary-light-5);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--el-color-primary) 14%, transparent);
   }
 }
 
@@ -456,7 +456,7 @@ onMounted(async () => {
 }
 
 .danger {
-  color: #ff4d4f;
+  color: var(--el-color-danger);
 }
 
 .row {

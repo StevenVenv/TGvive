@@ -151,8 +151,14 @@ onMounted(async () => {
 
       <el-input-number v-model="limit" :min="50" :max="5000" controls-position="right" style="width: 150px" />
 
-      <el-button type="primary" :disabled="!selectedKey" :loading="loadingDialogs" @click="loadDialogs">加载</el-button>
-      <el-button :loading="loadingAccounts" @click="reloadAccounts">刷新账号</el-button>
+      <el-button type="primary" :disabled="!selectedKey" :loading="loadingDialogs" @click="loadDialogs">
+        <i class="ri-download-cloud-line" />
+        <span>加载</span>
+      </el-button>
+      <el-button :loading="loadingAccounts" @click="reloadAccounts">
+        <i class="ri-refresh-line" />
+        <span>刷新账号</span>
+      </el-button>
     </div>
 
     <div class="hint muted">
@@ -177,14 +183,20 @@ onMounted(async () => {
       <el-table-column label="推荐填写" min-width="240">
         <template #default="{ row }">
           <div class="mono val">{{ row.task_value }}</div>
-          <el-button link size="small" @click="copyText(row.task_value)">复制</el-button>
+          <el-button link size="small" @click="copyText(row.task_value)">
+            <i class="ri-file-copy-line" />
+            <span>复制</span>
+          </el-button>
         </template>
       </el-table-column>
 
       <el-table-column label="Bot Chat ID" min-width="240">
         <template #default="{ row }">
           <div class="mono val">{{ row.bot_chat_id }}</div>
-          <el-button link size="small" @click="copyText(row.bot_chat_id)">复制</el-button>
+          <el-button link size="small" @click="copyText(row.bot_chat_id)">
+            <i class="ri-file-copy-line" />
+            <span>复制</span>
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -194,6 +206,9 @@ onMounted(async () => {
 <style scoped>
 .dialogs-page {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .toolbar {
@@ -201,12 +216,18 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
-  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--tgv-border);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-bg);
 }
 
 .hint {
-  margin-bottom: 10px;
   line-height: 1.6;
+  padding: 10px 12px;
+  border: 1px solid var(--tgv-border-soft);
+  border-radius: var(--tgv-card-radius);
+  background: var(--tgv-panel-soft-bg);
 }
 
 .muted {
@@ -227,5 +248,11 @@ onMounted(async () => {
 
 .dlg-table :deep(.el-table__cell) {
   vertical-align: top;
+}
+
+.dlg-table {
+  border: 1px solid var(--tgv-border);
+  border-radius: var(--tgv-card-radius);
+  overflow: hidden;
 }
 </style>
