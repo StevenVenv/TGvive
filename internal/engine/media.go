@@ -32,7 +32,44 @@ var ErrMediaDownload = errors.New("media download failed")
 
 const tmpMediaRoot = "./tmp/tgmedia"
 
-const telegramMediaDownloadAttempts = 5
+const (
+	telegramMediaDownloadAttempts       = 5
+	telegramPhotoDownloadAttempts       = 2
+	telegramPhotoDownloadAttemptTimeout = 45 * time.Second
+	telegramMediaDownloadMinTimeout     = 2 * time.Minute
+	telegramMediaDownloadMaxTimeout     = 30 * time.Minute
+	telegramMediaDownloadTimeoutGrace   = 60 * time.Second
+	telegramMediaDownloadMinRateBytes   = 256 * 1024
+)
+
+func telegramMediaDownloadAttemptsForKind(kind mediaKind) int {
+	if kind == mediaKindPhoto {
+		return telegramPhotoDownloadAttempts
+	}
+	return telegramMediaDownloadAttempts
+}
+
+func telegramMediaDownloadTimeout(size int64, kind mediaKind) time.Duration {
+	if kind == mediaKindPhoto {
+		return telegramPhotoDownloadAttemptTimeout
+	}
+	if size <= 0 {
+		return telegramMediaDownloadMinTimeout
+	}
+
+	seconds := size / telegramMediaDownloadMinRateBytes
+	if size%telegramMediaDownloadMinRateBytes != 0 {
+		seconds++
+	}
+	timeout := time.Duration(seconds)*time.Second + telegramMediaDownloadTimeoutGrace
+	if timeout < telegramMediaDownloadMinTimeout {
+		return telegramMediaDownloadMinTimeout
+	}
+	if timeout > telegramMediaDownloadMaxTimeout {
+		return telegramMediaDownloadMaxTimeout
+	}
+	return timeout
+}
 
 type countingWriterAt struct {
 	dst     io.WriterAt
@@ -1297,10 +1334,12 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		}
 
 		act := downloadAction(spec.meta)
+		downloadTimeout := telegramMediaDownloadTimeout(spec.size, spec.meta.Kind)
+		maxDownloadAttempts := telegramMediaDownloadAttemptsForKind(spec.meta.Kind)
 		if cur != nil && cur.ID > 0 {
-			recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: msg_id=%d", act, cur.ID))
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: msg_id=%d timeout=%s", act, cur.ID, downloadTimeout))
 		} else {
-			recordTaskDetailFromCtx(ctx, act)
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s: timeout=%s", act, downloadTimeout))
 		}
 		threads := bestTelegramTransferThreads(spec.size)
 
@@ -1318,17 +1357,22 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 			return err
 		}
 
-		doDownload := func(loc tg.InputFileLocationClass, verify bool, downloadAPI *tg.Client) error {
+		doDownload := func(loc tg.InputFileLocationClass, verify bool, downloadAPI *tg.Client, timeout time.Duration) error {
 			d := newTelegramMediaDownloader()
+			downloadCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
 			_, err := d.Download(downloadAPI, loc).
 				WithThreads(threads).
 				WithVerify(verify).
-				Parallel(ctx, countingWriterAt{
+				Parallel(downloadCtx, countingWriterAt{
 					dst: f,
 					onWrite: func(n int) {
 						global.AddDownloadBytes(uint64(n))
 					},
 				})
+			if err != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				return fmt.Errorf("download timeout after %s: %w", timeout, err)
+			}
 			return err
 		}
 
@@ -1355,7 +1399,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 			}
 
 			var err error
-			for attempt := 1; attempt <= telegramMediaDownloadAttempts; attempt++ {
+			for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
 				if attempt > 1 {
 					if rerr := resetFile(); rerr != nil {
 						err = rerr
@@ -1365,18 +1409,19 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 
 				downloadAPI, usedDC := mediaDownloadClient(ctx, api, spec.dcID, threads)
 				downloadDC = usedDC
-				err = doDownload(loc, telegramDownloadVerify, downloadAPI)
+				err = doDownload(loc, telegramDownloadVerify, downloadAPI, downloadTimeout)
 				if err != nil && telegramDownloadVerify && strings.Contains(err.Error(), "get hashes") {
 					// Some media locations may fail on upload.getFileHashes (verify path) but still be downloadable.
 					// If that happens, fallback to no-verify download once to improve success rate.
 					if rerr := resetFile(); rerr == nil {
-						err = doDownload(loc, false, downloadAPI)
+						err = doDownload(loc, false, downloadAPI, downloadTimeout)
 					}
 				}
 				if err == nil {
 					break
 				}
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !retry.IsRetryableNetErr(err) || attempt >= telegramMediaDownloadAttempts {
+				retryableDownloadErr := errors.Is(err, context.DeadlineExceeded) || retry.IsRetryableNetErr(err)
+				if ctx.Err() != nil || errors.Is(err, context.Canceled) || !retryableDownloadErr || attempt >= maxDownloadAttempts {
 					break
 				}
 
@@ -1384,7 +1429,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 					invalidateMediaClient(ctx, api, usedDC)
 				}
 				wait := retry.WithJitter(retry.Backoff(attempt, 2*time.Second, 15*time.Second), 0.2)
-				recordTaskDetailFromCtx(ctx, fmt.Sprintf("下载重试: %s attempt=%d/%d wait=%.1fs %s err=%v", spec.baseName, attempt+1, telegramMediaDownloadAttempts, wait.Seconds(), transferDCLabel(usedDC), err))
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("下载重试: %s attempt=%d/%d wait=%.1fs %s err=%v", spec.baseName, attempt+1, maxDownloadAttempts, wait.Seconds(), transferDCLabel(usedDC), err))
 				if serr := retry.Sleep(ctx, wait); serr != nil {
 					err = serr
 					break
