@@ -217,6 +217,42 @@ func MergeHotFieldsIntoTask(task model.Task, st *model.Strategy) model.Task {
 	}
 
 	out := task
+	if st.CloneMode != 0 {
+		out.CloneMode = st.CloneMode
+	}
+	if out.CloneMode == 0 {
+		out.CloneMode = 3
+	}
+	if strings.TrimSpace(out.PublishType) != "" {
+		out.CloneMode = 3
+	}
+
+	if len(st.AllowedTypes.Strings()) > 0 {
+		out.ContentTypes = st.AllowedTypes
+	} else {
+		out.ContentTypes = st.ContentTypes
+	}
+	out.BlockFileExts = st.BlockFileExts
+	out.AllowFileExts = st.AllowFileExts
+
+	if st.ScopeType != 0 {
+		out.ScopeType = st.ScopeType
+		out.ScopeValue = strings.TrimSpace(st.ScopeValue)
+	}
+	if out.ScopeType == 0 {
+		out.ScopeType = 1
+	}
+	if st.HistoryOrder != 0 {
+		out.HistoryOrder = st.HistoryOrder
+	}
+	if out.HistoryOrder == 0 {
+		out.HistoryOrder = model.HistoryOrderOldToNew
+	}
+
+	out.KeepReply = st.KeepReply
+	out.Realtime = st.EnableRealtime || st.Realtime
+	out.CloneComment = st.CloneComment
+	out.GpuAccel = st.GpuAccel
 	out.DelayMinMs = st.DelayMinMs
 	out.DelayMaxMs = st.DelayMaxMs
 	out.DailyLimit = st.DailyLimit
@@ -224,5 +260,8 @@ func MergeHotFieldsIntoTask(task model.Task, st *model.Strategy) model.Task {
 	out.ChangeMD5 = st.ChangeMD5
 	out.RandomFilename = st.ChangeMD5 && st.RandomFilename
 	out.EnableMediaEdit = st.EnableMediaEdit
+	if out.CloneMode != 3 {
+		out.EnableMediaEdit = false
+	}
 	return out
 }

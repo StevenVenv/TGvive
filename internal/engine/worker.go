@@ -52,6 +52,10 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	}
 
 	task := t
+	if st := ResolveRuntimeStrategy(task); st != nil {
+		task = MergeHotFieldsIntoTask(task, st)
+		m.record(taskID, runID, 0, 0, 0, 0, fmt.Sprintf("策略已应用: strategy_id=%d clone_mode=%d scope_type=%d scope_value=%q history_order=%d", task.StrategyID, task.CloneMode, task.ScopeType, task.ScopeValue, task.HistoryOrder))
+	}
 
 	// Resolve publisher runtime (account/bot).
 	publishType := strings.TrimSpace(task.PublishType)

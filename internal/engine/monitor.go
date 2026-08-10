@@ -140,16 +140,20 @@ type runtimeTask struct {
 }
 
 func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
-	allowSuffixes, blockSuffixes, suffixKey := ResolveFileSuffixRules(cfg.Task, nil)
+	strategy := ResolveRuntimeStrategy(cfg.Task)
+	task := MergeHotFieldsIntoTask(cfg.Task, strategy)
+	allowedTypes, allowedKey := ResolveAllowedTypes(task, strategy)
+	allowSuffixes, blockSuffixes, suffixKey := ResolveFileSuffixRules(task, strategy)
 
 	t := &runtimeTask{
-		Task:       cfg.Task,
+		Task:       task,
 		RunID:      cfg.RunID,
 		Ctx:        cfg.Ctx,
 		SourcePeer: cfg.SourcePeer,
 		TargetPeer: cfg.TargetPeer,
 
-		allowedTypes:      normalizeTypeSet(cfg.Task.ContentTypes.Strings()),
+		allowedTypes:      allowedTypes,
+		allowedTypesKey:   allowedKey,
 		allowFileSuffixes: allowSuffixes,
 		blockFileSuffixes: blockSuffixes,
 		fileSuffixKey:     suffixKey,
@@ -157,14 +161,14 @@ func newRuntimeTask(cfg runtimeTaskConfig) *runtimeTask {
 		delayMax:          defaultMsgDelayMax,
 		keyword:           cfg.Keyword,
 		comment:           cfg.Comment,
-		quota:             newTaskQuota(cfg.Task),
+		quota:             newTaskQuota(task),
 
 		queue:     make(chan realtimeJob, 512),
 		done:      make(chan struct{}),
 		albumWait: make(map[int64]chan []*tg.Message),
 	}
 
-	t.delayMin, t.delayMax = normalizeDelayRange(cfg.Task.DelayMinMs, cfg.Task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
+	t.delayMin, t.delayMax = normalizeDelayRange(task.DelayMinMs, task.DelayMaxMs, defaultMsgDelayMin, defaultMsgDelayMax)
 	if cfg.PollIntervalSec > 0 {
 		sec := cfg.PollIntervalSec
 		if sec < 10 {

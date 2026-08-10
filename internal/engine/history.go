@@ -85,13 +85,16 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 		return errors.New("task id is required")
 	}
 
-	order := task.HistoryOrder
+	strategy := ResolveRuntimeStrategy(task)
+	runtimeTask := MergeHotFieldsIntoTask(task, strategy)
+
+	order := runtimeTask.HistoryOrder
 	if order != model.HistoryOrderNewToOld {
 		order = model.HistoryOrderOldToNew
 	}
 
-	bounds := parseHistoryBounds(task)
-	allowedTypes := normalizeTypeSet(task.ContentTypes.Strings())
+	bounds := parseHistoryBounds(runtimeTask)
+	allowedTypes, _ := ResolveAllowedTypes(runtimeTask, strategy)
 
 	pageSize := defaultHistoryPageSize
 	if bounds.MaxMessages > 0 && bounds.MaxMessages < pageSize {
@@ -101,7 +104,7 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 		pageSize = 1
 	}
 
-	quota := newTaskQuota(task)
+	quota := newTaskQuota(runtimeTask)
 
 	if runID != 0 {
 		if cnt, latestID, err := getRemoteHistoryCountAndLatestID(ctx, api, sourcePeer); err == nil {
@@ -109,25 +112,25 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 			if maxID <= 0 && cnt > 0 {
 				maxID = cnt
 			}
-			if total := estimateHistoryRunTotal(order, bounds, task.HistoryCursor, maxID, task.HistoryMaxID); total > 0 {
-				m.setStateTotal(task.ID, runID, total)
+			if total := estimateHistoryRunTotal(order, bounds, runtimeTask.HistoryCursor, maxID, runtimeTask.HistoryMaxID); total > 0 {
+				m.setStateTotal(runtimeTask.ID, runID, total)
 			}
 		}
 	}
 
 	// 追更: when using new->old mode, a completed task typically ends with history_cursor=1 and would not
 	// fetch new messages on restart. We use history_max_id as the boundary and catch up newest messages first.
-	if order == model.HistoryOrderNewToOld && (task.HistoryMaxID > 0 || task.HistoryCursor > 0) {
-		if err := m.catchUpNewMessagesNewToOld(ctx, api, sourcePeer, targetPeer, task, task.HistoryMaxID, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg); err != nil {
+	if order == model.HistoryOrderNewToOld && (runtimeTask.HistoryMaxID > 0 || runtimeTask.HistoryCursor > 0) {
+		if err := m.catchUpNewMessagesNewToOld(ctx, api, sourcePeer, targetPeer, runtimeTask, runtimeTask.HistoryMaxID, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg); err != nil {
 			return err
 		}
 	}
 
-	cursor := task.HistoryCursor
+	cursor := runtimeTask.HistoryCursor
 	if order == model.HistoryOrderOldToNew {
-		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg)
+		return m.cloneHistoryOldToNew(ctx, api, sourcePeer, targetPeer, runtimeTask, cursor, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg)
 	}
-	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, task, cursor, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg)
+	return m.cloneHistoryNewToOld(ctx, api, sourcePeer, targetPeer, runtimeTask, cursor, bounds, allowedTypes, pageSize, kw, runID, quota, commentCfg)
 }
 
 type historyBounds struct {
