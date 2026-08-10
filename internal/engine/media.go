@@ -379,45 +379,6 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 	vidRule, vidEnabled := videoWatermarkRuleForTask(task)
 	vidWmCandidate := vidEnabled && isWatermarkableVideoMessage(msg)
 
-	// Fast path: stream download->upload without touching disk (large file friendly).
-	// Only safe when we do not need any local mutations (no watermark/processor/MD5 change).
-	if !enableMediaEdit && !task.ChangeMD5 && !wmCandidate && !vidWmCandidate {
-		if inputFile, _, serr := m.TransferMediaStream(ctx, api, sourcePeer, msg); serr == nil && inputFile != nil {
-			uploaded, err := m.WrapUploadedMedia(ctx, api, inputFile, msg, false, "")
-			if err == nil && uploaded != nil {
-				rid, err := randomID()
-				if err != nil {
-					return nil, err
-				}
-
-				caption := msg.Message
-				entities := msg.Entities
-				if out, truncated := sanitizeMediaCaptionText(caption); truncated {
-					caption = out
-					entities = nil
-				}
-
-				req := &tg.MessagesSendMediaRequest{
-					Peer:     peer,
-					ReplyTo:  replyTo,
-					Media:    uploaded,
-					Message:  caption,
-					RandomID: rid,
-				}
-				if len(entities) > 0 {
-					req.Entities = entities
-				}
-
-				upd, err := api.MessagesSendMedia(ctx, req)
-				if err != nil {
-					return nil, err
-				}
-				storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
-				return upd, nil
-			}
-		}
-	}
-
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
 		if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
