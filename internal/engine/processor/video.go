@@ -13,6 +13,7 @@ import (
 
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
+	"my-go-server/pkg/procutil"
 
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -441,6 +442,7 @@ func (p *VideoProcessor) WatermarkPath(ctx context.Context, inPath string, rule 
 		}
 
 		cmd := exec.CommandContext(ctx, p.ffmpegPath, args...)
+		procutil.HideCommandWindow(cmd)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			msg := strings.TrimSpace(string(out))
@@ -504,6 +506,7 @@ func (p *VideoProcessor) ExtractCover(ctx context.Context, videoPath, outImagePa
 	}
 
 	cmd := exec.CommandContext(ctx, p.ffmpegPath, args...)
+	procutil.HideCommandWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))

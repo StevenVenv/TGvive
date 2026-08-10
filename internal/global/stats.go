@@ -17,6 +17,8 @@ import (
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
+
+	"my-go-server/pkg/procutil"
 )
 
 type StatsSnapshot struct {
@@ -443,6 +445,7 @@ func (s *AppStats) sampleGPU(now time.Time) {
 		"--query-gpu=name,memory.used,memory.total,driver_version",
 		"--format=csv,noheader,nounits",
 	)
+	procutil.HideCommandWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		atomic.StoreUint32(&s.gpuDetected, 0)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"my-go-server/internal/engine/processor"
+	"my-go-server/pkg/procutil"
 
 	"github.com/gotd/td/tg"
 )
@@ -197,6 +198,7 @@ func probeVideoDisplaySize(ctx context.Context, path string) (w int, h int, err 
 		path,
 	}
 	cmd := exec.CommandContext(ctx, ffprobe, args...)
+	procutil.HideCommandWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, 0, err
