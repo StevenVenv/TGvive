@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"my-go-server/internal/engine/processor"
 
 	"github.com/gotd/td/tg"
 )
+
+const documentThumbTransferTimeout = 15 * time.Second
 
 // WrapUploadedMedia 将上传后的文件封装为可发送的媒体对象（CloneMode=3）。
 // 使用原始消息的元数据（如 Attributes / Spoiler / TTLSeconds）来尽量还原显示效果。
@@ -441,23 +444,29 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 	defer func() { _ = os.Remove(path) }()
 	defer func() { _ = f.Close() }()
 
+	thumbCtx, cancel := context.WithTimeout(ctx, documentThumbTransferTimeout)
+	defer cancel()
+
 	threads := bestTelegramTransferThreads(0)
-	downloadAPI, _ := mediaDownloadClient(ctx, api, doc.DCID, threads)
+	downloadAPI, _ := mediaDownloadClient(thumbCtx, api, doc.DCID, threads)
 	dl := newTelegramMediaDownloader()
 	if _, err := dl.Download(downloadAPI, loc).
 		WithThreads(threads).
 		WithVerify(telegramDownloadVerify).
-		Parallel(ctx, f); err != nil {
+		Parallel(thumbCtx, f); err != nil {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("缩略图跳过: type=%s err=%v", thumbType, err))
 		return nil
 	}
 	if err := f.Close(); err != nil {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("缩略图跳过: type=%s err=%v", thumbType, err))
 		return nil
 	}
 
-	uploadAPI, _ := mediaUploadClient(ctx, api, threads)
+	uploadAPI, _ := mediaUploadClient(thumbCtx, api, threads)
 	up := newTelegramMediaUploader(uploadAPI).WithThreads(threads)
-	inputFile, err := up.FromPath(ctx, path)
+	inputFile, err := up.FromPath(thumbCtx, path)
 	if err != nil {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("缩略图跳过: type=%s err=%v", thumbType, err))
 		return nil
 	}
 
