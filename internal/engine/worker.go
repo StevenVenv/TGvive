@@ -456,13 +456,15 @@ func (m *TaskManager) recordDetail(taskID uint, runID uint64, logLine string) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	st := m.states[taskID]
 	if st == nil || st.RunID != runID {
+		m.mu.Unlock()
 		return
 	}
 	st.appendLogLockedNoBroadcast(logLine)
+	m.mu.Unlock()
+
+	appendTaskDetailLog(taskID, runID, logLine)
 }
 
 func (m *TaskManager) markCompleted(taskID uint, runID uint64, stopRun bool) {
