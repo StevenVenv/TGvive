@@ -11,6 +11,7 @@ import (
 	"my-go-server/pkg/app"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type TaskApi struct{}
@@ -234,11 +235,20 @@ func (a *TaskApi) UpdateTaskStatus(c *gin.Context) {
 		app.FailWithMsg("未获取到用户信息", c)
 		return
 	}
+	if global.Logger != nil {
+		global.Logger.Info("task action requested", zap.Uint("task_id", req.ID), zap.Uint("user_id", userID), zap.String("action", req.Action))
+	}
 
 	task, err := service.ApplyTaskAction(c.Request.Context(), userID, req.ID, req.Action)
 	if err != nil {
+		if global.Logger != nil {
+			global.Logger.Warn("task action rejected", zap.Uint("task_id", req.ID), zap.Uint("user_id", userID), zap.String("action", req.Action), zap.Error(err))
+		}
 		app.FailWithMsg("状态更新失败: "+err.Error(), c)
 		return
+	}
+	if global.Logger != nil {
+		global.Logger.Info("task action accepted", zap.Uint("task_id", task.ID), zap.Uint("user_id", userID), zap.String("action", req.Action), zap.Int("status", task.Status))
 	}
 
 	// Runtime side-effects are handled in API layer to keep service package DB-only
