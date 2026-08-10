@@ -699,8 +699,10 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 	replyTo := buildKeepReplyInput(ctx, task, replyCarrier)
 
 	ups := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
+	sentSourceMsgs := make([]*tg.Message, 0, len(mediaMsgs))
 	cleanups := make([]func() error, 0, len(mediaMsgs))
 	localPaths := make([]string, 0, len(mediaMsgs))
+	skipped := 0
 
 	defer func() {
 		for _, fn := range cleanups {
@@ -727,6 +729,11 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 					storeMsgMappingsInOrder(task, mediaMsgs, extractSentMsgIDs(upd))
 					return upd, nil
 				}
+			}
+			if errors.Is(err, ErrMediaDownload) {
+				skipped++
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑媒体跳过: grouped_id=%d msg_id=%d err=%v", msg.GroupedID, msg.ID, err))
+				continue
 			}
 			return nil, err
 		}
@@ -870,6 +877,7 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 								Media:    inputMedia,
 								RandomID: rid,
 							})
+							sentSourceMsgs = append(sentSourceMsgs, msg)
 							continue
 						}
 					}
@@ -913,13 +921,25 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 			Media:    inputMedia,
 			RandomID: rid,
 		})
+		sentSourceMsgs = append(sentSourceMsgs, msg)
 	}
 
 	if len(ups) == 0 {
+		if skipped > 0 {
+			return nil, fmt.Errorf("%w: all album media failed (grouped_id=%d skipped=%d)", ErrMediaDownload, mediaMsgs[0].GroupedID, skipped)
+		}
 		return nil, nil
 	}
+	if skipped > 0 {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑部分发送: grouped_id=%d sent=%d skipped=%d", mediaMsgs[0].GroupedID, len(ups), skipped))
+	}
 	if len(ups) == 1 {
-		return m.sendUploadedMediaUpdates(ctx, api, sourcePeer, mediaMsgs[0], task, peer)
+		captionSource := mediaMsgs[0]
+		mapSource := captionSource
+		if len(sentSourceMsgs) > 0 {
+			mapSource = sentSourceMsgs[0]
+		}
+		return sendPreparedUploadedMedia(ctx, api, peer, replyTo, ups[0].Media, captionSource, mapSource, task)
 	}
 
 	// Caption/entities only on the first item.
@@ -939,14 +959,74 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 		ReplyTo:    replyTo,
 		MultiMedia: ups,
 	}
-	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传专辑", sendSubjectAlbum(mediaMsgs[0].GroupedID, len(mediaMsgs)), func(callCtx context.Context) (tg.UpdatesClass, error) {
+	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传专辑", sendSubjectAlbum(mediaMsgs[0].GroupedID, len(ups)), func(callCtx context.Context) (tg.UpdatesClass, error) {
 		return api.MessagesSendMultiMedia(callCtx, req)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)
 	}
-	storeMsgMappingsInOrder(task, mediaMsgs, extractSentMsgIDs(upd))
+	storeMsgMappingsInOrder(task, sentSourceMsgs, extractSentMsgIDs(upd))
 
+	return upd, nil
+}
+
+func sendPreparedUploadedMedia(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, replyTo tg.InputReplyToClass, media tg.InputMediaClass, captionSource *tg.Message, mapSource *tg.Message, task model.Task) (tg.UpdatesClass, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if api == nil {
+		return nil, errors.New("tg api is nil")
+	}
+	if peer == nil {
+		return nil, errors.New("tg peer is nil")
+	}
+	if media == nil {
+		return nil, ErrUnsupportedMedia
+	}
+	if captionSource == nil {
+		captionSource = mapSource
+	}
+
+	rid, err := randomID()
+	if err != nil {
+		return nil, err
+	}
+
+	caption := ""
+	var entities []tg.MessageEntityClass
+	if captionSource != nil {
+		caption = captionSource.Message
+		entities = captionSource.Entities
+	}
+	if out, truncated := sanitizeMediaCaptionText(caption); truncated {
+		caption = out
+		entities = nil
+	}
+
+	req := &tg.MessagesSendMediaRequest{
+		Peer:     peer,
+		ReplyTo:  replyTo,
+		Media:    media,
+		Message:  caption,
+		RandomID: rid,
+	}
+	if len(entities) > 0 {
+		req.Entities = entities
+	}
+
+	msgID := 0
+	if mapSource != nil {
+		msgID = mapSource.ID
+	}
+	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传媒体", sendSubjectMsgID(msgID), func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return api.MessagesSendMedia(callCtx, req)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("send uploaded media failed: %w", err)
+	}
+	if mapSource != nil {
+		storeMsgMapping(task, mapSource.ID, minPositiveInt(extractSentMsgIDs(upd)))
+	}
 	return upd, nil
 }
 

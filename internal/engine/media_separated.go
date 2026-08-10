@@ -325,8 +325,10 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 	replyTo := buildKeepReplyInput(ctx, task, replyCarrier)
 
 	ups := make([]tg.InputSingleMedia, 0, len(mediaMsgs))
+	sentSourceMsgs := make([]*tg.Message, 0, len(mediaMsgs))
 	cleanups := make([]func() error, 0, len(mediaMsgs))
 	localPaths := make([]string, 0, len(mediaMsgs))
+	skipped := 0
 
 	defer func() {
 		for _, fn := range cleanups {
@@ -347,6 +349,11 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, downloadAPI, sourcePeer, msg, task.ID)
 		if err != nil {
+			if errors.Is(err, ErrMediaDownload) {
+				skipped++
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑媒体跳过: grouped_id=%d msg_id=%d err=%v", msg.GroupedID, msg.ID, err))
+				continue
+			}
 			return nil, err
 		}
 		cleanups = append(cleanups, cleanup)
@@ -488,6 +495,7 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 								Media:    inputMedia,
 								RandomID: rid,
 							})
+							sentSourceMsgs = append(sentSourceMsgs, msg)
 							continue
 						}
 					}
@@ -531,13 +539,25 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 			Media:    inputMedia,
 			RandomID: rid,
 		})
+		sentSourceMsgs = append(sentSourceMsgs, msg)
 	}
 
 	if len(ups) == 0 {
+		if skipped > 0 {
+			return nil, fmt.Errorf("%w: all album media failed (grouped_id=%d skipped=%d)", ErrMediaDownload, mediaMsgs[0].GroupedID, skipped)
+		}
 		return nil, nil
 	}
+	if skipped > 0 {
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑部分发送: grouped_id=%d sent=%d skipped=%d", mediaMsgs[0].GroupedID, len(ups), skipped))
+	}
 	if len(ups) == 1 {
-		return m.sendUploadedMediaUpdatesSeparated(ctx, downloadAPI, sendAPI, sourcePeer, mediaMsgs[0], task, peer)
+		captionSource := mediaMsgs[0]
+		mapSource := captionSource
+		if len(sentSourceMsgs) > 0 {
+			mapSource = sentSourceMsgs[0]
+		}
+		return sendPreparedUploadedMedia(ctx, sendAPI, peer, replyTo, ups[0].Media, captionSource, mapSource, task)
 	}
 
 	// Caption/entities only on the first item.
@@ -557,13 +577,13 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 		ReplyTo:    replyTo,
 		MultiMedia: ups,
 	}
-	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传专辑", sendSubjectAlbum(mediaMsgs[0].GroupedID, len(mediaMsgs)), func(callCtx context.Context) (tg.UpdatesClass, error) {
+	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传专辑", sendSubjectAlbum(mediaMsgs[0].GroupedID, len(ups)), func(callCtx context.Context) (tg.UpdatesClass, error) {
 		return sendAPI.MessagesSendMultiMedia(callCtx, req)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)
 	}
-	storeMsgMappingsInOrder(task, mediaMsgs, extractSentMsgIDs(upd))
+	storeMsgMappingsInOrder(task, sentSourceMsgs, extractSentMsgIDs(upd))
 
 	return upd, nil
 }
