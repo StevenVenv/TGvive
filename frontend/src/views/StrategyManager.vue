@@ -737,7 +737,13 @@ onMounted(() => {
             </div>
 
             <div class="table-body">
-              <el-table :data="filteredStrategies" v-loading="loading" stripe height="100%" style="width: 100%">
+              <el-table
+                :data="filteredStrategies"
+                v-loading="loading"
+                stripe
+                :height="filteredStrategies.length === 0 ? undefined : '100%'"
+                style="width: 100%"
+              >
                 <el-table-column prop="ID" label="ID" width="90" />
 
                 <el-table-column label="策略" min-width="240">
@@ -835,7 +841,13 @@ onMounted(() => {
             </div>
 
             <div class="table-body">
-              <el-table :data="filteredKwProfiles" v-loading="kwLoading" stripe height="100%" style="width: 100%">
+              <el-table
+                :data="filteredKwProfiles"
+                v-loading="kwLoading"
+                stripe
+                :height="filteredKwProfiles.length === 0 ? undefined : '100%'"
+                style="width: 100%"
+              >
                 <el-table-column prop="ID" label="ID" width="90" />
 
                 <el-table-column label="方案" min-width="260">
@@ -953,12 +965,13 @@ onMounted(() => {
   }
 
   .pane-card-table.is-empty-card {
-    min-height: 320px;
+    min-height: 0;
   }
 }
 
 .pane-card-table.is-empty-card :deep(.el-card__body) {
-  min-height: 260px;
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 .pane {
@@ -984,7 +997,8 @@ onMounted(() => {
 }
 
 .pane-card-table.is-empty-card .table-body {
-  min-height: 260px;
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 .toolbar {
