@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"my-go-server/internal/engine/processor"
 	wm "my-go-server/internal/engine/watermark"
@@ -992,6 +993,7 @@ type mediaDownloadSpec struct {
 	loc        tg.InputFileLocationClass
 	baseName   string
 	size       int64
+	dcID       int
 	meta       mediaMeta
 	photoThumb []string
 }
@@ -1027,6 +1029,7 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 			loc:        loc,
 			baseName:   fmt.Sprintf("photo_%d.jpg", photo.ID),
 			size:       photoDownloadSize(photo, thumb),
+			dcID:       photo.DCID,
 			photoThumb: thumbs,
 			meta: mediaMeta{
 				Kind:       mediaKindPhoto,
@@ -1059,6 +1062,7 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 			loc:      doc.AsInputDocumentFileLocation(""),
 			baseName: baseName,
 			size:     doc.Size,
+			dcID:     doc.DCID,
 			meta: mediaMeta{
 				Kind:       mediaKindDocument,
 				Spoiler:    media.Spoiler,
@@ -1327,6 +1331,9 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		} else {
 			recordTaskDetailFromCtx(ctx, act)
 		}
+		threads := bestTelegramTransferThreads(spec.size)
+		downloadAPI, closeDownloadAPI, downloadDC := mediaDownloadClient(ctx, api, spec.dcID, threads)
+		defer closeDownloadAPI()
 
 		f, path, err := createUniqueFile(dir, sanitizeFilename(spec.baseName))
 		if err != nil {
@@ -1344,8 +1351,8 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 
 		doDownload := func(loc tg.InputFileLocationClass, verify bool) error {
 			d := newTelegramMediaDownloader()
-			_, err := d.Download(api, loc).
-				WithThreads(bestTelegramTransferThreads(spec.size)).
+			_, err := d.Download(downloadAPI, loc).
+				WithThreads(threads).
 				WithVerify(verify).
 				Parallel(ctx, countingWriterAt{
 					dst: f,
@@ -1368,6 +1375,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		}
 
 		var lastErr error
+		started := time.Now()
 		for idx, loc := range locs {
 			if idx > 0 {
 				if err := resetFile(); err != nil {
@@ -1376,8 +1384,8 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 				}
 			}
 
-			err := doDownload(loc, true)
-			if err != nil && strings.Contains(err.Error(), "get hashes") {
+			err := doDownload(loc, telegramDownloadVerify)
+			if err != nil && telegramDownloadVerify && strings.Contains(err.Error(), "get hashes") {
 				// Some media locations may fail on upload.getFileHashes (verify path) but still be downloadable.
 				// If that happens, fallback to no-verify download once to improve success rate.
 				if rerr := resetFile(); rerr == nil {
@@ -1408,8 +1416,10 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 
 		if fi, err := f.Stat(); err == nil && fi != nil {
 			if sz := fi.Size(); sz > 0 {
-				global.BroadcastLog(fmt.Sprintf("Downloaded %s (%.1fMB)", filepath.Base(path), float64(sz)/1024.0/1024.0))
-				recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s完成: %s (%.1fMB)", act, filepath.Base(path), float64(sz)/1024.0/1024.0))
+				stats := formatTransferStats(sz, time.Since(started))
+				dcLabel := transferDCLabel(downloadDC)
+				global.BroadcastLog(fmt.Sprintf("Downloaded %s (%s, %s, threads=%d)", filepath.Base(path), stats, dcLabel, threads))
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("%s完成: %s (%s, %s, threads=%d)", act, filepath.Base(path), stats, dcLabel, threads))
 			}
 		}
 

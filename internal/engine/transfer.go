@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"my-go-server/internal/global"
 
@@ -74,9 +75,11 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 		size = fi.Size()
 	}
 
+	threads := bestTelegramTransferThreads(size)
+	started := time.Now()
 	progress := &uploadByteProgress{}
 	inputFile, err := newTelegramMediaUploader(api).
-		WithThreads(bestTelegramTransferThreads(size)).
+		WithThreads(threads).
 		WithProgress(progress).
 		FromPath(ctx, localPath)
 	if err != nil {
@@ -84,8 +87,13 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 	}
 
 	if size > 0 {
-		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%.1fMB)", filepath.Base(localPath), float64(size)/1024.0/1024.0))
-		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%.1fMB)", filepath.Base(localPath), float64(size)/1024.0/1024.0))
+		uploaded := atomic.LoadInt64(&progress.last)
+		if uploaded <= 0 {
+			uploaded = size
+		}
+		stats := formatTransferStats(uploaded, time.Since(started))
+		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%s, threads=%d)", filepath.Base(localPath), stats, threads))
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%s, threads=%d)", filepath.Base(localPath), stats, threads))
 	}
 	return inputFile, nil
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"my-go-server/internal/global"
 
@@ -45,9 +46,11 @@ func (m *TaskManager) UploadFromReader(ctx context.Context, api *tg.Client, name
 		return nil, errors.New("reader is nil")
 	}
 
+	threads := bestTelegramTransferThreads(size)
+	started := time.Now()
 	progress := &uploadByteProgress{}
 	inputFile, err := newTelegramMediaUploader(api).
-		WithThreads(bestTelegramTransferThreads(size)).
+		WithThreads(threads).
 		WithProgress(progress).
 		FromReader(ctx, name, r)
 	if err != nil {
@@ -55,20 +58,24 @@ func (m *TaskManager) UploadFromReader(ctx context.Context, api *tg.Client, name
 	}
 
 	if up := atomic.LoadInt64(&progress.last); up > 0 {
-		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%.1fMB)", filepath.Base(name), float64(up)/1024.0/1024.0))
-		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%.1fMB)", filepath.Base(name), float64(up)/1024.0/1024.0))
+		stats := formatTransferStats(up, time.Since(started))
+		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%s, threads=%d)", filepath.Base(name), stats, threads))
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%s, threads=%d)", filepath.Base(name), stats, threads))
 	}
 
 	return inputFile, nil
 }
 
-func streamDownloadOnce(ctx context.Context, api *tg.Client, loc tg.InputFileLocationClass, w io.Writer, verify bool, size int64) error {
+func streamDownloadOnce(ctx context.Context, api *tg.Client, loc tg.InputFileLocationClass, w io.Writer, verify bool, size int64, dcID int) (int, error) {
+	threads := bestTelegramTransferThreads(size)
+	downloadAPI, closeDownloadAPI, downloadDC := mediaDownloadClient(ctx, api, dcID, threads)
+	defer closeDownloadAPI()
 	dl := newTelegramMediaDownloader()
-	_, err := dl.Download(api, loc).
-		WithThreads(bestTelegramTransferThreads(size)).
+	_, err := dl.Download(downloadAPI, loc).
+		WithThreads(threads).
 		WithVerify(verify).
 		Stream(ctx, w)
-	return err
+	return downloadDC, err
 }
 
 // TransferMediaStream streams message media from Telegram download to Telegram upload without touching disk.
@@ -107,30 +114,39 @@ func (m *TaskManager) TransferMediaStream(ctx context.Context, api *tg.Client, s
 
 	go func() {
 		defer close(downloadDone)
+		started := time.Now()
+		var downloaded int64
+		var downloadDC int
+		threads := bestTelegramTransferThreads(spec.size)
 
 		w := countingWriter{
 			dst: pw,
 			onWrite: func(n int) {
 				if n > 0 {
+					atomic.AddInt64(&downloaded, int64(n))
 					global.AddDownloadBytes(uint64(n))
 				}
 			},
 		}
 
-		err := streamDownloadOnce(ctx, api, spec.loc, w, true, spec.size)
-		if err != nil && strings.Contains(err.Error(), "get hashes") {
+		dc, err := streamDownloadOnce(ctx, api, spec.loc, w, telegramDownloadVerify, spec.size, spec.dcID)
+		downloadDC = dc
+		if err != nil && telegramDownloadVerify && atomic.LoadInt64(&downloaded) == 0 && strings.Contains(err.Error(), "get hashes") {
 			// Some locations may fail on upload.getFileHashes (verify path) but still be downloadable.
-			err = streamDownloadOnce(ctx, api, spec.loc, w, false, spec.size)
+			dc, err = streamDownloadOnce(ctx, api, spec.loc, w, false, spec.size, spec.dcID)
+			downloadDC = dc
 		}
 
 		// Attempt to refresh file reference once on transient file-location errors.
-		if err != nil && sourcePeer != nil && msg.ID > 0 && isFileLocationRefreshable(err) {
+		if err != nil && sourcePeer != nil && msg.ID > 0 && atomic.LoadInt64(&downloaded) == 0 && isFileLocationRefreshable(err) {
 			refreshed, rerr := refreshMessageForDownload(ctx, api, sourcePeer, msg.ID)
 			if rerr == nil && refreshed != nil && refreshed.Media != nil {
 				if rspec, rerr := buildMediaDownloadSpec(refreshed); rerr == nil {
-					err = streamDownloadOnce(ctx, api, rspec.loc, w, true, rspec.size)
-					if err != nil && strings.Contains(err.Error(), "get hashes") {
-						err = streamDownloadOnce(ctx, api, rspec.loc, w, false, rspec.size)
+					dc, err = streamDownloadOnce(ctx, api, rspec.loc, w, telegramDownloadVerify, rspec.size, rspec.dcID)
+					downloadDC = dc
+					if err != nil && telegramDownloadVerify && atomic.LoadInt64(&downloaded) == 0 && strings.Contains(err.Error(), "get hashes") {
+						dc, err = streamDownloadOnce(ctx, api, rspec.loc, w, false, rspec.size, rspec.dcID)
+						downloadDC = dc
 					}
 				}
 			}
@@ -140,6 +156,10 @@ func (m *TaskManager) TransferMediaStream(ctx context.Context, api *tg.Client, s
 			_ = pw.CloseWithError(err)
 			downloadDone <- err
 			return
+		}
+		if n := atomic.LoadInt64(&downloaded); n > 0 {
+			stats := formatTransferStats(n, time.Since(started))
+			recordTaskDetailFromCtx(ctx, fmt.Sprintf("流式下载完成: %s (%s, %s, threads=%d)", spec.baseName, stats, transferDCLabel(downloadDC), threads))
 		}
 		_ = pw.Close()
 		downloadDone <- nil

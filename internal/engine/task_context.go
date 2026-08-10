@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"strings"
+
+	"github.com/gotd/td/telegram"
 )
 
 type taskRunCtxKey struct{}
+type telegramClientCtxKey struct{}
 
 type taskRunCtx struct {
 	taskID uint
@@ -29,6 +32,21 @@ func taskRunFromCtx(ctx context.Context) (taskID uint, runID uint64, ok bool) {
 		return 0, 0, false
 	}
 	return tr.taskID, tr.runID, true
+}
+
+func withTelegramClient(ctx context.Context, client *telegram.Client) context.Context {
+	if ctx == nil || client == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, telegramClientCtxKey{}, client)
+}
+
+func telegramClientFromCtx(ctx context.Context) (*telegram.Client, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	client, ok := ctx.Value(telegramClientCtxKey{}).(*telegram.Client)
+	return client, ok && client != nil
 }
 
 func recordTaskDetailFromCtx(ctx context.Context, msg string) {
