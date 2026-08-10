@@ -91,12 +91,14 @@ func downloadMessageMediaBytes(ctx context.Context, api *tg.Client, sourcePeer t
 			}
 		}
 
+		threads := bestTelegramTransferThreads(spec.size)
+		downloadAPI, _ := mediaDownloadClient(ctx, api, spec.dcID, threads)
 		dl := newTelegramMediaDownloader()
 		for _, loc := range locs {
 			var buf bytes.Buffer
-			_, err := dl.Download(api, loc).
-				WithThreads(bestTelegramTransferThreads(spec.size)).
-				WithVerify(true).
+			_, err := dl.Download(downloadAPI, loc).
+				WithThreads(threads).
+				WithVerify(telegramDownloadVerify).
 				Stream(ctx, &buf)
 			if err == nil {
 				if buf.Len() == 0 {
@@ -128,9 +130,11 @@ func uploadBytes(ctx context.Context, api *tg.Client, name string, b []byte) (tg
 	if api == nil {
 		return nil, errors.New("tg api is nil")
 	}
+	threads := bestTelegramTransferThreads(int64(len(b)))
+	uploadAPI, _ := mediaUploadClient(ctx, api, threads)
 	progress := &uploadByteProgress{}
-	return newTelegramMediaUploader(api).
-		WithThreads(bestTelegramTransferThreads(int64(len(b)))).
+	return newTelegramMediaUploader(uploadAPI).
+		WithThreads(threads).
 		WithProgress(progress).
 		FromBytes(ctx, name, b)
 }

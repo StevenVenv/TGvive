@@ -76,9 +76,10 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 	}
 
 	threads := bestTelegramTransferThreads(size)
+	uploadAPI, uploadDC := mediaUploadClient(ctx, api, threads)
 	started := time.Now()
 	progress := &uploadByteProgress{}
-	inputFile, err := newTelegramMediaUploader(api).
+	inputFile, err := newTelegramMediaUploader(uploadAPI).
 		WithThreads(threads).
 		WithProgress(progress).
 		FromPath(ctx, localPath)
@@ -92,8 +93,9 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 			uploaded = size
 		}
 		stats := formatTransferStats(uploaded, time.Since(started))
-		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%s, threads=%d)", filepath.Base(localPath), stats, threads))
-		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%s, threads=%d)", filepath.Base(localPath), stats, threads))
+		dcLabel := transferDCLabel(uploadDC)
+		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%s, %s, threads=%d)", filepath.Base(localPath), stats, dcLabel, threads))
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%s, %s, threads=%d)", filepath.Base(localPath), stats, dcLabel, threads))
 	}
 	return inputFile, nil
 }

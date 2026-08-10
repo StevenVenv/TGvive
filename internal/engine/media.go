@@ -1332,8 +1332,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 			recordTaskDetailFromCtx(ctx, act)
 		}
 		threads := bestTelegramTransferThreads(spec.size)
-		downloadAPI, closeDownloadAPI, downloadDC := mediaDownloadClient(ctx, api, spec.dcID, threads)
-		defer closeDownloadAPI()
+		downloadAPI, downloadDC := mediaDownloadClient(ctx, api, spec.dcID, threads)
 
 		f, path, err := createUniqueFile(dir, sanitizeFilename(spec.baseName))
 		if err != nil {

@@ -3,12 +3,10 @@ package engine
 import (
 	"context"
 	"strings"
-
-	"github.com/gotd/td/telegram"
 )
 
 type taskRunCtxKey struct{}
-type telegramClientCtxKey struct{}
+type telegramTransferPoolsCtxKey struct{}
 
 type taskRunCtx struct {
 	taskID uint
@@ -34,19 +32,19 @@ func taskRunFromCtx(ctx context.Context) (taskID uint, runID uint64, ok bool) {
 	return tr.taskID, tr.runID, true
 }
 
-func withTelegramClient(ctx context.Context, client *telegram.Client) context.Context {
-	if ctx == nil || client == nil {
+func withTelegramTransferPools(ctx context.Context, pools *telegramTransferPools) context.Context {
+	if ctx == nil || pools == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, telegramClientCtxKey{}, client)
+	return context.WithValue(ctx, telegramTransferPoolsCtxKey{}, pools)
 }
 
-func telegramClientFromCtx(ctx context.Context) (*telegram.Client, bool) {
+func telegramTransferPoolsFromCtx(ctx context.Context) (*telegramTransferPools, bool) {
 	if ctx == nil {
 		return nil, false
 	}
-	client, ok := ctx.Value(telegramClientCtxKey{}).(*telegram.Client)
-	return client, ok && client != nil
+	pools, ok := ctx.Value(telegramTransferPoolsCtxKey{}).(*telegramTransferPools)
+	return pools, ok && pools != nil
 }
 
 func recordTaskDetailFromCtx(ctx context.Context, msg string) {

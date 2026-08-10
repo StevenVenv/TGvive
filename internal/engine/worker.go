@@ -43,7 +43,6 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		return
 	}
 	api := tgRT.api
-	ctx = withTelegramClient(ctx, tgRT.client)
 	if api == nil {
 		msg := "初始化 Telegram 失败: tg api is nil"
 		m.record(taskID, runID, 0, 0, 0, 1, msg)
@@ -51,6 +50,10 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 		return
 	}
+	transferPools := newTelegramTransferPools()
+	transferPools.Add(tgRT.client, tgRT.api, int64(telegramTransferThreads))
+	ctx = withTelegramTransferPools(ctx, transferPools)
+	defer func() { _ = transferPools.Close() }()
 
 	task := t
 	if st := ResolveRuntimeStrategy(task); st != nil {
@@ -93,6 +96,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 			_ = updateTaskStatusWithError(ctx, taskID, model.TaskStatusError, msg)
 			return
 		}
+		transferPools.Add(pubRT.client, pubRT.api, int64(telegramTransferThreads))
 		publishAPI = pubRT.api
 	case "bot":
 		botID := strings.TrimSpace(task.PublishBotID)

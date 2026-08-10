@@ -441,10 +441,12 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 	defer func() { _ = os.Remove(path) }()
 	defer func() { _ = f.Close() }()
 
+	threads := bestTelegramTransferThreads(0)
+	downloadAPI, _ := mediaDownloadClient(ctx, api, doc.DCID, threads)
 	dl := newTelegramMediaDownloader()
-	if _, err := dl.Download(api, loc).
-		WithThreads(bestTelegramTransferThreads(0)).
-		WithVerify(true).
+	if _, err := dl.Download(downloadAPI, loc).
+		WithThreads(threads).
+		WithVerify(telegramDownloadVerify).
 		Parallel(ctx, f); err != nil {
 		return nil
 	}
@@ -452,7 +454,8 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 		return nil
 	}
 
-	up := newTelegramMediaUploader(api).WithThreads(bestTelegramTransferThreads(0))
+	uploadAPI, _ := mediaUploadClient(ctx, api, threads)
+	up := newTelegramMediaUploader(uploadAPI).WithThreads(threads)
 	inputFile, err := up.FromPath(ctx, path)
 	if err != nil {
 		return nil

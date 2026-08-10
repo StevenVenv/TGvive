@@ -47,9 +47,10 @@ func (m *TaskManager) UploadFromReader(ctx context.Context, api *tg.Client, name
 	}
 
 	threads := bestTelegramTransferThreads(size)
+	uploadAPI, uploadDC := mediaUploadClient(ctx, api, threads)
 	started := time.Now()
 	progress := &uploadByteProgress{}
-	inputFile, err := newTelegramMediaUploader(api).
+	inputFile, err := newTelegramMediaUploader(uploadAPI).
 		WithThreads(threads).
 		WithProgress(progress).
 		FromReader(ctx, name, r)
@@ -59,8 +60,9 @@ func (m *TaskManager) UploadFromReader(ctx context.Context, api *tg.Client, name
 
 	if up := atomic.LoadInt64(&progress.last); up > 0 {
 		stats := formatTransferStats(up, time.Since(started))
-		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%s, threads=%d)", filepath.Base(name), stats, threads))
-		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%s, threads=%d)", filepath.Base(name), stats, threads))
+		dcLabel := transferDCLabel(uploadDC)
+		global.BroadcastLog(fmt.Sprintf("Uploaded %s (%s, %s, threads=%d)", filepath.Base(name), stats, dcLabel, threads))
+		recordTaskDetailFromCtx(ctx, fmt.Sprintf("上传完成: %s (%s, %s, threads=%d)", filepath.Base(name), stats, dcLabel, threads))
 	}
 
 	return inputFile, nil
@@ -68,8 +70,7 @@ func (m *TaskManager) UploadFromReader(ctx context.Context, api *tg.Client, name
 
 func streamDownloadOnce(ctx context.Context, api *tg.Client, loc tg.InputFileLocationClass, w io.Writer, verify bool, size int64, dcID int) (int, error) {
 	threads := bestTelegramTransferThreads(size)
-	downloadAPI, closeDownloadAPI, downloadDC := mediaDownloadClient(ctx, api, dcID, threads)
-	defer closeDownloadAPI()
+	downloadAPI, downloadDC := mediaDownloadClient(ctx, api, dcID, threads)
 	dl := newTelegramMediaDownloader()
 	_, err := dl.Download(downloadAPI, loc).
 		WithThreads(threads).
