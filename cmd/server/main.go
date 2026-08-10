@@ -39,6 +39,11 @@ func main() {
 		global.Logger.Error("init admin user failed", zap.Error(err))
 		os.Exit(1)
 	}
+	if removed, err := engine.CleanupStaleTempMedia(); err != nil {
+		global.Logger.Warn("cleanup stale temp media failed", zap.Error(err))
+	} else if removed > 0 {
+		global.Logger.Info("cleanup stale temp media completed", zap.Int("removed", removed))
+	}
 
 	// Start per-task scheduler (time-slot rules, polling quota).
 	engine.Scheduler.Start()
