@@ -30,85 +30,24 @@ func resolveBotChatID(targetURL string) (string, error) {
 		return "", errors.New("target_url is empty")
 	}
 
-	// Private channels/supergroups (no username):
-	// - -100123...
-	// - https://t.me/c/<id>/<msg>
-	// - tg://privatepost?channel=<id>&post=<msg>
-	if ref, ok, err := parsePrivatePeerRef(s); ok {
+	if ref, ok, err := parseTelegramPeerRef(s); ok {
 		if err != nil {
 			return "", err
 		}
-		return ref.BotChatID, nil
+		switch ref.Kind {
+		case telegramPeerRefUsername:
+			return "@" + ref.Username, nil
+		case telegramPeerRefChannelID, telegramPeerRefGroupID:
+			return ref.BotChatID, nil
+		}
 	}
 
-	// Numeric chat id (e.g. -100xxxx).
+	// Numeric Bot API chat id (positive user IDs are valid for bots).
 	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return s, nil
 	}
 
-	// @username
-	if strings.HasPrefix(s, "@") {
-		u := strings.TrimSpace(s[1:])
-		if u == "" {
-			return "", errors.New("invalid @username")
-		}
-		return "@" + u, nil
-	}
-
-	// Bare username.
-	if isBotUsernameLike(s) {
-		return "@" + s, nil
-	}
-
-	// t.me links.
-	if strings.Contains(s, "t.me/") || strings.Contains(s, "telegram.me/") {
-		// url.Parse without scheme treats the input as path.
-		if !strings.Contains(s, "://") && (strings.HasPrefix(s, "t.me/") || strings.HasPrefix(s, "telegram.me/")) {
-			s = "https://" + s
-		}
-		u, err := url.Parse(s)
-		if err == nil && u != nil {
-			path := strings.Trim(strings.TrimSpace(u.Path), "/")
-			if path == "" {
-				return "", errors.New("invalid t.me url")
-			}
-			parts := strings.Split(path, "/")
-			if len(parts) == 1 {
-				p := strings.TrimSpace(parts[0])
-				if strings.HasPrefix(p, "@") {
-					p = strings.TrimSpace(strings.TrimPrefix(p, "@"))
-				}
-				if isBotUsernameLike(p) {
-					return "@" + p, nil
-				}
-			}
-			if len(parts) >= 2 && parts[0] == "c" {
-				// handled by parsePrivatePeerRef above
-				return "", errors.New("invalid t.me/c url")
-			}
-			return "", errors.New("unsupported t.me url path: " + path)
-		}
-	}
-
 	return "", errors.New("unsupported bot target format")
-}
-
-func isBotUsernameLike(s string) bool {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
-	}
-	if len(s) > 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 type botAPIMessage struct {
@@ -502,14 +441,14 @@ func (m *TaskManager) botSendUploadedMediaFromTGMessageResult(ctx context.Contex
 		recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 		if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 			if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
-					wmName := fmt.Sprintf("wm_%d.jpg", msg.ID)
-					if task.ChangeMD5 {
-						updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
-						if err != nil {
-							return 0, err
-						}
-						outBytes = updated
+				wmName := fmt.Sprintf("wm_%d.jpg", msg.ID)
+				if task.ChangeMD5 {
+					updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
+					if err != nil {
+						return 0, err
 					}
+					outBytes = updated
+				}
 				dir := filepath.Dir(uploadPath)
 				outPath := filepath.Join(dir, wmName)
 				if err := os.WriteFile(outPath, outBytes, 0o600); err == nil {
@@ -627,11 +566,11 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessagesResult(ctx context.Conte
 				continue
 			}
 
-				localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, crawlerAPI, sourcePeer, msg, task.ID)
-				if err != nil {
-					cleanUp()
-					return allSentIDs, err
-				}
+			localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, crawlerAPI, sourcePeer, msg, task.ID)
+			if err != nil {
+				cleanUp()
+				return allSentIDs, err
+			}
 			if cleanup != nil {
 				cleanups = append(cleanups, cleanup)
 			}
@@ -719,15 +658,15 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessagesResult(ctx context.Conte
 				recordTaskDetailFromCtx(ctx, fmt.Sprintf("应用水印: %s", filepath.Base(uploadPath)))
 				if b, rerr := os.ReadFile(uploadPath); rerr == nil {
 					if outBytes, werr := wm.ApplyWatermark(b, wmRule); werr == nil {
-							wmName := fmt.Sprintf("wm_%d_%d.jpg", msg.ID, i)
-							if task.ChangeMD5 {
-								updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
-								if err != nil {
-									cleanUp()
-									return allSentIDs, err
-								}
-								outBytes = updated
+						wmName := fmt.Sprintf("wm_%d_%d.jpg", msg.ID, i)
+						if task.ChangeMD5 {
+							updated, err := modifyBytesMD5WithDetailLog(ctx, outBytes, "修改MD5(水印)", wmName, msg.ID)
+							if err != nil {
+								cleanUp()
+								return allSentIDs, err
 							}
+							outBytes = updated
+						}
 						dir := filepath.Dir(uploadPath)
 						outPath := filepath.Join(dir, wmName)
 						if err := os.WriteFile(outPath, outBytes, 0o600); err == nil {
@@ -739,12 +678,12 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessagesResult(ctx context.Conte
 				}
 			}
 
-				if task.ChangeMD5 {
-					if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
-						cleanUp()
-						return allSentIDs, err
-					}
+			if task.ChangeMD5 {
+				if err := modifyFileMD5WithDetailLog(ctx, uploadPath, "修改MD5", msg.ID); err != nil {
+					cleanUp()
+					return allSentIDs, err
 				}
+			}
 
 			attachName := fmt.Sprintf("file%d", i)
 			files = append(files, botMultipartFile{
@@ -774,11 +713,11 @@ func (m *TaskManager) botSendUploadedAlbumFromTGMessagesResult(ctx context.Conte
 			inputMedia[0].Caption = caption
 		}
 
-			mediaJSON, err := json.Marshal(inputMedia)
-			if err != nil {
-				cleanUp()
-				return allSentIDs, err
-			}
+		mediaJSON, err := json.Marshal(inputMedia)
+		if err != nil {
+			cleanUp()
+			return allSentIDs, err
+		}
 
 		fields := map[string]string{
 			"chat_id": pub.ChatID,

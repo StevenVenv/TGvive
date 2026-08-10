@@ -1055,7 +1055,7 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 		copy(attrs, doc.Attributes)
 
 		return mediaDownloadSpec{
-			loc:      doc.AsInputDocumentFileLocation(),
+			loc:      doc.AsInputDocumentFileLocation(""),
 			baseName: baseName,
 			meta: mediaMeta{
 				Kind:       mediaKindDocument,
