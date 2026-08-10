@@ -424,6 +424,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 	if !ok {
 		return nil
 	}
+	recordTaskDetailFromCtx(ctx, fmt.Sprintf("处理缩略图: type=%s timeout=%.0fs", thumbType, documentThumbTransferTimeout.Seconds()))
 
 	loc := &tg.InputDocumentFileLocation{
 		ID:            doc.ID,
@@ -469,6 +470,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 		recordTaskDetailFromCtx(ctx, fmt.Sprintf("缩略图跳过: type=%s err=%v", thumbType, err))
 		return nil
 	}
+	recordTaskDetailFromCtx(ctx, fmt.Sprintf("缩略图完成: type=%s", thumbType))
 
 	return inputFile
 }
