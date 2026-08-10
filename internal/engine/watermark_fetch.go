@@ -1,9 +1,9 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"os"
 
 	"my-go-server/internal/model"
 
@@ -69,58 +69,21 @@ func downloadMessageMediaBytes(ctx context.Context, api *tg.Client, sourcePeer t
 		return nil, nil, errors.New("message has no media")
 	}
 
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-
-		spec, err := buildMediaDownloadSpec(msg)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		locs := []tg.InputFileLocationClass{spec.loc}
-		if spec.meta.Kind == mediaKindPhoto && len(spec.photoThumb) > 1 {
-			if photoLoc, ok := spec.loc.(*tg.InputPhotoFileLocation); ok && photoLoc != nil {
-				for _, t := range spec.photoThumb[1:] {
-					cp := *photoLoc
-					cp.ThumbSize = t
-					locs = append(locs, &cp)
-				}
-			}
-		}
-
-		threads := bestTelegramTransferThreads(spec.size)
-		downloadAPI, _ := mediaDownloadClient(ctx, api, spec.dcID, threads)
-		dl := newTelegramMediaDownloader()
-		for _, loc := range locs {
-			var buf bytes.Buffer
-			_, err := dl.Download(downloadAPI, loc).
-				WithThreads(threads).
-				WithVerify(telegramDownloadVerify).
-				Stream(ctx, &buf)
-			if err == nil {
-				if buf.Len() == 0 {
-					return nil, nil, errors.New("download returned empty bytes")
-				}
-				return buf.Bytes(), msg, nil
-			}
-
-			lastErr = err
-			if attempt == 0 && sourcePeer != nil && isFileLocationRefreshable(err) {
-				if refreshed, rerr := refreshMessageForDownload(ctx, api, sourcePeer, msgID); rerr == nil && refreshed != nil {
-					msg = refreshed
-					break // rebuild spec+locs
-				}
-			}
-		}
+	localPath, _, cleanup, err := downloadMessageMediaWithPeer(ctx, api, sourcePeer, msg, 0)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	if lastErr != nil {
-		return nil, nil, lastErr
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
 	}
-	return nil, nil, errors.New("download failed")
+	b, err := os.ReadFile(localPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(b) == 0 {
+		return nil, nil, errors.New("download returned empty bytes")
+	}
+	return b, msg, nil
 }
 
 func uploadBytes(ctx context.Context, api *tg.Client, name string, b []byte) (tg.InputFileClass, error) {
