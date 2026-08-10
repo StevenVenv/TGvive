@@ -95,7 +95,7 @@ func downloadMessageMediaBytes(ctx context.Context, api *tg.Client, sourcePeer t
 		for _, loc := range locs {
 			var buf bytes.Buffer
 			_, err := dl.Download(api, loc).
-				WithThreads(bestTelegramTransferThreadsWithMax(spec.size, 2)).
+				WithThreads(bestTelegramTransferThreads(spec.size)).
 				WithVerify(true).
 				Stream(ctx, &buf)
 			if err == nil {

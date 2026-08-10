@@ -443,7 +443,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 
 	dl := newTelegramMediaDownloader()
 	if _, err := dl.Download(api, loc).
-		WithThreads(bestTelegramTransferThreadsWithMax(0, 2)).
+		WithThreads(bestTelegramTransferThreads(0)).
 		WithVerify(true).
 		Parallel(ctx, f); err != nil {
 		return nil
@@ -452,7 +452,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 		return nil
 	}
 
-	up := newTelegramMediaUploader(api).WithThreads(bestTelegramTransferThreadsWithMax(0, 2))
+	up := newTelegramMediaUploader(api).WithThreads(bestTelegramTransferThreads(0))
 	inputFile, err := up.FromPath(ctx, path)
 	if err != nil {
 		return nil
