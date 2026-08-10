@@ -34,6 +34,7 @@ const tasks = ref<Task[]>([])
 const loading = ref(false)
 const progressMap = ref<Record<number, TaskProgress>>({})
 const autoRefresh = ref(true)
+const actionLoading = ref<Record<number, string>>({})
 
 const peerInfoMap = ref<Record<string, TGDialogItem>>({})
 const peerErrMap = ref<Record<string, string>>({})
@@ -352,6 +353,41 @@ function threadLine(p?: TaskProgress): string {
 }
 
 type ProgressStatus = 'success' | 'warning' | 'exception' | undefined
+type RuntimeAction = 'start' | 'pause' | 'stop' | 'restart'
+
+function primaryRuntimeAction(task: Task): RuntimeAction {
+  const status = Number(task?.status ?? 0)
+  if (status === 1) return 'pause'
+  if (status === 2) return 'start'
+  if (status === 3) return 'restart'
+  return 'start'
+}
+
+function primaryRuntimeActionLabel(task: Task): string {
+  const action = primaryRuntimeAction(task)
+  if (action === 'pause') return '暂停'
+  if (action === 'restart') return '重启'
+  return '启动'
+}
+
+function primaryRuntimeActionType(task: Task): 'primary' | 'warning' | 'danger' {
+  const action = primaryRuntimeAction(task)
+  if (action === 'pause') return 'warning'
+  if (action === 'restart') return 'danger'
+  return 'primary'
+}
+
+function runtimeActionIcon(action: RuntimeAction): string {
+  if (action === 'pause') return 'ri-pause-circle-line'
+  if (action === 'stop') return 'ri-stop-circle-line'
+  if (action === 'restart') return 'ri-restart-line'
+  return 'ri-play-circle-line'
+}
+
+function isActionLoading(task: Task, action?: RuntimeAction): boolean {
+  const current = actionLoading.value[Number(task?.ID || 0)] || ''
+  return action ? current === action : current !== ''
+}
 
 function isTaskRunningNow(task: Task): boolean {
   const status = Number(task?.status ?? 0)
@@ -431,8 +467,9 @@ async function refreshOne(id: number) {
   }
 }
 
-async function doAction(task: Task, action: 'start' | 'pause' | 'stop' | 'restart') {
+async function doAction(task: Task, action: RuntimeAction) {
   if (task.ID <= 0) return
+  if (isActionLoading(task)) return
 
   if (action === 'stop' || action === 'restart') {
     try {
@@ -450,6 +487,7 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop' | 'restar
   }
 
   try {
+    actionLoading.value = { ...actionLoading.value, [task.ID]: action }
     await taskAction(task.ID, action)
     if (action === 'restart') clearTaskLogs(task.ID)
     await reloadTasks()
@@ -457,6 +495,11 @@ async function doAction(task: Task, action: 'start' | 'pause' | 'stop' | 'restar
     ElMessage.success('指令已发送')
   } catch (err: any) {
     ElMessage.error(err?.message || '操作失败')
+  }
+  finally {
+    const next = { ...actionLoading.value }
+    delete next[task.ID]
+    actionLoading.value = next
   }
 }
 
@@ -899,6 +942,44 @@ defineExpose({
                     </div>
                   </template>
                 </el-table-column>
+                <el-table-column label="操作" width="190" fixed="right">
+                  <template #default="{ row }">
+                    <div class="row-actions" @click.stop>
+                      <el-button
+                        size="small"
+                        :type="primaryRuntimeActionType(row)"
+                        :loading="isActionLoading(row, primaryRuntimeAction(row))"
+                        @click="doAction(row, primaryRuntimeAction(row))"
+                      >
+                        <i :class="runtimeActionIcon(primaryRuntimeAction(row))" />
+                        {{ primaryRuntimeActionLabel(row) }}
+                      </el-button>
+                      <el-button
+                        v-if="Number(row.status || 0) === 1"
+                        size="small"
+                        :loading="isActionLoading(row, 'stop')"
+                        @click="doAction(row, 'stop')"
+                      >
+                        <i class="ri-stop-circle-line" />
+                        停止
+                      </el-button>
+                      <el-dropdown trigger="click" placement="bottom-end" @command="(cmd: string) => handleTaskCommand(row, cmd)">
+                        <el-button size="small" text :disabled="isActionLoading(row)">
+                          更多
+                          <i class="ri-arrow-down-s-line" />
+                        </el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="restart">重启</el-dropdown-item>
+                            <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                            <el-dropdown-item command="log">日志</el-dropdown-item>
+                            <el-dropdown-item divided command="delete" class="danger-item">删除</el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
+                    </div>
+                  </template>
+                </el-table-column>
               </el-table>
             </div>
           </div>
@@ -1293,6 +1374,21 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.row-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
+.row-actions i {
+  margin-right: 4px;
 }
 
 .empty-wrap {
