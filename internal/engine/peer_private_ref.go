@@ -97,9 +97,7 @@ func parseTelegramDeepLink(raw string) (telegramPeerRef, bool, error) {
 		if channel == "" {
 			return telegramPeerRef{}, true, errors.New("invalid tg://privatepost url: channel missing")
 		}
-		if strings.HasPrefix(channel, "-100") {
-			channel = strings.TrimPrefix(channel, "-100")
-		}
+		channel = strings.TrimPrefix(channel, "-100")
 		return parseBotChannelID(channel)
 	case "join":
 		return telegramPeerRef{}, true, errors.New("telegram invite links must be joined first; use @username or -100 chat id after the account can access the chat")
