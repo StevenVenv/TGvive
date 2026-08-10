@@ -7,8 +7,6 @@ import (
 
 	"my-go-server/internal/model"
 
-	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 )
 
@@ -93,11 +91,11 @@ func downloadMessageMediaBytes(ctx context.Context, api *tg.Client, sourcePeer t
 			}
 		}
 
-		dl := downloader.NewDownloader()
+		dl := newTelegramMediaDownloader()
 		for _, loc := range locs {
 			var buf bytes.Buffer
 			_, err := dl.Download(api, loc).
-				WithThreads(2).
+				WithThreads(bestTelegramTransferThreadsWithMax(spec.size, 2)).
 				WithVerify(true).
 				Stream(ctx, &buf)
 			if err == nil {
@@ -131,8 +129,8 @@ func uploadBytes(ctx context.Context, api *tg.Client, name string, b []byte) (tg
 		return nil, errors.New("tg api is nil")
 	}
 	progress := &uploadByteProgress{}
-	return uploader.NewUploader(api).
-		WithThreads(4).
+	return newTelegramMediaUploader(api).
+		WithThreads(bestTelegramTransferThreads(int64(len(b)))).
 		WithProgress(progress).
 		FromBytes(ctx, name, b)
 }

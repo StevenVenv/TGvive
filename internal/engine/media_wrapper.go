@@ -15,8 +15,6 @@ import (
 
 	"my-go-server/internal/engine/processor"
 
-	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 )
 
@@ -142,9 +140,9 @@ type ffprobeOut struct {
 }
 
 type ffprobeStream struct {
-	Width             int    `json:"width"`
-	Height            int    `json:"height"`
-	SampleAspectRatio string `json:"sample_aspect_ratio"`
+	Width             int               `json:"width"`
+	Height            int               `json:"height"`
+	SampleAspectRatio string            `json:"sample_aspect_ratio"`
 	Tags              ffprobeStreamTags `json:"tags"`
 	SideDataList      []ffprobeSideData `json:"side_data_list"`
 }
@@ -443,9 +441,9 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 	defer func() { _ = os.Remove(path) }()
 	defer func() { _ = f.Close() }()
 
-	dl := downloader.NewDownloader()
+	dl := newTelegramMediaDownloader()
 	if _, err := dl.Download(api, loc).
-		WithThreads(2).
+		WithThreads(bestTelegramTransferThreadsWithMax(0, 2)).
 		WithVerify(true).
 		Parallel(ctx, f); err != nil {
 		return nil
@@ -454,7 +452,7 @@ func (m *TaskManager) transferDocumentThumb(ctx context.Context, api *tg.Client,
 		return nil
 	}
 
-	up := uploader.NewUploader(api).WithThreads(2)
+	up := newTelegramMediaUploader(api).WithThreads(bestTelegramTransferThreadsWithMax(0, 2))
 	inputFile, err := up.FromPath(ctx, path)
 	if err != nil {
 		return nil

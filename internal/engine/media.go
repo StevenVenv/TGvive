@@ -20,7 +20,6 @@ import (
 	"my-go-server/internal/model"
 
 	"github.com/gotd/td/crypto"
-	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
@@ -992,6 +991,7 @@ func downloadMessageMedia(ctx context.Context, api *tg.Client, msg *tg.Message, 
 type mediaDownloadSpec struct {
 	loc        tg.InputFileLocationClass
 	baseName   string
+	size       int64
 	meta       mediaMeta
 	photoThumb []string
 }
@@ -1026,6 +1026,7 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 		return mediaDownloadSpec{
 			loc:        loc,
 			baseName:   fmt.Sprintf("photo_%d.jpg", photo.ID),
+			size:       photoDownloadSize(photo, thumb),
 			photoThumb: thumbs,
 			meta: mediaMeta{
 				Kind:       mediaKindPhoto,
@@ -1057,6 +1058,7 @@ func buildMediaDownloadSpec(msg *tg.Message) (mediaDownloadSpec, error) {
 		return mediaDownloadSpec{
 			loc:      doc.AsInputDocumentFileLocation(""),
 			baseName: baseName,
+			size:     doc.Size,
 			meta: mediaMeta{
 				Kind:       mediaKindDocument,
 				Spoiler:    media.Spoiler,
@@ -1341,9 +1343,9 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		}
 
 		doDownload := func(loc tg.InputFileLocationClass, verify bool) error {
-			d := downloader.NewDownloader()
+			d := newTelegramMediaDownloader()
 			_, err := d.Download(api, loc).
-				WithThreads(4).
+				WithThreads(bestTelegramTransferThreads(spec.size)).
 				WithVerify(verify).
 				Parallel(ctx, countingWriterAt{
 					dst: f,
@@ -1544,6 +1546,51 @@ func photoThumbCandidates(photo *tg.Photo) []string {
 		out = append(out, s.t)
 	}
 	return out
+}
+
+func photoDownloadSize(photo *tg.Photo, thumb string) int64 {
+	if photo == nil || len(photo.Sizes) == 0 {
+		return 0
+	}
+
+	thumb = strings.TrimSpace(thumb)
+	var fallback int64
+	for _, s := range photo.Sizes {
+		if s == nil {
+			continue
+		}
+
+		var (
+			t    string
+			size int64
+		)
+		switch v := s.(type) {
+		case *tg.PhotoSize:
+			t = v.Type
+			size = int64(v.Size)
+		case *tg.PhotoCachedSize:
+			t = v.Type
+			size = int64(len(v.Bytes))
+		case *tg.PhotoSizeProgressive:
+			t = v.Type
+			for _, part := range v.Sizes {
+				if int64(part) > size {
+					size = int64(part)
+				}
+			}
+		default:
+			continue
+		}
+
+		if size > fallback {
+			fallback = size
+		}
+		if thumb != "" && strings.TrimSpace(t) == thumb && size > 0 {
+			return size
+		}
+	}
+
+	return fallback
 }
 
 func sanitizeFilename(name string) string {

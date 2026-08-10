@@ -75,8 +75,8 @@ func (m *TaskManager) UploadFile(ctx context.Context, api *tg.Client, localPath 
 	}
 
 	progress := &uploadByteProgress{}
-	inputFile, err := uploader.NewUploader(api).
-		WithThreads(4).
+	inputFile, err := newTelegramMediaUploader(api).
+		WithThreads(bestTelegramTransferThreads(size)).
 		WithProgress(progress).
 		FromPath(ctx, localPath)
 	if err != nil {
