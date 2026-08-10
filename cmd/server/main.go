@@ -44,6 +44,11 @@ func main() {
 	} else if removed > 0 {
 		global.Logger.Info("cleanup stale temp media completed", zap.Int("removed", removed))
 	}
+	if reset, err := engine.ResetInterruptedTasksOnStartup(context.Background()); err != nil {
+		global.Logger.Warn("reset interrupted tasks failed", zap.Error(err))
+	} else if reset > 0 {
+		global.Logger.Info("reset interrupted tasks completed", zap.Int64("count", reset))
+	}
 
 	// Start per-task scheduler (time-slot rules, polling quota).
 	engine.Scheduler.Start()
