@@ -80,11 +80,18 @@ func (m *TaskManager) ForwardMessages(ctx context.Context, api *tg.Client, sourc
 		return nil
 	}
 
-	_, err := api.MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+	req := &tg.MessagesForwardMessagesRequest{
 		FromPeer: sourcePeer,
 		ToPeer:   peer,
 		ID:       ids,
 		RandomID: rids,
+	}
+	subject := sendSubjectAlbum(0, len(ids))
+	if len(ids) == 1 {
+		subject = sendSubjectMsgID(ids[0])
+	}
+	_, err := sendTelegramUpdatesWithRetry(ctx, "转发消息", subject, func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return api.MessagesForwardMessages(callCtx, req)
 	})
 	return err
 }

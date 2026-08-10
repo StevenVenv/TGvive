@@ -2,15 +2,20 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"go.uber.org/multierr"
+
+	"my-go-server/pkg/retry"
 )
 
 const (
@@ -18,6 +23,7 @@ const (
 	telegramUploadMaxPartSize   = uploader.MaximumPartSize
 	telegramTransferThreads     = 4
 	telegramDownloadVerify      = false
+	telegramTransferRPCAttempts = 5
 )
 
 func newTelegramMediaDownloader() *downloader.Downloader {
@@ -134,6 +140,7 @@ func (p *telegramTransferPool) Client(ctx context.Context, dcID int) (*tg.Client
 	if err != nil {
 		return nil, 0, err
 	}
+	invoker = wrapTelegramTransferInvoker(invoker)
 
 	p.mu.Lock()
 	if existing, ok := p.invokers[dcID]; ok {
@@ -145,6 +152,75 @@ func (p *telegramTransferPool) Client(ctx context.Context, dcID int) (*tg.Client
 	p.mu.Unlock()
 
 	return tg.NewClient(invoker), dcID, nil
+}
+
+type telegramRetryCloseInvoker struct {
+	telegram.CloseInvoker
+}
+
+func wrapTelegramTransferInvoker(invoker telegram.CloseInvoker) telegram.CloseInvoker {
+	if invoker == nil {
+		return nil
+	}
+	return telegramRetryCloseInvoker{CloseInvoker: invoker}
+}
+
+func (i telegramRetryCloseInvoker) Invoke(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+	if i.CloseInvoker == nil {
+		return fmt.Errorf("telegram transfer invoker is nil")
+	}
+
+	var last error
+	for attempt := 1; attempt <= telegramTransferRPCAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		err := i.CloseInvoker.Invoke(ctx, input, output)
+		if err == nil {
+			return nil
+		}
+		last = err
+
+		if attempt >= telegramTransferRPCAttempts || !isTelegramTransferRPCRetryable(ctx, err) {
+			return err
+		}
+
+		wait := retry.WithJitter(retry.Backoff(attempt, 500*time.Millisecond, 5*time.Second), 0.2)
+		if serr := retry.Sleep(ctx, wait); serr != nil {
+			return serr
+		}
+	}
+	return last
+}
+
+func isTelegramTransferRPCRetryable(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || retry.IsRetryableNetErr(err) {
+		return true
+	}
+	if rpcErr, ok := tgerr.As(err); ok && rpcErr != nil {
+		if rpcErr.Code >= 500 {
+			return true
+		}
+		return rpcErr.IsOneOf(
+			"Timedout",
+			"No workers running",
+			"RPC_CALL_FAIL",
+			"RPC_MCGET_FAIL",
+			"WORKER_BUSY_TOO_LONG_RETRY",
+			"memory limit exit",
+		)
+	}
+	return false
 }
 
 func (p *telegramTransferPool) Default(ctx context.Context) (*tg.Client, int, error) {

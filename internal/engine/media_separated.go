@@ -204,7 +204,9 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 						req.Entities = entities
 					}
 
-					upd, err := sendAPI.MessagesSendMedia(ctx, req)
+					upd, err := sendTelegramUpdatesWithRetry(ctx, "发送水印媒体", sendSubjectMsgID(msg.ID), func(callCtx context.Context) (tg.UpdatesClass, error) {
+						return sendAPI.MessagesSendMedia(callCtx, req)
+					})
 					if err == nil {
 						recordTaskDetailFromCtx(ctx, "水印发送完成")
 						storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
@@ -260,7 +262,9 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 		req.Entities = entities
 	}
 
-	upd, err := sendAPI.MessagesSendMedia(ctx, req)
+	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传媒体", sendSubjectMsgID(msg.ID), func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return sendAPI.MessagesSendMedia(callCtx, req)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("send uploaded media failed (path=%q): %w", uploadPath, err)
 	}
@@ -548,10 +552,13 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 		ups[0].Entities = entities
 	}
 
-	upd, err := sendAPI.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+	req := &tg.MessagesSendMultiMediaRequest{
 		Peer:       peer,
 		ReplyTo:    replyTo,
 		MultiMedia: ups,
+	}
+	upd, err := sendTelegramUpdatesWithRetry(ctx, "发送上传专辑", sendSubjectAlbum(mediaMsgs[0].GroupedID, len(mediaMsgs)), func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return sendAPI.MessagesSendMultiMedia(callCtx, req)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("send uploaded album failed (paths=%v): %w", localPaths, err)

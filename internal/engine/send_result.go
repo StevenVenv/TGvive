@@ -118,7 +118,9 @@ func sendTextUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass
 		req.Entities = msg.Entities
 	}
 
-	return api.MessagesSendMessage(ctx, req)
+	return sendTelegramUpdatesWithRetry(ctx, "发送文本", sendSubjectMsgID(msg.ID), func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return api.MessagesSendMessage(callCtx, req)
+	})
 }
 
 func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msg *tg.Message, replyTo tg.InputReplyToClass) (tg.UpdatesClass, error) {
@@ -162,7 +164,9 @@ func sendMediaUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 	if len(entities) > 0 {
 		req.Entities = entities
 	}
-	return api.MessagesSendMedia(ctx, req)
+	return sendTelegramUpdatesWithRetry(ctx, "发送媒体", sendSubjectMsgID(msg.ID), func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return api.MessagesSendMedia(callCtx, req)
+	})
 }
 
 func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClass, msgs []*tg.Message, replyTo tg.InputReplyToClass) (tg.UpdatesClass, error) {
@@ -231,10 +235,13 @@ func sendAlbumUpdates(ctx context.Context, api *tg.Client, peer tg.InputPeerClas
 		return sendMediaUpdates(ctx, api, peer, mediaMsgs[0], replyTo)
 	}
 
-	return api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+	req := &tg.MessagesSendMultiMediaRequest{
 		Peer:       peer,
 		ReplyTo:    replyTo,
 		MultiMedia: multi,
+	}
+	return sendTelegramUpdatesWithRetry(ctx, "发送专辑", sendSubjectAlbum(mediaMsgs[0].GroupedID, len(mediaMsgs)), func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return api.MessagesSendMultiMedia(callCtx, req)
 	})
 }
 
@@ -278,7 +285,13 @@ func forwardMessagesUpdates(ctx context.Context, api *tg.Client, sourcePeer tg.I
 	if replyTo != nil {
 		req.ReplyTo = replyTo
 	}
-	return api.MessagesForwardMessages(ctx, req)
+	subject := sendSubjectAlbum(0, len(ids))
+	if len(ids) == 1 {
+		subject = sendSubjectMsgID(ids[0])
+	}
+	return sendTelegramUpdatesWithRetry(ctx, "转发消息", subject, func(callCtx context.Context) (tg.UpdatesClass, error) {
+		return api.MessagesForwardMessages(callCtx, req)
+	})
 }
 
 func (m *TaskManager) ForwardMessagesResult(ctx context.Context, api *tg.Client, sourcePeer tg.InputPeerClass, peer tg.InputPeerClass, msgs []*tg.Message) ([]int, error) {
