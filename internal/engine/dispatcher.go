@@ -130,8 +130,9 @@ func (m *TaskManager) StartTask(t model.Task) {
 
 	st.Status = model.TaskStatusRunning
 	st.Realtime = t.Realtime
-	if st.Total <= 0 {
-		st.Total = inferTotal(t)
+	st.Total = inferTotal(t)
+	if !t.Realtime && t.ProgressTotalMsg > st.Total {
+		st.Total = t.ProgressTotalMsg
 	}
 	st.SpeedBaseTime = time.Now()
 	st.SpeedBaseProcessed = st.Processed
@@ -380,12 +381,6 @@ func (m *TaskManager) ensureStateLocked(t model.Task) *taskState {
 		m.states[t.ID] = st
 	}
 
-	if st.Total <= 0 {
-		st.Total = inferTotal(t)
-	}
-	if t.ProgressTotalMsg > 0 && t.ProgressTotalMsg > st.Total {
-		st.Total = t.ProgressTotalMsg
-	}
 	if t.ProgressProcessedCnt > 0 && t.ProgressProcessedCnt > st.Processed {
 		st.Processed = t.ProgressProcessedCnt
 	}
@@ -407,6 +402,7 @@ func (m *TaskManager) ensureStateLocked(t model.Task) *taskState {
 		st.Status = model.TaskStatusStopped
 	}
 	st.Realtime = t.Realtime
+	syncStateTotalFromTask(t, st)
 
 	return st
 }
@@ -427,12 +423,6 @@ func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
 		st = cur
 	}
 
-	if inferred := inferTotal(t); inferred > st.Total {
-		st.Total = inferred
-	}
-	if t.ProgressTotalMsg > st.Total {
-		st.Total = t.ProgressTotalMsg
-	}
 	if t.ProgressProcessedCnt > st.Processed {
 		st.Processed = t.ProgressProcessedCnt
 	}
@@ -449,6 +439,7 @@ func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
 		st.Reply = t.ProgressReplyCnt
 	}
 	st.Realtime = t.Realtime
+	syncStateTotalFromTask(t, st)
 
 	if st.Status != t.Status {
 		st.Status = t.Status
@@ -456,6 +447,27 @@ func (m *TaskManager) syncFromDB(t model.Task, st *taskState) {
 			st.SpeedBaseTime = time.Time{}
 			st.SpeedBaseProcessed = st.Processed
 		}
+	}
+}
+
+func syncStateTotalFromTask(t model.Task, st *taskState) {
+	if st == nil {
+		return
+	}
+	if t.Realtime {
+		st.Total = 0
+		return
+	}
+	if t.ProgressTotalMsg > 0 {
+		st.Total = t.ProgressTotalMsg
+		return
+	}
+	if t.Status == model.TaskStatusRunning || t.Status == model.TaskStatusPaused {
+		st.Total = inferTotal(t)
+		return
+	}
+	if st.Processed == 0 && st.Success == 0 && st.Fail == 0 {
+		st.Total = 0
 	}
 }
 
@@ -575,6 +587,10 @@ func tail[T any](in []T, n int) []T {
 }
 
 func inferTotal(t model.Task) int {
+	if t.Realtime {
+		return 0
+	}
+
 	switch t.ScopeType {
 	case 2: // 最近 N 条
 		ints := extractInts(t.ScopeValue, 1)

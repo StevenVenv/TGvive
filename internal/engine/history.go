@@ -106,7 +106,7 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 
 	quota := newTaskQuota(runtimeTask)
 
-	if runID != 0 {
+	if runID != 0 && !runtimeTask.Realtime {
 		if cnt, latestID, err := getRemoteHistoryCountAndLatestID(ctx, api, sourcePeer); err == nil {
 			maxID := latestID
 			if maxID <= 0 && cnt > 0 {
