@@ -19,6 +19,7 @@ import (
 	wm "my-go-server/internal/engine/watermark"
 	"my-go-server/internal/global"
 	"my-go-server/internal/model"
+	"my-go-server/pkg/retry"
 
 	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/tg"
@@ -30,6 +31,8 @@ var ErrUnsupportedMedia = errors.New("unsupported media")
 var ErrMediaDownload = errors.New("media download failed")
 
 const tmpMediaRoot = "./tmp/tgmedia"
+
+const telegramMediaDownloadAttempts = 5
 
 type countingWriterAt struct {
 	dst     io.WriterAt
@@ -1293,7 +1296,6 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 			recordTaskDetailFromCtx(ctx, act)
 		}
 		threads := bestTelegramTransferThreads(spec.size)
-		downloadAPI, downloadDC := mediaDownloadClient(ctx, api, spec.dcID, threads)
 
 		f, path, err := createUniqueFile(dir, sanitizeFilename(spec.baseName))
 		if err != nil {
@@ -1309,7 +1311,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 			return err
 		}
 
-		doDownload := func(loc tg.InputFileLocationClass, verify bool) error {
+		doDownload := func(loc tg.InputFileLocationClass, verify bool, downloadAPI *tg.Client) error {
 			d := newTelegramMediaDownloader()
 			_, err := d.Download(downloadAPI, loc).
 				WithThreads(threads).
@@ -1335,6 +1337,7 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 		}
 
 		var lastErr error
+		var downloadDC int
 		started := time.Now()
 		for idx, loc := range locs {
 			if idx > 0 {
@@ -1344,16 +1347,40 @@ func downloadMessageMediaWithPeer(ctx context.Context, api *tg.Client, sourcePee
 				}
 			}
 
-			err := doDownload(loc, telegramDownloadVerify)
-			if err != nil && telegramDownloadVerify && strings.Contains(err.Error(), "get hashes") {
-				// Some media locations may fail on upload.getFileHashes (verify path) but still be downloadable.
-				// If that happens, fallback to no-verify download once to improve success rate.
-				if rerr := resetFile(); rerr == nil {
-					if nerr := doDownload(loc, false); nerr == nil {
-						err = nil
-					} else {
-						err = nerr
+			var err error
+			for attempt := 1; attempt <= telegramMediaDownloadAttempts; attempt++ {
+				if attempt > 1 {
+					if rerr := resetFile(); rerr != nil {
+						err = rerr
+						break
 					}
+				}
+
+				downloadAPI, usedDC := mediaDownloadClient(ctx, api, spec.dcID, threads)
+				downloadDC = usedDC
+				err = doDownload(loc, telegramDownloadVerify, downloadAPI)
+				if err != nil && telegramDownloadVerify && strings.Contains(err.Error(), "get hashes") {
+					// Some media locations may fail on upload.getFileHashes (verify path) but still be downloadable.
+					// If that happens, fallback to no-verify download once to improve success rate.
+					if rerr := resetFile(); rerr == nil {
+						err = doDownload(loc, false, downloadAPI)
+					}
+				}
+				if err == nil {
+					break
+				}
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !retry.IsRetryableNetErr(err) || attempt >= telegramMediaDownloadAttempts {
+					break
+				}
+
+				if usedDC > 0 {
+					invalidateMediaClient(ctx, api, usedDC)
+				}
+				wait := retry.WithJitter(retry.Backoff(attempt, 2*time.Second, 15*time.Second), 0.2)
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("下载重试: %s attempt=%d/%d wait=%.1fs %s err=%v", spec.baseName, attempt+1, telegramMediaDownloadAttempts, wait.Seconds(), transferDCLabel(usedDC), err))
+				if serr := retry.Sleep(ctx, wait); serr != nil {
+					err = serr
+					break
 				}
 			}
 

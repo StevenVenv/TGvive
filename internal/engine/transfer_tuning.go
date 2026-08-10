@@ -154,6 +154,21 @@ func (p *telegramTransferPool) Default(ctx context.Context) (*tg.Client, int, er
 	return p.Client(ctx, p.currentDC())
 }
 
+func (p *telegramTransferPool) Invalidate(dcID int) {
+	if p == nil || dcID <= 0 {
+		return
+	}
+	p.mu.Lock()
+	invoker, ok := p.invokers[dcID]
+	if ok {
+		delete(p.invokers, dcID)
+	}
+	p.mu.Unlock()
+	if ok && invoker != nil {
+		_ = invoker.Close()
+	}
+}
+
 func (p *telegramTransferPool) Close() error {
 	if p == nil {
 		return nil
@@ -179,6 +194,14 @@ func telegramTransferPoolFromCtx(ctx context.Context, api *tg.Client) *telegramT
 		return nil
 	}
 	return pools.Get(api)
+}
+
+func invalidateMediaClient(ctx context.Context, api *tg.Client, dcID int) {
+	pool := telegramTransferPoolFromCtx(ctx, api)
+	if pool == nil {
+		return
+	}
+	pool.Invalidate(dcID)
 }
 
 func mediaDownloadClient(ctx context.Context, fallback *tg.Client, dcID int, threads int) (*tg.Client, int) {

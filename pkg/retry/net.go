@@ -60,7 +60,13 @@ func IsRetryableNetErr(err error) bool {
 		strings.Contains(s, "i/o timeout"),
 		strings.Contains(s, "tls handshake timeout"),
 		strings.Contains(s, "no such host"),
-		strings.Contains(s, "network is unreachable"):
+		strings.Contains(s, "network is unreachable"),
+		strings.Contains(s, "retryuntilack"),
+		strings.Contains(s, "retry limit reached"),
+		strings.Contains(s, "rpc_call_fail"),
+		strings.Contains(s, "rpc_mcget_fail"),
+		strings.Contains(s, "worker_busy_too_long_retry"),
+		strings.Contains(s, "no workers running"):
 		return true
 	}
 
