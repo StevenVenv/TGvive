@@ -319,9 +319,7 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 		if global.DB != nil {
 			var latest model.Task
 			if err := global.DB.WithContext(ctx).Select("history_cursor", "history_order", "history_max_id").Where("id = ?", taskID).First(&latest).Error; err == nil {
-				task.HistoryCursor = latest.HistoryCursor
-				task.HistoryOrder = latest.HistoryOrder
-				task.HistoryMaxID = latest.HistoryMaxID
+				task = applyLatestHistoryState(task, latest)
 			}
 		}
 
@@ -360,6 +358,15 @@ func (m *TaskManager) runTransferLoop(ctx context.Context, t model.Task, runID u
 	m.record(taskID, runID, 0, 0, 0, 0, "转发完成")
 	m.markCompleted(taskID, runID, true)
 	_ = updateTaskStatus(ctx, taskID, model.TaskStatusStopped)
+}
+
+func applyLatestHistoryState(task model.Task, latest model.Task) model.Task {
+	task.HistoryCursor = latest.HistoryCursor
+	task.HistoryMaxID = latest.HistoryMaxID
+	if task.StrategyID == 0 && latest.HistoryOrder != 0 {
+		task.HistoryOrder = latest.HistoryOrder
+	}
+	return task
 }
 
 func (m *TaskManager) isActiveRun(taskID uint, runID uint64) bool {

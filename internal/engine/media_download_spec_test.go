@@ -81,3 +81,21 @@ func TestShouldNotFallbackToMediaReferenceForDocumentTimeout(t *testing.T) {
 		t.Fatal("did not expect document deadline to fallback to media reference")
 	}
 }
+
+func TestShouldFallbackToMediaReferenceForWrappedPhotoTimeout(t *testing.T) {
+	msg := &tg.Message{Media: &tg.MessageMediaPhoto{Photo: &tg.Photo{ID: 1, AccessHash: 2}}}
+	err := fmt.Errorf("%w: download media to %q: download photo failed (thumbs=[y x m]): download timeout after 45s: %w", ErrMediaDownload, "photo.jpg", context.DeadlineExceeded)
+
+	if !shouldFallbackToMediaReference(err, msg) {
+		t.Fatal("expected wrapped photo timeout to fallback to media reference")
+	}
+}
+
+func TestShouldFallbackToMediaReferenceForPhotoDownloadFailureText(t *testing.T) {
+	msg := &tg.Message{Media: &tg.MessageMediaDocument{Document: &tg.Document{ID: 1, AccessHash: 2}}}
+	err := fmt.Errorf("%w: download media to %q: download photo failed (thumbs=[y x m]): download timeout after 45s: %w", ErrMediaDownload, "photo.jpg", context.DeadlineExceeded)
+
+	if !shouldFallbackToMediaReference(err, msg) {
+		t.Fatal("expected explicit photo download failure to fallback to media reference")
+	}
+}

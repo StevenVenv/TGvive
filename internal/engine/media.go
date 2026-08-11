@@ -1098,13 +1098,20 @@ func shouldFallbackToMediaReference(err error, msg *tg.Message) bool {
 	if isFileLocationRefreshable(err) {
 		return true
 	}
-	if !isNativePhotoMessage(msg) {
+	if !isNativePhotoMessage(msg) && !isPhotoDownloadFailure(err) {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || retry.IsRetryableNetErr(err) {
 		return true
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "download timeout")
+}
+
+func isPhotoDownloadFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "download photo failed")
 }
 
 func referencedInputSingleMedia(msg *tg.Message) (tg.InputSingleMedia, error) {
