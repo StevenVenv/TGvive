@@ -22,8 +22,11 @@ func TestStrategyCache_SetGetInvalidate(t *testing.T) {
 	orig.ID = 123
 	orig.Name = "orig"
 	orig.ScheduleRules = datatypes.JSON([]byte(`[{"start":"10:00","end":"11:00","limit":2}]`))
+	orig.CommentRule = datatypes.JSON([]byte(`{"enable":true,"filter_mode":"owner_or_linked"}`))
 	origRulesCopy := make([]byte, len(orig.ScheduleRules))
 	copy(origRulesCopy, orig.ScheduleRules)
+	origCommentCopy := make([]byte, len(orig.CommentRule))
+	copy(origCommentCopy, orig.CommentRule)
 
 	c.Set(&orig)
 
@@ -31,6 +34,9 @@ func TestStrategyCache_SetGetInvalidate(t *testing.T) {
 	orig.Name = "mutated"
 	if len(orig.ScheduleRules) > 0 {
 		orig.ScheduleRules[0] = 'X'
+	}
+	if len(orig.CommentRule) > 0 {
+		orig.CommentRule[0] = 'X'
 	}
 
 	got := c.Get(123)
@@ -42,6 +48,9 @@ func TestStrategyCache_SetGetInvalidate(t *testing.T) {
 	}
 	if string(got.ScheduleRules) != string(origRulesCopy) {
 		t.Fatalf("expected ScheduleRules deep-copied, got %q", string(got.ScheduleRules))
+	}
+	if string(got.CommentRule) != string(origCommentCopy) {
+		t.Fatalf("expected CommentRule deep-copied, got %q", string(got.CommentRule))
 	}
 
 	c.Invalidate(123)

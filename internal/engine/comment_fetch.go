@@ -80,7 +80,7 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 			}
 			// Occasionally Telegram returns MSG_ID_INVALID for discussion roots that are not fully ready yet.
 			// Retry a few times with jitter before giving up.
-			if tgerr.Is(err, "MSG_ID_INVALID") {
+			if isTGMsgIDInvalid(err) {
 				if invalidRetriesOffsetID != offsetID {
 					invalidRetriesOffsetID = offsetID
 					invalidRetries = 0
@@ -90,6 +90,7 @@ func fetchRepliesByRoot(ctx context.Context, api *tg.Client, peer tg.InputPeerCl
 					sleepRandom(ctx, commentFetchMsgIDInvalidDelayMin, commentFetchMsgIDInvalidDelayMax)
 					continue
 				}
+				return nil, nil
 			}
 			return nil, err
 		}

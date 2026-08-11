@@ -40,9 +40,12 @@ func getDiscussionRootIDWithRetry(ctx context.Context, api *tg.Client, peer tg.I
 			}
 			// Sometimes Telegram returns MSG_ID_INVALID for newly-created discussion roots.
 			// Retry a few times with jitter before giving up.
-			if tgerr.Is(err, "MSG_ID_INVALID") && attempt < maxAttempts-1 {
-				sleepRandom(ctx, 250*time.Millisecond, 900*time.Millisecond)
-				continue
+			if isTGMsgIDInvalid(err) {
+				if attempt < maxAttempts-1 {
+					sleepRandom(ctx, 250*time.Millisecond, 900*time.Millisecond)
+					continue
+				}
+				return 0, nil
 			}
 			return 0, err
 		}
@@ -92,9 +95,12 @@ func getDiscussionRootMetaWithRetry(ctx context.Context, api *tg.Client, peer tg
 			}
 			// Sometimes Telegram returns MSG_ID_INVALID for newly-created discussion roots.
 			// Retry a few times with jitter before giving up.
-			if tgerr.Is(err, "MSG_ID_INVALID") && attempt < maxAttempts-1 {
-				sleepRandom(ctx, 250*time.Millisecond, 900*time.Millisecond)
-				continue
+			if isTGMsgIDInvalid(err) {
+				if attempt < maxAttempts-1 {
+					sleepRandom(ctx, 250*time.Millisecond, 900*time.Millisecond)
+					continue
+				}
+				return 0, false, nil
 			}
 			return 0, false, err
 		}

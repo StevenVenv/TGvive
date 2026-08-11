@@ -33,6 +33,11 @@ func (c *StrategyCache) Set(strategy *model.Strategy) {
 		copy(rules, cp.ScheduleRules)
 		cp.ScheduleRules = rules
 	}
+	if len(cp.CommentRule) > 0 {
+		raw := make([]byte, len(cp.CommentRule))
+		copy(raw, cp.CommentRule)
+		cp.CommentRule = raw
+	}
 	if len(cp.WatermarkRule) > 0 {
 		raw := make([]byte, len(cp.WatermarkRule))
 		copy(raw, cp.WatermarkRule)

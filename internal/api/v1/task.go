@@ -53,6 +53,24 @@ type UpdateTaskReq struct {
 	KeywordProfileID uint `json:"keyword_profile_id"`
 }
 
+func applyRuntimeStrategyToTask(task model.Task) model.Task {
+	if task.StrategyID == 0 {
+		return task
+	}
+	return engine.MergeHotFieldsIntoTask(task, engine.ResolveRuntimeStrategy(task))
+}
+
+func applyRuntimeStrategyToTasks(tasks []model.Task) []model.Task {
+	if len(tasks) == 0 {
+		return tasks
+	}
+	out := make([]model.Task, len(tasks))
+	for i := range tasks {
+		out[i] = applyRuntimeStrategyToTask(tasks[i])
+	}
+	return out
+}
+
 // CreateTask 创建转发任务
 func (a *TaskApi) CreateTask(c *gin.Context) {
 	var req CreateTaskReq
@@ -219,6 +237,7 @@ func (a *TaskApi) GetTaskList(c *gin.Context) {
 		app.FailWithMsg("获取任务列表失败: "+err.Error(), c)
 		return
 	}
+	list = applyRuntimeStrategyToTasks(list)
 	app.OkWithData(list, c)
 }
 
@@ -250,14 +269,15 @@ func (a *TaskApi) UpdateTaskStatus(c *gin.Context) {
 	if global.Logger != nil {
 		global.Logger.Info("task action accepted", zap.Uint("task_id", task.ID), zap.Uint("user_id", userID), zap.String("action", req.Action), zap.Int("status", task.Status))
 	}
+	runtimeTask := applyRuntimeStrategyToTask(task)
 
 	// Runtime side-effects are handled in API layer to keep service package DB-only
 	// (prevents service -> engine dependency and potential import cycles).
 	switch req.Action {
 	case "start":
-		engine.Manager.StartTask(task)
+		engine.Manager.StartTask(runtimeTask)
 	case "restart":
-		engine.Manager.RestartTask(task)
+		engine.Manager.RestartTask(runtimeTask)
 	case "pause":
 		engine.Manager.PauseTask(task.ID)
 	case "stop":
@@ -287,6 +307,7 @@ func (a *TaskApi) GetTaskProgress(c *gin.Context) {
 		app.FailWithMsg("任务不存在或无权操作: "+err.Error(), c)
 		return
 	}
+	task = applyRuntimeStrategyToTask(task)
 
 	progress := engine.Manager.GetTaskProgress(task)
 	app.OkWithData(progress, c)
@@ -348,6 +369,7 @@ func (a *TaskApi) GetTaskProgressBatch(c *gin.Context) {
 		if t.ID == 0 {
 			continue
 		}
+		t = applyRuntimeStrategyToTask(t)
 		out[t.ID] = engine.Manager.GetTaskProgress(t)
 	}
 	app.OkWithData(out, c)
