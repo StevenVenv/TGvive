@@ -97,9 +97,6 @@ func (m *TaskManager) CloneHistoryWithPeers(ctx context.Context, api *tg.Client,
 	allowedTypes, _ := ResolveAllowedTypes(runtimeTask, strategy)
 
 	pageSize := defaultHistoryPageSize
-	if bounds.MaxMessages > 0 && bounds.MaxMessages < pageSize {
-		pageSize = bounds.MaxMessages
-	}
 	if pageSize <= 0 {
 		pageSize = 1
 	}
@@ -833,12 +830,6 @@ func (m *TaskManager) cloneHistoryOldToNew(
 		}
 
 		limit := pageSize
-		if bounds.MaxMessages > 0 {
-			remain := bounds.MaxMessages - processed
-			if remain < limit {
-				limit = remain
-			}
-		}
 		if limit <= 0 {
 			return nil
 		}
@@ -1277,12 +1268,6 @@ func (m *TaskManager) cloneHistoryNewToOld(
 		}
 
 		limit := pageSize
-		if bounds.MaxMessages > 0 {
-			remain := bounds.MaxMessages - processed
-			if remain < limit {
-				limit = remain
-			}
-		}
 		if limit <= 0 {
 			return nil
 		}

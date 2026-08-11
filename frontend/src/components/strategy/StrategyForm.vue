@@ -1702,7 +1702,7 @@ const allowedTypeKeys = allowedTypeOptions.map((x) => x.key)
 
 const scopeValuePlaceholder = computed(() => {
   const t = Number(form.value.scope_type || 1)
-  if (t === 2) return '例如：100'
+  if (t === 2) return '例如：100（按消息数，专辑不拆分）'
   if (t === 3) return '例如：2025-01-01~2025-01-31'
   if (t === 4) return '例如：1000-2000'
   return '可留空'
@@ -2020,7 +2020,7 @@ defineExpose<StrategyFormExpose>({
               <el-form-item label="消息范围" prop="scope_type">
                 <el-select v-model="form.scope_type" class="ctrl ctrl-sm" popper-class="tgvive-dark-popper">
                   <el-option :value="1" label="全部" />
-                  <el-option :value="2" label="最近 N 条" />
+                  <el-option :value="2" label="最近 N 条消息" />
                   <el-option :value="3" label="时间范围" />
                   <el-option :value="4" label="ID 范围" />
                 </el-select>
