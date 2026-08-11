@@ -421,9 +421,10 @@ func (m *TaskManager) sendUploadedMediaUpdates(ctx context.Context, api *tg.Clie
 
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, api, sourcePeer, msg, task.ID)
 	if err != nil {
-		if errors.Is(err, ErrMediaDownload) && isFileLocationRefreshable(err) {
+		if shouldFallbackToMediaReference(err, msg) {
 			if upd, serr := sendMediaUpdates(ctx, api, peer, msg, replyTo); serr == nil {
 				global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msg.ID))
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("媒体下载失败，改用引用发送: msg_id=%d err=%v", msg.ID, err))
 				storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
 				return upd, nil
 			}
@@ -728,6 +729,15 @@ func (m *TaskManager) sendUploadedAlbumUpdates(ctx context.Context, api *tg.Clie
 					global.BroadcastLog(fmt.Sprintf("[WARN] Album download failed, fallback to send by reference (grouped_id=%d)", msg.GroupedID))
 					storeMsgMappingsInOrder(task, mediaMsgs, extractSentMsgIDs(upd))
 					return upd, nil
+				}
+			}
+			if shouldFallbackToMediaReference(err, msg) {
+				item, ferr := referencedInputSingleMedia(msg)
+				if ferr == nil {
+					ups = append(ups, item)
+					sentSourceMsgs = append(sentSourceMsgs, msg)
+					recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑媒体下载失败，改用引用发送: grouped_id=%d msg_id=%d err=%v", msg.GroupedID, msg.ID, err))
+					continue
 				}
 			}
 			if errors.Is(err, ErrMediaDownload) {
@@ -1071,6 +1081,45 @@ func convertMessageMediaToInput(m tg.MessageMediaClass) (tg.InputMediaClass, err
 	default:
 		return nil, ErrUnsupportedMedia
 	}
+}
+
+func isNativePhotoMessage(msg *tg.Message) bool {
+	if msg == nil || msg.Media == nil {
+		return false
+	}
+	_, ok := msg.Media.(*tg.MessageMediaPhoto)
+	return ok
+}
+
+func shouldFallbackToMediaReference(err error, msg *tg.Message) bool {
+	if !errors.Is(err, ErrMediaDownload) {
+		return false
+	}
+	if isFileLocationRefreshable(err) {
+		return true
+	}
+	if !isNativePhotoMessage(msg) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || retry.IsRetryableNetErr(err) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "download timeout")
+}
+
+func referencedInputSingleMedia(msg *tg.Message) (tg.InputSingleMedia, error) {
+	if msg == nil || msg.Media == nil {
+		return tg.InputSingleMedia{}, ErrUnsupportedMedia
+	}
+	inputMedia, err := convertMessageMediaToInput(msg.Media)
+	if err != nil {
+		return tg.InputSingleMedia{}, err
+	}
+	rid, err := randomID()
+	if err != nil {
+		return tg.InputSingleMedia{}, err
+	}
+	return tg.InputSingleMedia{Media: inputMedia, RandomID: rid}, nil
 }
 
 func downloadMessageMedia(ctx context.Context, api *tg.Client, msg *tg.Message, taskID uint) (localPath string, meta mediaMeta, cleanup func() error, err error) {

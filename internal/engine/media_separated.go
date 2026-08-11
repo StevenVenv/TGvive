@@ -52,6 +52,14 @@ func (m *TaskManager) sendUploadedMediaUpdatesSeparated(ctx context.Context, dow
 
 	localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, downloadAPI, sourcePeer, msg, task.ID)
 	if err != nil {
+		if shouldFallbackToMediaReference(err, msg) {
+			if upd, serr := sendMediaUpdates(ctx, sendAPI, peer, msg, replyTo); serr == nil {
+				global.BroadcastLog(fmt.Sprintf("[WARN] Media download failed, fallback to send by reference (msg_id=%d)", msg.ID))
+				recordTaskDetailFromCtx(ctx, fmt.Sprintf("媒体下载失败，改用引用发送: msg_id=%d err=%v", msg.ID, err))
+				storeMsgMapping(task, msg.ID, minPositiveInt(extractSentMsgIDs(upd)))
+				return upd, nil
+			}
+		}
 		return nil, err
 	}
 	if cleanup != nil {
@@ -349,6 +357,15 @@ func (m *TaskManager) sendUploadedAlbumUpdatesSeparated(ctx context.Context, dow
 
 		localPath, _, cleanup, err := m.DownloadFileWithPeer(ctx, downloadAPI, sourcePeer, msg, task.ID)
 		if err != nil {
+			if shouldFallbackToMediaReference(err, msg) {
+				item, ferr := referencedInputSingleMedia(msg)
+				if ferr == nil {
+					ups = append(ups, item)
+					sentSourceMsgs = append(sentSourceMsgs, msg)
+					recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑媒体下载失败，改用引用发送: grouped_id=%d msg_id=%d err=%v", msg.GroupedID, msg.ID, err))
+					continue
+				}
+			}
 			if errors.Is(err, ErrMediaDownload) {
 				skipped++
 				recordTaskDetailFromCtx(ctx, fmt.Sprintf("专辑媒体跳过: grouped_id=%d msg_id=%d err=%v", msg.GroupedID, msg.ID, err))

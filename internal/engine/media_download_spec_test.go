@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -59,5 +61,23 @@ func TestBuildMediaDownloadSpecIncludesPhotoDC(t *testing.T) {
 	}
 	if spec.size != 2048 {
 		t.Fatalf("size = %d, want 2048", spec.size)
+	}
+}
+
+func TestShouldFallbackToMediaReferenceForPhotoTimeout(t *testing.T) {
+	msg := &tg.Message{Media: &tg.MessageMediaPhoto{Photo: &tg.Photo{ID: 1, AccessHash: 2}}}
+	err := fmt.Errorf("%w: download media: %w", ErrMediaDownload, context.DeadlineExceeded)
+
+	if !shouldFallbackToMediaReference(err, msg) {
+		t.Fatal("expected photo deadline to fallback to media reference")
+	}
+}
+
+func TestShouldNotFallbackToMediaReferenceForDocumentTimeout(t *testing.T) {
+	msg := &tg.Message{Media: &tg.MessageMediaDocument{Document: &tg.Document{ID: 1, AccessHash: 2}}}
+	err := fmt.Errorf("%w: download media: %w", ErrMediaDownload, context.DeadlineExceeded)
+
+	if shouldFallbackToMediaReference(err, msg) {
+		t.Fatal("did not expect document deadline to fallback to media reference")
 	}
 }
